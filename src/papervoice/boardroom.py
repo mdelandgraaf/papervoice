@@ -61,7 +61,7 @@ def _standup_agenda(roster: tuple[Persona, ...]) -> list[AgendaItem]:
 
 
 async def _connect_agent(room_name: str, persona: Persona) -> tuple[AgentSession, rtc.Room]:
-    token = lk_vendor.mint_join_token(persona.identity, room_name, ttl_hours=1)
+    token = lk_vendor.mint_join_token(persona.identity, room_name, ttl_hours=1, agent=True)
     room = rtc.Room()
     await room.connect(os.environ["LIVEKIT_URL"], token)
     session = AgentSession(
@@ -80,7 +80,7 @@ async def _connect_agent(room_name: str, persona: Persona) -> tuple[AgentSession
 
 
 async def _connect_transcriber(room_name: str, moderator: Moderator) -> tuple[AgentSession, rtc.Room]:
-    token = lk_vendor.mint_join_token(TRANSCRIBER_IDENTITY, room_name, ttl_hours=1)
+    token = lk_vendor.mint_join_token(TRANSCRIBER_IDENTITY, room_name, ttl_hours=1, agent=True)
     room = rtc.Room()
     await room.connect(os.environ["LIVEKIT_URL"], token)
     # ElevenLabs Scribe doesn't support streaming STT; VAD segments the human
@@ -101,7 +101,17 @@ async def _connect_transcriber(room_name: str, moderator: Moderator) -> tuple[Ag
     await session.start(
         agent=Agent(instructions="You silently transcribe the room; you never speak."),
         room=room,
-        room_options=room_io.RoomOptions(audio_input=True, text_input=False, audio_output=False, text_output=False),
+        room_options=room_io.RoomOptions(
+            audio_input=True,
+            text_input=False,
+            audio_output=False,
+            text_output=False,
+            # Human tracks only (browser + phone dial-in) — never our own
+            # agent participants. Subscribing to agent audio here would let
+            # an agent's own TTS trigger barge-in against itself, exactly
+            # the anti-pattern docs/ARCHITECTURE.md warns against.
+            participant_kinds=[rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD, rtc.ParticipantKind.PARTICIPANT_KIND_SIP],
+        ),
     )
     return session, room
 
@@ -114,7 +124,10 @@ def _speaker_handle(identity: str, session: AgentSession, moderator: Moderator) 
         await handle.wait_for_playout()
 
     async def interrupt() -> None:
-        session.interrupt()
+        # force=True: agent turns run with allow_interruptions=False (they
+        # only ever speak on the moderator's command, never react to their
+        # own VAD) — but a human barge-in must still cut them off immediately.
+        session.interrupt(force=True)
 
     return SpeakerHandle(identity, speak, interrupt)
 

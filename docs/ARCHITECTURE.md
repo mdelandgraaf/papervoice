@@ -88,3 +88,50 @@ The board (via CEO) provisions accounts and spending; the VoiceEngineer never cr
 2. **M2 — multi-agent conference:** N agents + humans in one LiveKit room, moderator floor control, barge-in, graceful degradation when an agent session drops.
 3. **M3 — Paperclip context & actions:** agents speak from live issue state; meeting files follow-ups; post-call summary posted to Paperclip.
 4. **M4 — durability:** full healthcheck coverage, pinned versions, update smoke-test runbook.
+
+## M2 implementation notes (deviations from the original design)
+
+The original diagram implied N separately LiveKit-dispatched agent jobs coordinating over some
+cross-process channel. The actual M2 build (`src/papervoice/boardroom.py`, `moderator.py`,
+`personas.py`) is simpler and still matches the diagram's shape (one room, N agent participants,
+moderator floor control, human tracks preempt):
+
+1. **Single-process, multi-connection.** One `run_standup()` call opens one `rtc.Room` connection
+   per persona plus one for the shared transcriber, all from the same asyncio process. The
+   moderator (`Moderator` in `moderator.py`) is a plain Python object calling directly into each
+   agent's `AgentSession` — no LiveKit data-channel pub/sub needed. This is deliberately simpler
+   than cross-process signaling and is what the unit tests in `tests/test_moderator.py` exercise
+   without a live room at all.
+2. **Shared STT lives on one dedicated "transcriber" session** (no TTS/LLM), not on each agent.
+   Agent sessions carry no STT/VAD of their own; the moderator hands each one the rolling
+   transcript as text context when granting the floor (`AgentSession.generate_reply(instructions=...)`).
+3. **Human vs. agent tracks are told apart by LiveKit participant *kind*, not by convention.**
+   Agent/transcriber join tokens are minted with `AccessToken.with_kind("agent")`
+   (`vendors/livekit.py::mint_join_token(..., agent=True)`); human join links omit it and default
+   to `"standard"`. The transcriber session filters its audio subscription to
+   `participant_kinds=[STANDARD, SIP]` so it only ever listens to humans (browser + phone
+   dial-in). Getting this wrong is exactly the anti-pattern this doc already calls out — an agent
+   subscribing to another agent's TTS output as if it were a human triggers barge-in against
+   itself. This was caught live during the M2 build (see PER-75) before any board member joined.
+4. **Barge-in requires `force=True`.** Agent turns run with `allow_interruptions=False` (they only
+   ever speak on the moderator's command, never from their own VAD) — but `SpeechHandle.interrupt()`
+   raises `RuntimeError` on a handle that doesn't allow interruptions unless called with
+   `force=True`. The moderator's barge-in path always forces it.
+5. **ElevenLabs Scribe (STT) does not support the LiveKit Agents streaming STT protocol.** The
+   shared transcriber pairs it with `silero.VAD` so utterances are batched and sent as discrete
+   Scribe calls, same as the M1 per-agent STT already did implicitly via the plugin default.
+6. **Graceful degradation is a moderator-level try/except around each agenda turn**, not a
+   watchdog process: if an agent's `generate_reply()` raises (participant/session dropped), the
+   moderator marks that identity dropped, logs it, and moves to the next agenda item — the call
+   keeps going with whoever is left.
+7. **Every turn has a hard timeout (45s default, `Moderator(turn_timeout_seconds=...)`).** Live
+   testing during the M2 build surfaced a real hang: `SpeechHandle.wait_for_playout()` can block
+   forever instead of raising. Root-caused to **zero live subscribers on the published audio
+   track** — by design, no participant in the boardroom subscribes to an agent's raw audio (other
+   agents skip `audio_input`; the transcriber filters to human-only tracks), so when the automated
+   smoke test runs with no human present either, an agent's TTS track can end up with nobody
+   subscribed to it at all, and LiveKit's playout-completion signal never fires. Confirmed fixed by
+   adding one subscriber (a real human's browser client auto-subscribes by default, so this should
+   not occur on an actual board call) — see `docs/SMOKE_TEST.md`. Kept the timeout regardless: an
+   exception-only "drop" handler doesn't catch a hang, and a stuck turn should degrade exactly like
+   a dropped session (marked unavailable, agenda moves on) rather than freezing the whole call.

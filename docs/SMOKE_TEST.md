@@ -59,6 +59,25 @@ Open the printed `meet.livekit.io` link, allow microphone access. Pass:
 you hear the agent's greeting and it gives one sensible answer to a question
 you ask out loud. Hang up by closing the tab.
 
+## 3b. M2 boardroom exchange (multi-agent + moderator, ~3 min)
+
+Only needed if you touched `boardroom.py`, `moderator.py`, or `personas.py`.
+A human must join before/while the standup runs — an agent's TTS track has no
+subscriber otherwise, which can hang `wait_for_playout()` (see
+docs/ARCHITECTURE.md "M2 implementation notes" point 7). Running the
+boardroom with no human present is not a valid smoke test.
+
+```bash
+# terminal 1
+. .venv/bin/activate && PYTHONPATH=src python -m papervoice.boardroom connect --room papervoice-smoke-test-boardroom
+
+# terminal 2
+. .venv/bin/activate && scripts/join-link your-name papervoice-smoke-test-boardroom
+```
+
+Pass: all three personas speak in distinct voices without talking over each
+other, and interrupting one out loud stops it within about a second.
+
 ## Rollback
 
 If `scripts/healthcheck` or the live exchange fails after a dependency bump:

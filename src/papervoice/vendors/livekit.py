@@ -49,8 +49,15 @@ async def delete_room(name: str) -> None:
                 await asyncio.sleep(_NOT_FOUND_RETRY_DELAY * (attempt + 1))
 
 
-def mint_join_token(identity: str, room: str = DEFAULT_ROOM, ttl_hours: int = 2) -> str:
-    """Access token for a human participant joining from a browser."""
+def mint_join_token(identity: str, room: str = DEFAULT_ROOM, ttl_hours: int = 2, agent: bool = False) -> str:
+    """Access token for a room participant.
+
+    `agent=True` tags the participant kind as "agent" (PARTICIPANT_KIND_AGENT)
+    so a shared room-wide STT listener (see papervoice.boardroom) can tell our
+    own agent participants apart from real human tracks and never barge-in on
+    itself. Leave it False for human join links (browser/phone) — those get
+    the default "standard" kind.
+    """
     _require_env()
     token = (
         api.AccessToken()  # reads LIVEKIT_API_KEY / LIVEKIT_API_SECRET from env
@@ -59,6 +66,8 @@ def mint_join_token(identity: str, room: str = DEFAULT_ROOM, ttl_hours: int = 2)
         .with_ttl(timedelta(hours=ttl_hours))
         .with_grants(api.VideoGrants(room_join=True, room=room))
     )
+    if agent:
+        token = token.with_kind("agent")
     return token.to_jwt()
 
 

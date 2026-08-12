@@ -6,6 +6,7 @@ callables, exactly as boardroom.py wires it to real AgentSessions.
 Run: PYTHONPATH=src python -m unittest discover -s tests -v
 """
 
+import asyncio
 import sys
 import unittest
 from pathlib import Path
@@ -101,6 +102,24 @@ class ModeratorGracefulDegradationTest(unittest.IsolatedAsyncioTestCase):
         completed = await moderator.run_agenda()
 
         self.assertEqual(completed, ["ceo"])
+
+    async def test_a_turn_that_hangs_past_the_timeout_is_dropped_not_stuck_forever(self):
+        agenda = [AgendaItem("ceo", "open"), AgendaItem("eng", "update")]
+        log = []
+
+        async def hangs_forever(prompt):
+            await asyncio.sleep(3600)
+
+        speakers = {
+            "ceo": SpeakerHandle("ceo", hangs_forever, lambda: log.append("interrupt")),
+            "eng": make_speaker("eng", log),
+        }
+        moderator = Moderator(agenda, speakers, turn_timeout_seconds=0.05)
+
+        completed = await asyncio.wait_for(moderator.run_agenda(), timeout=5)
+
+        self.assertEqual(completed, ["eng"])
+        self.assertIn("ceo", moderator.dropped)
 
     async def test_previously_dropped_agent_is_skipped_on_later_agenda_items(self):
         log = []

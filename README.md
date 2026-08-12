@@ -15,8 +15,8 @@ Origin: issue **PER-71** — "Give the paperclip agents voice capabilities".
 ## Status
 
 - [x] Investigation & architecture (see `docs/ARCHITECTURE.md`)
-- [ ] Milestone 1 — single agent voice call (one ElevenLabs agent + one human, phone or browser)
-- [ ] Milestone 2 — multi-agent conference with moderator turn-taking
+- [x] Milestone 1 — single agent voice call (one ElevenLabs agent + one human, phone or browser)
+- [x] Milestone 2 — multi-agent conference with moderator turn-taking (code + automated smoke test done; awaiting a board member to join a live call — see below)
 - [ ] Milestone 3 — Paperclip context & actions (standup reads real issue state, files follow-ups)
 - [x] Milestone 4 — durability: health checks, pinned versions, update smoke test
 
@@ -28,8 +28,11 @@ docs/SMOKE_TEST.md         — 5-minute runbook to run after any dependency/plat
 requirements.txt          — pinned dependency versions (upgrade deliberately, never implicitly)
 scripts/healthcheck       — verifies every vendor surface (ElevenLabs TTS/STT, LiveKit room create/join, SIP trunk) still behaves as pinned
 scripts/join-link         — prints a browser join URL for a test call
-src/papervoice/agent.py   — the M1 voiced agent (LiveKit Agents worker)
-src/papervoice/vendors/   — thin adapters; only these modules touch vendor SDKs/APIs
+src/papervoice/agent.py      — the M1 voiced agent (single agent, LiveKit Agents worker)
+src/papervoice/boardroom.py  — the M2 boardroom: connects every persona + shared transcriber, runs the standup
+src/papervoice/moderator.py  — floor control + agenda + barge-in state machine (no LiveKit imports, unit-tested standalone)
+src/papervoice/personas.py   — the M2 board persona roster (identity, ElevenLabs voice, instructions per agent)
+src/papervoice/vendors/      — thin adapters; only these modules touch vendor SDKs/APIs
 ```
 
 ## Setup (once)
@@ -60,6 +63,25 @@ LiveKit accounts; the VoiceEngineer never creates paid accounts on their own.
    (ElevenLabs Scribe), thinks (Claude), and answers in an ElevenLabs voice.
 4. Smoke test = you hear the greeting and get one sensible answer to one question.
    Hang up by closing the tab; rooms auto-expire when empty.
+
+## How to join the M2 boardroom (multiple agents + you)
+
+1. An operator (VoiceEngineer or CEO) runs, in two terminals:
+   ```bash
+   . .venv/bin/activate && PYTHONPATH=src python -m papervoice.boardroom connect --room papervoice-boardroom
+   . .venv/bin/activate && scripts/join-link your-name papervoice-boardroom
+   ```
+2. Open the printed `meet.livekit.io` URL, allow microphone access. You'll hear the CEO persona
+   open the standup, hand off to Eng, then Ops, then close — each in a distinct ElevenLabs voice.
+3. **Barge-in test:** while an agent is mid-sentence, start talking. It should stop within roughly
+   a second and the floor comes back to the agenda once you're done.
+4. **Drop test (optional):** ask the operator to Ctrl-C one agent's terminal mid-call if running
+   agents as separate processes; the standup should continue with whoever's left instead of going
+   dead. (In the current single-process build all personas run in the operator's one terminal —
+   ask the operator to kill that terminal to see the whole call end, or watch the logs for a
+   simulated drop.)
+5. Smoke test passes if: every persona speaks in a different voice, nobody talks over anyone
+   without your barge-in, and your barge-in visibly cuts an agent off.
 
 ## Owner
 

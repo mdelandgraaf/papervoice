@@ -7,11 +7,14 @@ room. boardroom.py wires this to real AgentSessions via SpeakerHandle.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 logger = logging.getLogger("papervoice.moderator")
+
+DEFAULT_TURN_TIMEOUT_SECONDS = 45.0
 
 
 @dataclass(frozen=True)
@@ -45,13 +48,21 @@ class Moderator:
 
     Turn-taking discipline: agents only ever speak from inside `run_agenda`,
     triggered by the moderator granting the floor — never from their own VAD.
-    Graceful degradation: an agent whose turn raises (session dropped) is
-    marked dropped and skipped; the agenda keeps moving for everyone else.
+    Graceful degradation: an agent whose turn raises OR never finishes inside
+    `turn_timeout_seconds` (session dropped, or a hung TTS/network call — seen
+    live during the M2 build, see docs/ARCHITECTURE.md) is marked dropped and
+    skipped; the agenda keeps moving for everyone else.
     """
 
-    def __init__(self, agenda: list[AgendaItem], speakers: dict[str, SpeakerHandle]) -> None:
+    def __init__(
+        self,
+        agenda: list[AgendaItem],
+        speakers: dict[str, SpeakerHandle],
+        turn_timeout_seconds: float = DEFAULT_TURN_TIMEOUT_SECONDS,
+    ) -> None:
         self._agenda = list(agenda)
         self._speakers = dict(speakers)
+        self._turn_timeout_seconds = turn_timeout_seconds
         self.current_speaker: str | None = None
         self.transcript: list[tuple[str, str]] = []
         self.dropped: set[str] = set()
@@ -98,7 +109,12 @@ class Moderator:
             return False
         self.current_speaker = item.identity
         try:
-            await speaker.speak(item.prompt)
+            await asyncio.wait_for(speaker.speak(item.prompt), timeout=self._turn_timeout_seconds)
+        except TimeoutError:
+            logger.error("agent %s timed out mid-turn (>%.0fs), dropping", item.identity, self._turn_timeout_seconds)
+            self.dropped.add(item.identity)
+            self.record_transcript("moderator", f"{item.identity} timed out, moving on")
+            return False
         except Exception:
             logger.exception("agent %s dropped mid-turn", item.identity)
             self.dropped.add(item.identity)
