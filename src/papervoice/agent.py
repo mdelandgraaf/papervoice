@@ -1,9 +1,9 @@
 """Papervoice M1: one ElevenLabs-voiced agent in a LiveKit room with one human.
 
-Run a worker that joins rooms on dispatch:
-    python -m papervoice.agent dev        # local dev, connects to LIVEKIT_URL
+Run a worker that joins rooms on dispatch (from repo root, with .venv active):
+    PYTHONPATH=src python -m papervoice.agent dev        # local dev, connects to LIVEKIT_URL
 Or join one specific room directly:
-    python -m papervoice.agent connect --room papervoice-m1
+    PYTHONPATH=src python -m papervoice.agent connect --room papervoice-m1
 
 M2 (multi-agent + moderator floor control) builds on this file; keep it minimal.
 """

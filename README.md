@@ -36,6 +36,7 @@ src/papervoice/vendors/   — thin adapters; only these modules touch vendor SDK
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
+PYTHONPATH=src python -m unittest discover -s tests   # unit tests, no credentials needed
 cp .env.example .env   # then fill in the keys — see .env.example comments
 scripts/healthcheck    # must print ALL GREEN before any call
 ```
@@ -47,7 +48,7 @@ LiveKit accounts; the VoiceEngineer never creates paid accounts on their own.
 
 1. An operator (VoiceEngineer or CEO) runs, in two terminals:
    ```bash
-   . .venv/bin/activate && python -m papervoice.agent connect --room papervoice-m1
+   . .venv/bin/activate && PYTHONPATH=src python -m papervoice.agent connect --room papervoice-m1
    . .venv/bin/activate && scripts/join-link your-name
    ```
 2. `join-link` prints a `meet.livekit.io` URL — open it in any browser, allow
