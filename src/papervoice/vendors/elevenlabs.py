@@ -29,13 +29,13 @@ def voice_id() -> str:
 def plugin_tts():
     from livekit.plugins import elevenlabs
 
-    return elevenlabs.TTS(voice_id=voice_id(), model=DEFAULT_TTS_MODEL)
+    return elevenlabs.TTS(voice_id=voice_id(), model=DEFAULT_TTS_MODEL, api_key=_api_key())
 
 
 def plugin_stt():
     from livekit.plugins import elevenlabs
 
-    return elevenlabs.STT()  # Scribe
+    return elevenlabs.STT(api_key=_api_key())  # Scribe
 
 
 def tts_roundtrip(text: str = "Papervoice healthcheck.") -> bytes:
