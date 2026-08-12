@@ -1,16 +1,26 @@
 #!/usr/bin/env python3
-"""Papervoice healthcheck v0 — run before every board call and after any dependency update.
+"""Papervoice healthcheck — run before every board call and after any dependency update.
 
-Checks (per docs/ARCHITECTURE.md "Durability" rule 3):
+Checks (per docs/ARCHITECTURE.md "Durability" rule 3 / PER-77), one per vendor surface
+the system depends on:
   1. ElevenLabs TTS roundtrip: synthesize a short phrase, verify real audio comes back.
-  2. LiveKit room lifecycle: create a room, confirm it exists, delete it.
+  2. ElevenLabs STT roundtrip: transcribe that audio back via Scribe.
+  3. LiveKit room lifecycle: create a room, delete it.
+  4. LiveKit room join: actually connect+disconnect a participant over WebRTC (not just
+     the server-side room registry — this exercises the SFU handshake real calls use).
+  5. LiveKit SIP trunk status: confirm the SIP API is reachable. Telephony is optional
+     and not yet provisioned (see docs/ARCHITECTURE.md), so 0 configured trunks is healthy;
+     this only catches the SIP API itself going unreachable or the SDK surface breaking.
+  6. Boardroom voice roster: every M2 persona's voice_id still exists on the account.
 
-Exit code 0 = all green. Costs: one ~30-character TTS call (< $0.01), no LiveKit charges.
+Exit code 0 = all green. Costs: two short TTS/STT calls (< $0.01), no LiveKit charges
+(room create/delete/join and SIP trunk listing are free on LiveKit Cloud).
 """
 
 import asyncio
 import sys
 import time
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -19,19 +29,29 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
+from papervoice.personas import BOARDROOM_ROSTER
 from papervoice.vendors import elevenlabs as el
 from papervoice.vendors import livekit as lk
 
 
-def check_elevenlabs() -> str:
+def check_elevenlabs_tts() -> str:
     t0 = time.monotonic()
     audio = el.tts_roundtrip()
     return f"voice {el.voice_id()}, {len(audio)} bytes in {time.monotonic() - t0:.2f}s"
 
 
-def check_livekit() -> str:
+def check_elevenlabs_stt() -> str:
+    t0 = time.monotonic()
+    text = el.stt_roundtrip()
+    return f"transcribed {text!r} in {time.monotonic() - t0:.2f}s"
+
+
+def check_livekit_room_lifecycle() -> str:
     async def run() -> str:
-        name = "papervoice-healthcheck"
+        # Unique name per run: LiveKit Cloud dedups room creation by name for a short
+        # cooldown after deletion, so reusing a fixed name back-to-back can silently
+        # no-op the create and 404 the delete. See PER-77.
+        name = f"papervoice-healthcheck-{uuid.uuid4().hex[:8]}"
         t0 = time.monotonic()
         room = await lk.create_room(name)
         await lk.delete_room(name)
@@ -40,9 +60,43 @@ def check_livekit() -> str:
     return asyncio.run(run())
 
 
+def check_livekit_room_join() -> str:
+    async def run() -> str:
+        name = f"papervoice-healthcheck-{uuid.uuid4().hex[:8]}"
+        t0 = time.monotonic()
+        await lk.create_room(name)
+        try:
+            await lk.verify_room_join(name)
+        finally:
+            await lk.delete_room(name)
+        return f"joined+disconnected room {name!r} in {time.monotonic() - t0:.2f}s"
+
+    return asyncio.run(run())
+
+
+def check_sip_trunk() -> str:
+    return asyncio.run(lk.sip_trunk_status())
+
+
+def check_boardroom_voices() -> str:
+    available = el.list_voice_ids()
+    missing = [p.identity for p in BOARDROOM_ROSTER if p.voice_id not in available]
+    if missing:
+        raise RuntimeError(f"voice_id missing from account for: {', '.join(missing)}")
+    return f"{len(BOARDROOM_ROSTER)} persona voices present ({', '.join(p.display_name for p in BOARDROOM_ROSTER)})"
+
+
 def main() -> int:
     failures = 0
-    for label, check in (("ElevenLabs TTS roundtrip", check_elevenlabs), ("LiveKit room lifecycle", check_livekit)):
+    checks = (
+        ("ElevenLabs TTS roundtrip", check_elevenlabs_tts),
+        ("ElevenLabs STT roundtrip", check_elevenlabs_stt),
+        ("LiveKit room lifecycle", check_livekit_room_lifecycle),
+        ("LiveKit room join", check_livekit_room_join),
+        ("LiveKit SIP trunk status", check_sip_trunk),
+        ("Boardroom voice roster", check_boardroom_voices),
+    )
+    for label, check in checks:
         try:
             detail = check()
             print(f"PASS  {label}: {detail}")

@@ -63,10 +63,13 @@ ElevenLabs concurrency caps (if hosted agent sessions are used): Free 4, Creator
 ElevenLabs churns fast — the product was renamed twice (Conversational AI → Agents Platform → "ElevenAgents"), JS SDKs had breaking v1.0.0 changes (`Conversation` class removed), and Python tooling changed defaults as recently as 2026-08-03. Rules:
 
 1. **Pin every vendor SDK version** (lockfiles committed); upgrade deliberately, never implicitly.
-2. **Wrap vendor surfaces behind thin internal adapters** (`src/vendors/elevenlabs.py`, `src/vendors/livekit.py`); the rest of the codebase never imports vendor SDKs directly.
-3. **`scripts/healthcheck`** exercises every vendor API surface we depend on (ElevenLabs TTS synth roundtrip, LiveKit room create/join, SIP trunk status) against live APIs; run before every board meeting and after any update.
-4. **Documented 5-minute smoke test** (join a test call, hear two agents exchange one turn) after any dependency/platform update.
-5. Watch https://elevenlabs.io/docs/changelog monthly; prefer raw WebSocket/WebRTC endpoints + signed URLs over SDK class shapes where practical.
+2. **Wrap vendor surfaces behind thin internal adapters** (`src/papervoice/vendors/elevenlabs.py`, `src/papervoice/vendors/livekit.py`); the rest of the codebase never imports vendor SDKs directly.
+3. **`scripts/healthcheck`** exercises every vendor API surface we depend on against live APIs: ElevenLabs TTS synth roundtrip, ElevenLabs STT (Scribe) roundtrip, LiveKit room create/delete, a real LiveKit room **join** over WebRTC (not just the server registry), and LiveKit SIP trunk-list reachability (0 trunks is healthy — telephony isn't provisioned yet, this only catches the SIP API itself breaking). Run before every board meeting and after any update.
+4. **Documented 5-minute smoke test**: `docs/SMOKE_TEST.md` — unit tests, `scripts/healthcheck`, then a live call exchange (join a test call, hear an agent's greeting and one sensible answer) after any dependency/platform update. Includes a rollback procedure.
+5. **Pre-meeting check without polling**: a Paperclip routine (`papervoice-pre-meeting-healthcheck`, daily cron, owned by VoiceEngineer) runs `scripts/healthcheck` and posts a blocking comment/issue if it goes red, so drift is caught before a board meeting rather than during one.
+6. Watch https://elevenlabs.io/docs/changelog monthly; prefer raw WebSocket/WebRTC endpoints + signed URLs over SDK class shapes where practical.
+
+Implementation note: LiveKit Cloud's room API is eventually consistent and dedups room creation by name for a short cooldown after deletion — reusing a fixed room name back-to-back (e.g. always `papervoice-healthcheck`) intermittently 404s on delete. `scripts/healthcheck` uses a fresh UUID-suffixed room name per run to avoid this.
 
 ## Required accounts & secrets (env vars only, never committed)
 

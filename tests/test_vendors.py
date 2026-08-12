@@ -61,6 +61,39 @@ class ElevenLabsAdapterTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "suspiciously small"):
                 el.tts_roundtrip("hello")
 
+    def test_stt_roundtrip_sends_key_header_and_returns_text(self):
+        os.environ["ELEVENLABS_API_KEY"] = "sk-test"
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = mock.Mock()
+        fake_resp.json = mock.Mock(return_value={"text": "hello world"})
+        with mock.patch("httpx.post", return_value=fake_resp) as post:
+            text = el.stt_roundtrip(b"fake-audio-bytes")
+        self.assertEqual(text, "hello world")
+        _, kwargs = post.call_args
+        self.assertEqual(kwargs["headers"]["xi-api-key"], "sk-test")
+        self.assertEqual(kwargs["files"]["file"][1], b"fake-audio-bytes")
+
+    def test_stt_roundtrip_defaults_to_a_fresh_tts_synth(self):
+        os.environ["ELEVENLABS_API_KEY"] = "sk-test"
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = mock.Mock()
+        fake_resp.json = mock.Mock(return_value={"text": "hello"})
+        with mock.patch.object(el, "tts_roundtrip", return_value=b"synth-audio") as tts:
+            with mock.patch("httpx.post", return_value=fake_resp) as post:
+                el.stt_roundtrip()
+        tts.assert_called_once_with()
+        _, kwargs = post.call_args
+        self.assertEqual(kwargs["files"]["file"][1], b"synth-audio")
+
+    def test_stt_roundtrip_rejects_empty_transcript(self):
+        os.environ["ELEVENLABS_API_KEY"] = "sk-test"
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = mock.Mock()
+        fake_resp.json = mock.Mock(return_value={"text": "   "})
+        with mock.patch("httpx.post", return_value=fake_resp):
+            with self.assertRaisesRegex(RuntimeError, "empty transcript"):
+                el.stt_roundtrip(b"fake-audio-bytes")
+
 
 class LiveKitAdapterTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -91,6 +124,49 @@ class LiveKitAdapterTest(unittest.IsolatedAsyncioTestCase):
     def test_mint_join_token_requires_env(self):
         with self.assertRaises(RuntimeError):
             lk.mint_join_token("board-member")
+
+    async def test_verify_room_join_requires_env(self):
+        with self.assertRaises(RuntimeError):
+            await lk.verify_room_join("papervoice-test")
+
+    async def test_sip_trunk_status_requires_env(self):
+        with self.assertRaises(RuntimeError):
+            await lk.sip_trunk_status()
+
+    async def test_delete_room_retries_transient_not_found_then_succeeds(self):
+        from livekit import api
+
+        not_found = api.TwirpError(api.TwirpErrorCode.NOT_FOUND, "requested room does not exist", status=404)
+        fake_room_service = mock.AsyncMock()
+        fake_room_service.delete_room = mock.AsyncMock(side_effect=[not_found, not_found, None])
+        fake_lk = mock.AsyncMock()
+        fake_lk.room = fake_room_service
+        fake_lk.__aenter__ = mock.AsyncMock(return_value=fake_lk)
+        fake_lk.__aexit__ = mock.AsyncMock(return_value=False)
+
+        os.environ.update(LIVEKIT_URL="wss://x", LIVEKIT_API_KEY="k", LIVEKIT_API_SECRET="s")
+        with mock.patch("livekit.api.LiveKitAPI", return_value=fake_lk):
+            with mock.patch("asyncio.sleep", new=mock.AsyncMock()):
+                await lk.delete_room("papervoice-test")
+        self.assertEqual(fake_room_service.delete_room.call_count, 3)
+
+    async def test_delete_room_gives_up_after_persistent_not_found(self):
+        from livekit import api
+
+        not_found = api.TwirpError(api.TwirpErrorCode.NOT_FOUND, "requested room does not exist", status=404)
+        fake_room_service = mock.AsyncMock()
+        fake_room_service.delete_room = mock.AsyncMock(side_effect=not_found)
+        fake_lk = mock.AsyncMock()
+        fake_lk.room = fake_room_service
+        fake_lk.__aenter__ = mock.AsyncMock(return_value=fake_lk)
+        fake_lk.__aexit__ = mock.AsyncMock(return_value=False)
+
+        os.environ.update(LIVEKIT_URL="wss://x", LIVEKIT_API_KEY="k", LIVEKIT_API_SECRET="s")
+        with mock.patch("livekit.api.LiveKitAPI", return_value=fake_lk):
+            with mock.patch("asyncio.sleep", new=mock.AsyncMock()):
+                with self.assertRaises(api.TwirpError):
+                    await lk.delete_room("papervoice-test")
+        self.assertEqual(fake_room_service.delete_room.call_count, lk._NOT_FOUND_RETRIES)
 
 
 if __name__ == "__main__":

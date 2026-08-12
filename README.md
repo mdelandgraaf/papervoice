@@ -18,14 +18,15 @@ Origin: issue **PER-71** — "Give the paperclip agents voice capabilities".
 - [ ] Milestone 1 — single agent voice call (one ElevenLabs agent + one human, phone or browser)
 - [ ] Milestone 2 — multi-agent conference with moderator turn-taking
 - [ ] Milestone 3 — Paperclip context & actions (standup reads real issue state, files follow-ups)
-- [ ] Milestone 4 — durability: health checks, pinned versions, update smoke test
+- [x] Milestone 4 — durability: health checks, pinned versions, update smoke test
 
 ## Repository layout
 
 ```
 docs/ARCHITECTURE.md      — agreed design, cost model, vendor decisions
+docs/SMOKE_TEST.md         — 5-minute runbook to run after any dependency/platform update
 requirements.txt          — pinned dependency versions (upgrade deliberately, never implicitly)
-scripts/healthcheck       — verifies vendor APIs (ElevenLabs TTS, LiveKit rooms) still behave as pinned
+scripts/healthcheck       — verifies every vendor surface (ElevenLabs TTS/STT, LiveKit room create/join, SIP trunk) still behaves as pinned
 scripts/join-link         — prints a browser join URL for a test call
 src/papervoice/agent.py   — the M1 voiced agent (LiveKit Agents worker)
 src/papervoice/vendors/   — thin adapters; only these modules touch vendor SDKs/APIs
@@ -40,6 +41,8 @@ PYTHONPATH=src python -m unittest discover -s tests   # unit tests, no credentia
 cp .env.example .env   # then fill in the keys — see .env.example comments
 scripts/healthcheck    # must print ALL GREEN before any call
 ```
+
+Run `docs/SMOKE_TEST.md` after any dependency bump or ElevenLabs/LiveKit platform change — that's the durability net this system relies on to keep working after vendor updates.
 
 Secrets live only in `.env` (gitignored). The board/CEO provisions the ElevenLabs and
 LiveKit accounts; the VoiceEngineer never creates paid accounts on their own.
