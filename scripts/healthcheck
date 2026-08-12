@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""Papervoice healthcheck v0 — run before every board call and after any dependency update.
+
+Checks (per docs/ARCHITECTURE.md "Durability" rule 3):
+  1. ElevenLabs TTS roundtrip: synthesize a short phrase, verify real audio comes back.
+  2. LiveKit room lifecycle: create a room, confirm it exists, delete it.
+
+Exit code 0 = all green. Costs: one ~30-character TTS call (< $0.01), no LiveKit charges.
+"""
+
+import asyncio
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+from papervoice.vendors import elevenlabs as el
+from papervoice.vendors import livekit as lk
+
+
+def check_elevenlabs() -> str:
+    t0 = time.monotonic()
+    audio = el.tts_roundtrip()
+    return f"voice {el.voice_id()}, {len(audio)} bytes in {time.monotonic() - t0:.2f}s"
+
+
+def check_livekit() -> str:
+    async def run() -> str:
+        name = "papervoice-healthcheck"
+        t0 = time.monotonic()
+        room = await lk.create_room(name)
+        await lk.delete_room(name)
+        return f"room {room.name!r} created+deleted in {time.monotonic() - t0:.2f}s"
+
+    return asyncio.run(run())
+
+
+def main() -> int:
+    failures = 0
+    for label, check in (("ElevenLabs TTS roundtrip", check_elevenlabs), ("LiveKit room lifecycle", check_livekit)):
+        try:
+            detail = check()
+            print(f"PASS  {label}: {detail}")
+        except Exception as exc:  # noqa: BLE001 — report every vendor failure, don't crash the run
+            failures += 1
+            print(f"FAIL  {label}: {type(exc).__name__}: {exc}")
+    print("healthcheck:", "ALL GREEN" if failures == 0 else f"{failures} FAILURE(S)")
+    return 0 if failures == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

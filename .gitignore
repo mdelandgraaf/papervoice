@@ -3,3 +3,5 @@
 !.env.example
 __pycache__/
 node_modules/
+.venv/
+.claude/settings.local.json

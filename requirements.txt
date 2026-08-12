@@ -1,0 +1,15 @@
+# Pinned per docs/ARCHITECTURE.md ("Durability" rule 1). Verified importable on this host 2026-08-12.
+# Upgrade deliberately: bump here, run scripts/healthcheck + the 5-minute smoke test, then commit.
+#
+# HOST CONSTRAINT: this server's virtual CPU (QEMU 2.5+) has no AVX. livekit-agents >= 1.6.9
+# requires livekit-local-inference, whose native lib is AVX-built and dies with "illegal
+# instruction" here. 1.6.0 is the newest line without that dependency — do not bump past it
+# without re-verifying `import livekit.agents` on this host. Same reason to avoid adding
+# orjson / zstandard / msgpack / cryptography as direct deps (their manylinux wheels crash too).
+livekit-agents==1.6.0
+livekit-plugins-elevenlabs==1.6.0
+livekit-plugins-anthropic==1.6.0
+livekit-plugins-silero==1.6.0
+livekit-api==1.2.0
+python-dotenv==1.2.2
+httpx==0.28.1

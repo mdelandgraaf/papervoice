@@ -20,13 +20,42 @@ Origin: issue **PER-71** — "Give the paperclip agents voice capabilities".
 - [ ] Milestone 3 — Paperclip context & actions (standup reads real issue state, files follow-ups)
 - [ ] Milestone 4 — durability: health checks, pinned versions, update smoke test
 
-## Repository layout (planned)
+## Repository layout
 
 ```
-docs/ARCHITECTURE.md   — agreed design, cost model, vendor decisions
-scripts/healthcheck    — verifies vendor APIs (ElevenLabs, telephony) still behave as pinned
-src/                   — orchestrator, agent session manager, audio bridge
+docs/ARCHITECTURE.md      — agreed design, cost model, vendor decisions
+requirements.txt          — pinned dependency versions (upgrade deliberately, never implicitly)
+scripts/healthcheck       — verifies vendor APIs (ElevenLabs TTS, LiveKit rooms) still behave as pinned
+scripts/join-link         — prints a browser join URL for a test call
+src/papervoice/agent.py   — the M1 voiced agent (LiveKit Agents worker)
+src/papervoice/vendors/   — thin adapters; only these modules touch vendor SDKs/APIs
 ```
+
+## Setup (once)
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # then fill in the keys — see .env.example comments
+scripts/healthcheck    # must print ALL GREEN before any call
+```
+
+Secrets live only in `.env` (gitignored). The board/CEO provisions the ElevenLabs and
+LiveKit accounts; the VoiceEngineer never creates paid accounts on their own.
+
+## How to join a test call (board members)
+
+1. An operator (VoiceEngineer or CEO) runs, in two terminals:
+   ```bash
+   . .venv/bin/activate && python -m papervoice.agent connect --room papervoice-m1
+   . .venv/bin/activate && scripts/join-link your-name
+   ```
+2. `join-link` prints a `meet.livekit.io` URL — open it in any browser, allow
+   microphone access, and you are in the room with the agent.
+3. The agent greets you and asks if you can hear it. Talk normally; it listens
+   (ElevenLabs Scribe), thinks (Claude), and answers in an ElevenLabs voice.
+4. Smoke test = you hear the greeting and get one sensible answer to one question.
+   Hang up by closing the tab; rooms auto-expire when empty.
 
 ## Owner
 
