@@ -13,7 +13,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from papervoice.moderator import AgendaItem, Moderator, SpeakerHandle
+from papervoice.moderator import AgendaItem, Moderator as _Moderator, SpeakerHandle
+
+
+def Moderator(*args, **kwargs):
+    """Test default: a near-zero open floor window unless a test overrides it.
+
+    Prevents every agenda-completion test from silently waiting out the real
+    ``DEFAULT_OPEN_FLOOR_SECONDS`` (20s) for a human question that never
+    comes — only ModeratorOpenFloorTest cares about that window's length.
+    """
+    kwargs.setdefault("open_floor_seconds", 0.05)
+    return _Moderator(*args, **kwargs)
 
 
 def make_speaker(identity, log, raise_on_speak=False):
@@ -161,6 +172,48 @@ class ModeratorBargeInResponseTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed, ["ceo"])
         answer_calls = [entry for entry in log if entry[0] == "ceo" and entry[1] != "open"]
         self.assertEqual(answer_calls, [])
+
+
+class ModeratorOpenFloorTest(unittest.IsolatedAsyncioTestCase):
+    """Regression coverage for the board's PER-75 feedback ("suddenly they
+    all left the chat"): the call shouldn't hang up the instant the closing
+    line finishes — a human should get a short window to ask one more thing.
+    """
+
+    async def test_human_question_after_agenda_ends_gets_answered(self):
+        log = []
+        agenda = [AgendaItem("ceo", "close")]
+        speakers = {"ceo": make_speaker("ceo", log)}
+        moderator = Moderator(agenda, speakers, open_floor_seconds=0.2)
+
+        task = asyncio.ensure_future(moderator.run_agenda())
+        await asyncio.sleep(0)  # let ceo's closing line run and the open-floor window arm
+        moderator.record_transcript("board-member", "one more thing before you go")
+
+        completed = await asyncio.wait_for(task, timeout=1)
+
+        answer_prompt = 'Someone just asked: "one more thing before you go" Answer them directly and briefly, then continue.'
+        self.assertEqual(completed, ["ceo"])
+        self.assertIn(("ceo", answer_prompt), log)
+        self.assertIsNone(moderator.current_speaker)
+
+    async def test_silence_after_agenda_ends_closes_the_call_without_hanging(self):
+        agenda = [AgendaItem("ceo", "close")]
+        speakers = {"ceo": make_speaker("ceo", [])}
+        moderator = Moderator(agenda, speakers, open_floor_seconds=0.05)
+
+        completed = await asyncio.wait_for(moderator.run_agenda(), timeout=1)
+
+        self.assertEqual(completed, ["ceo"])
+        self.assertIsNone(moderator.current_speaker)
+
+    async def test_no_open_floor_when_the_closer_never_joined(self):
+        agenda = [AgendaItem("missing", "close")]
+        moderator = Moderator(agenda, {}, open_floor_seconds=0.05)
+
+        completed = await asyncio.wait_for(moderator.run_agenda(), timeout=1)
+
+        self.assertEqual(completed, [])
 
 
 class ModeratorGracefulDegradationTest(unittest.IsolatedAsyncioTestCase):

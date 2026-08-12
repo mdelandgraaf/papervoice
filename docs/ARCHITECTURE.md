@@ -144,3 +144,17 @@ moderator floor control, human tracks preempt):
    it — looping if that answer gets barged in on too — before the scripted agenda resumes. If no
    finished utterance arrives in time (human interrupted but didn't actually ask anything, or
    trailed off), it gives up quietly and resumes the script rather than hanging the call.
+9. **The call doesn't hang up the instant the closing line finishes.** Board feedback on the same
+   PER-75 test call: after the scripted agenda ended, every session tore down immediately —
+   "suddenly they all left the chat" — with no chance for a human to ask a final question.
+   `Moderator.run_agenda` now holds the floor open for `open_floor_seconds` (default 20s) after the
+   last completed turn, reusing the barge-in-answer machinery (`_respond_to_barge_in`) so a human
+   utterance in that window gets a real answer from whoever closed the meeting before the call
+   actually ends. Silence for the full window (or the closer having dropped/never joined) ends the
+   call exactly as before.
+10. **A failed agent join no longer leaves a ghost participant.** `_connect_agent` calls
+    `room.connect()` before `AgentSession.start()`; if `start()` then fails (bad voice id,
+    ElevenLabs quota, etc.) the identity was already visibly connected to the room with no session
+    ever driving it — a silent "muted" agent nobody could ever grant the floor to. `_connect_agent`
+    now disconnects that room connection before re-raising, so a failed join cleans up after itself
+    instead of leaving a zombie participant for the rest of the call.

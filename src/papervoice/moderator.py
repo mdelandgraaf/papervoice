@@ -16,6 +16,7 @@ logger = logging.getLogger("papervoice.moderator")
 
 DEFAULT_TURN_TIMEOUT_SECONDS = 45.0
 DEFAULT_BARGE_IN_REPLY_TIMEOUT_SECONDS = 8.0
+DEFAULT_OPEN_FLOOR_SECONDS = 20.0
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,12 @@ class Moderator:
     detects a turn a human just cut off and routes to `_respond_to_barge_in`,
     which grants the floor back to that same agent to actually answer before
     the scripted agenda resumes (see PER-75 board feedback).
+    The call doesn't hang up the instant the script ends, either: once the
+    agenda is exhausted, `run_agenda` holds the floor open for
+    `open_floor_seconds` so a human who wants to speak up after the closing
+    line finishes — not mid-sentence, i.e. not a barge-in — still gets heard
+    before every session gets torn down (see PER-75 board feedback: "suddenly
+    they all left the chat").
     """
 
     def __init__(
@@ -67,11 +74,13 @@ class Moderator:
         speakers: dict[str, SpeakerHandle],
         turn_timeout_seconds: float = DEFAULT_TURN_TIMEOUT_SECONDS,
         barge_in_reply_timeout_seconds: float = DEFAULT_BARGE_IN_REPLY_TIMEOUT_SECONDS,
+        open_floor_seconds: float = DEFAULT_OPEN_FLOOR_SECONDS,
     ) -> None:
         self._agenda = list(agenda)
         self._speakers = dict(speakers)
         self._turn_timeout_seconds = turn_timeout_seconds
         self._barge_in_reply_timeout_seconds = barge_in_reply_timeout_seconds
+        self._open_floor_seconds = open_floor_seconds
         self.current_speaker: str | None = None
         self.transcript: list[tuple[str, str]] = []
         self.dropped: set[str] = set()
@@ -114,12 +123,31 @@ class Moderator:
         logger.info("barge-in: revoked floor from %s", dropped_speaker)
 
     async def run_agenda(self) -> list[str]:
-        """Run the standup agenda in order. Returns the identities that completed their turn."""
+        """Run the standup agenda in order, then hold the floor open briefly
+        for a final human question before the call ends. Returns the
+        identities that completed their turn."""
         completed = []
         for item in self._agenda:
             if await self._run_turn(item):
                 completed.append(item.identity)
+        if completed:
+            await self._hold_open_floor(completed[-1])
         return completed
+
+    async def _hold_open_floor(self, responder_identity: str) -> None:
+        """Give a human `open_floor_seconds` to ask something after the
+        scripted agenda ends, instead of tearing every session down the
+        instant the closing line finishes (see PER-75 board feedback:
+        "suddenly they all left the chat"). Arms the same
+        `_awaiting_reply_to`/`_respond_to_barge_in` machinery a mid-agenda
+        barge-in uses, so any human utterance that lands in this window gets
+        a real answer from `responder_identity` before the call actually ends.
+        """
+        if responder_identity in self.dropped or responder_identity not in self._speakers:
+            return
+        self._awaiting_reply_to = responder_identity
+        self._human_reply_ready.clear()
+        await self._respond_to_barge_in(responder_identity, reply_timeout_seconds=self._open_floor_seconds)
 
     async def _run_turn(self, item: AgendaItem) -> bool:
         if item.identity in self.dropped:
@@ -154,19 +182,24 @@ class Moderator:
             await self._respond_to_barge_in(item.identity)
         return True
 
-    async def _respond_to_barge_in(self, responder_identity: str) -> None:
-        """A barge-in just cut ``responder_identity`` off mid-turn. Wait briefly
-        for the human's finished utterance and have that same agent answer it
-        — looping if the human interrupts the answer too — before the agenda
-        resumes its scripted line.
+    async def _respond_to_barge_in(
+        self, responder_identity: str, *, reply_timeout_seconds: float | None = None
+    ) -> None:
+        """A barge-in just cut ``responder_identity`` off mid-turn (or the
+        agenda just ended and the floor is being held open for a final
+        question — see `_hold_open_floor`). Wait briefly for the human's
+        finished utterance and have that same agent answer it — looping if
+        the human interrupts the answer too — before the agenda resumes its
+        scripted line (or the call ends).
         """
+        timeout = reply_timeout_seconds if reply_timeout_seconds is not None else self._barge_in_reply_timeout_seconds
         while True:
             try:
-                await asyncio.wait_for(self._human_reply_ready.wait(), timeout=self._barge_in_reply_timeout_seconds)
+                await asyncio.wait_for(self._human_reply_ready.wait(), timeout=timeout)
             except TimeoutError:
                 logger.warning(
-                    "barge-in from human but no finished utterance within %.0fs; resuming agenda",
-                    self._barge_in_reply_timeout_seconds,
+                    "no finished human utterance within %.0fs; giving up",
+                    timeout,
                 )
                 self._awaiting_reply_to = None
                 return

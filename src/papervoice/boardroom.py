@@ -77,7 +77,12 @@ def _standup_agenda(roster: tuple[Persona, ...]) -> list[AgendaItem]:
         nxt = rest[i + 1].display_name if i + 1 < len(rest) else None
         handoff = f" Then hand off to {nxt}." if nxt else f" Then hand back to {opener.display_name} to close."
         items.append(AgendaItem(persona.identity, f"Give a brief status update.{handoff}"))
-    items.append(AgendaItem(opener.identity, "Close the standup — thank everyone and wrap up."))
+    items.append(
+        AgendaItem(
+            opener.identity,
+            "Close the standup: ask if anyone has final questions before wrapping up, then thank everyone.",
+        )
+    )
     return items
 
 
@@ -85,18 +90,30 @@ async def _connect_agent(room_name: str, persona: Persona) -> tuple[AgentSession
     token = lk_vendor.mint_join_token(persona.identity, room_name, ttl_hours=1, agent=True)
     room = rtc.Room()
     await room.connect(os.environ["LIVEKIT_URL"], token)
-    session = AgentSession(
-        llm=anthropic.LLM(model=AGENT_LLM_MODEL),
-        tts=el_vendor.plugin_tts(voice_id_override=persona.voice_id),
-    )
-    await session.start(
-        agent=Agent(instructions=persona.instructions),
-        room=room,
-        # No STT/VAD: this agent never listens for itself. The shared
-        # transcriber below is the room's only ears; the moderator feeds
-        # each agent the rolling transcript as text when granting the floor.
-        room_options=room_io.RoomOptions(audio_input=False, text_input=False),
-    )
+    try:
+        session = AgentSession(
+            llm=anthropic.LLM(model=AGENT_LLM_MODEL),
+            tts=el_vendor.plugin_tts(voice_id_override=persona.voice_id),
+        )
+        await session.start(
+            agent=Agent(instructions=persona.instructions),
+            room=room,
+            # No STT/VAD: this agent never listens for itself. The shared
+            # transcriber below is the room's only ears; the moderator feeds
+            # each agent the rolling transcript as text when granting the floor.
+            room_options=room_io.RoomOptions(audio_input=False, text_input=False),
+        )
+    except Exception:
+        # room.connect() above already put this identity in the room as a
+        # visible participant; if session.start() then fails (bad voice id,
+        # ElevenLabs quota, etc.) the caller only ever sees the exception and
+        # never gets a `room` handle back to clean up with. Left alone that
+        # participant just sits there connected with no session driving it —
+        # exactly a silent "muted" agent nobody can ever grant the floor to
+        # (see PER-75 board feedback). Disconnect it here before re-raising so
+        # a failed join never leaves a ghost in the call.
+        await room.disconnect()
+        raise
     return session, room
 
 
