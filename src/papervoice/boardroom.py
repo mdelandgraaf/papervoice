@@ -42,6 +42,27 @@ logger = logging.getLogger("papervoice.boardroom")
 TRANSCRIBER_IDENTITY = "papervoice-moderator"
 AGENT_LLM_MODEL = "claude-haiku-4-5"
 
+# asyncio.create_task() only holds a *weak* reference to the task it returns;
+# with nothing else referencing it, the task (and the barge-in it's carrying
+# out) can be silently garbage-collected mid-run — see the "Important" note
+# on create_task in the asyncio docs. Barge-in fires fire-and-forget from a
+# sync event callback (on_user_state_changed below), so without this the
+# interrupt can vanish before it ever reaches the agent, with no error logged.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _fire_and_forget(coro, *, name: str) -> asyncio.Task:
+    async def _run() -> None:
+        try:
+            await coro
+        except Exception:
+            logger.exception("background task %r failed", name)
+
+    task = asyncio.create_task(_run())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
 
 def _standup_agenda(roster: tuple[Persona, ...]) -> list[AgendaItem]:
     opener, *rest = roster
@@ -93,7 +114,8 @@ async def _connect_transcriber(room_name: str, moderator: Moderator) -> tuple[Ag
 
     def on_user_state_changed(ev: UserStateChangedEvent) -> None:
         if ev.new_state == "speaking":
-            asyncio.create_task(moderator.on_human_speech_started())
+            logger.info("human speech detected, revoking floor from %s", moderator.current_speaker)
+            _fire_and_forget(moderator.on_human_speech_started(), name="barge-in")
 
     session.on("user_input_transcribed", on_transcribed)
     session.on("user_state_changed", on_user_state_changed)
@@ -127,7 +149,11 @@ def _speaker_handle(identity: str, session: AgentSession, moderator: Moderator) 
         # force=True: agent turns run with allow_interruptions=False (they
         # only ever speak on the moderator's command, never react to their
         # own VAD) — but a human barge-in must still cut them off immediately.
-        session.interrupt(force=True)
+        # Await the returned future: session.interrupt() is a plain (non-async)
+        # method, so an un-awaited call still cancels current speech
+        # synchronously, but awaiting is what surfaces a failure here instead
+        # of discarding it silently.
+        await session.interrupt(force=True)
 
     return SpeakerHandle(identity, speak, interrupt)
 

@@ -7,13 +7,15 @@ docs/ARCHITECTURE.md's "Definition of done" for call-flow changes.
 Run: PYTHONPATH=src python -m unittest discover -s tests -v
 """
 
+import asyncio
+import gc
 import sys
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from papervoice.boardroom import _standup_agenda
+from papervoice.boardroom import _background_tasks, _fire_and_forget, _standup_agenda
 from papervoice.personas import BOARDROOM_ROSTER
 
 
@@ -46,6 +48,46 @@ class StandupAgendaTest(unittest.TestCase):
         middle_identities = [item.identity for item in agenda[1:-1]]
         expected = [p.identity for p in BOARDROOM_ROSTER[1:]]
         self.assertEqual(middle_identities, expected)
+
+
+class FireAndForgetTest(unittest.IsolatedAsyncioTestCase):
+    """Regression coverage for PER-75's barge-in bug: on_user_state_changed
+    called asyncio.create_task() without keeping a reference, so nothing kept
+    the interrupt task alive — asyncio is free to garbage-collect an
+    unreferenced task mid-run. _fire_and_forget must hold a strong reference
+    until the task completes, and must not let a failure vanish silently.
+    """
+
+    async def test_task_survives_gc_with_no_external_reference(self):
+        ran = asyncio.Event()
+
+        async def slow_interrupt():
+            await asyncio.sleep(0)  # yield once, like a real await session.interrupt(force=True)
+            ran.set()
+
+        _fire_and_forget(slow_interrupt(), name="test-barge-in")
+        gc.collect()  # nothing but _background_tasks references the task now
+
+        await asyncio.wait_for(ran.wait(), timeout=1)
+
+    async def test_task_is_discarded_from_the_background_set_once_done(self):
+        before = len(_background_tasks)
+
+        async def noop():
+            return None
+
+        task = _fire_and_forget(noop(), name="test-noop")
+        await task
+
+        self.assertEqual(len(_background_tasks), before)
+
+    async def test_exception_is_logged_not_raised(self):
+        async def boom():
+            raise RuntimeError("session dropped mid-interrupt")
+
+        task = _fire_and_forget(boom(), name="test-boom")
+
+        await task  # must not raise — a failed barge-in must not crash the transcriber's event loop
 
 
 if __name__ == "__main__":
