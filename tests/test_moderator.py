@@ -28,6 +28,27 @@ def make_speaker(identity, log, raise_on_speak=False):
     return SpeakerHandle(identity, speak, interrupt)
 
 
+def make_interruptible_speaker(identity, log):
+    """speak() blocks (like real TTS playout) on its first call until interrupt()
+    is called, simulating a human barging in mid-turn; later calls (e.g. the
+    follow-up answer) return immediately, like an uninterrupted turn."""
+    unblocked = asyncio.Event()
+    calls = 0
+
+    async def speak(prompt):
+        nonlocal calls
+        calls += 1
+        log.append((identity, prompt))
+        if calls == 1:
+            await unblocked.wait()
+            unblocked.clear()
+
+    async def interrupt():
+        unblocked.set()
+
+    return SpeakerHandle(identity, speak, interrupt)
+
+
 class ModeratorAgendaTest(unittest.IsolatedAsyncioTestCase):
     async def test_runs_agenda_in_order(self):
         log = []
@@ -76,6 +97,70 @@ class ModeratorBargeInTest(unittest.IsolatedAsyncioTestCase):
         await moderator.on_human_speech_started()  # must not raise or interrupt anyone
 
         self.assertEqual(log, [])
+
+
+class ModeratorBargeInResponseTest(unittest.IsolatedAsyncioTestCase):
+    """Regression coverage for the board's PER-75 feedback: barge-in correctly
+    stops an agent's TTS, but nothing then answered the human's question — the
+    agenda just resumed its next scripted line."""
+
+    async def test_interrupted_agent_answers_the_question_before_the_agenda_continues(self):
+        log = []
+        agenda = [AgendaItem("ceo", "open"), AgendaItem("eng", "update")]
+        speakers = {"ceo": make_interruptible_speaker("ceo", log), "eng": make_speaker("eng", log)}
+        moderator = Moderator(agenda, speakers)
+
+        task = asyncio.ensure_future(moderator.run_agenda())
+        await asyncio.sleep(0)  # let ceo's "open" turn start and block on speak()
+        self.assertEqual(moderator.current_speaker, "ceo")
+
+        await moderator.on_human_speech_started()  # barge-in: interrupts ceo, revokes the floor
+        moderator.record_transcript("board-member", "what's our runway?")
+
+        completed = await asyncio.wait_for(task, timeout=1)
+
+        answer_prompt = 'Someone just asked: "what\'s our runway?" Answer them directly and briefly, then continue.'
+        self.assertEqual(completed, ["ceo", "eng"])
+        self.assertIn(("ceo", answer_prompt), log)
+        self.assertLess(log.index(("ceo", "open")), log.index(("ceo", answer_prompt)))
+        self.assertLess(log.index(("ceo", answer_prompt)), log.index(("eng", "update")))
+        self.assertIsNone(moderator.current_speaker)
+
+    async def test_no_finished_utterance_within_timeout_resumes_agenda_without_hanging(self):
+        agenda = [AgendaItem("ceo", "open"), AgendaItem("eng", "update")]
+        log = []
+        speakers = {"ceo": make_interruptible_speaker("ceo", log), "eng": make_speaker("eng", log)}
+        moderator = Moderator(agenda, speakers, barge_in_reply_timeout_seconds=0.05)
+
+        task = asyncio.ensure_future(moderator.run_agenda())
+        await asyncio.sleep(0)
+        await moderator.on_human_speech_started()
+        # no record_transcript() call — the human's utterance never finishes transcribing
+
+        completed = await asyncio.wait_for(task, timeout=1)
+
+        self.assertEqual(completed, ["ceo", "eng"])
+        self.assertNotIn("ceo", moderator.dropped)
+
+    async def test_agent_track_speech_never_counts_as_the_barge_in_question(self):
+        """record_transcript() is also how an agent's own speech could be logged
+        (moderator.py doesn't do this yet, but the guard must hold regardless) —
+        a speaker identity, never a human one, must not resolve the pending reply."""
+        agenda = [AgendaItem("ceo", "open")]
+        log = []
+        speakers = {"ceo": make_interruptible_speaker("ceo", log), "eng": make_speaker("eng", log)}
+        moderator = Moderator(agenda, speakers, barge_in_reply_timeout_seconds=0.05)
+
+        task = asyncio.ensure_future(moderator.run_agenda())
+        await asyncio.sleep(0)
+        await moderator.on_human_speech_started()
+        moderator.record_transcript("eng", "not a human, should not satisfy the wait")
+
+        completed = await asyncio.wait_for(task, timeout=1)
+
+        self.assertEqual(completed, ["ceo"])
+        answer_calls = [entry for entry in log if entry[0] == "ceo" and entry[1] != "open"]
+        self.assertEqual(answer_calls, [])
 
 
 class ModeratorGracefulDegradationTest(unittest.IsolatedAsyncioTestCase):

@@ -15,6 +15,7 @@ from typing import Awaitable, Callable
 logger = logging.getLogger("papervoice.moderator")
 
 DEFAULT_TURN_TIMEOUT_SECONDS = 45.0
+DEFAULT_BARGE_IN_REPLY_TIMEOUT_SECONDS = 8.0
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,12 @@ class Moderator:
     `turn_timeout_seconds` (session dropped, or a hung TTS/network call — seen
     live during the M2 build, see docs/ARCHITECTURE.md) is marked dropped and
     skipped; the agenda keeps moving for everyone else.
+    Barge-in answers, not just barge-in silence: stopping TTS on human speech
+    is not enough on its own — a barge-in that only revokes the floor leaves
+    the human talking to a wall once their question is done. `_run_turn`
+    detects a turn a human just cut off and routes to `_respond_to_barge_in`,
+    which grants the floor back to that same agent to actually answer before
+    the scripted agenda resumes (see PER-75 board feedback).
     """
 
     def __init__(
@@ -59,13 +66,23 @@ class Moderator:
         agenda: list[AgendaItem],
         speakers: dict[str, SpeakerHandle],
         turn_timeout_seconds: float = DEFAULT_TURN_TIMEOUT_SECONDS,
+        barge_in_reply_timeout_seconds: float = DEFAULT_BARGE_IN_REPLY_TIMEOUT_SECONDS,
     ) -> None:
         self._agenda = list(agenda)
         self._speakers = dict(speakers)
         self._turn_timeout_seconds = turn_timeout_seconds
+        self._barge_in_reply_timeout_seconds = barge_in_reply_timeout_seconds
         self.current_speaker: str | None = None
         self.transcript: list[tuple[str, str]] = []
         self.dropped: set[str] = set()
+        # Set the instant a barge-in cuts an agent off; cleared once that
+        # agent has answered whatever the human said (or the wait times out).
+        # Lets record_transcript() and _run_turn() recognize "this final
+        # human line is the question that just interrupted someone" without
+        # the two ever being causally ordered by a single await chain.
+        self._awaiting_reply_to: str | None = None
+        self._human_reply_ready = asyncio.Event()
+        self._pending_reply_text: str | None = None
 
     def add_speaker(self, identity: str, handle: SpeakerHandle) -> None:
         self._speakers[identity] = handle
@@ -73,6 +90,11 @@ class Moderator:
     def record_transcript(self, speaker_identity: str, text: str) -> None:
         """Append a line to the shared transcript every agent's next turn sees as context."""
         self.transcript.append((speaker_identity, text))
+        if self._awaiting_reply_to is not None and speaker_identity not in self._speakers and speaker_identity != "moderator":
+            # This is the finished utterance from whoever just barged in —
+            # wake up _respond_to_barge_in() waiting on it.
+            self._pending_reply_text = text
+            self._human_reply_ready.set()
 
     def recent_transcript_text(self, max_lines: int = 20) -> str:
         lines = self.transcript[-max_lines:]
@@ -84,6 +106,8 @@ class Moderator:
             return
         dropped_speaker = self.current_speaker
         self.current_speaker = None
+        self._awaiting_reply_to = dropped_speaker
+        self._human_reply_ready.clear()
         speaker = self._speakers.get(dropped_speaker)
         if speaker is not None:
             await speaker.interrupt()
@@ -123,4 +147,58 @@ class Moderator:
         finally:
             if self.current_speaker == item.identity:
                 self.current_speaker = None
+        if self._awaiting_reply_to == item.identity:
+            # This turn is the one a human just barged in on: stopping the
+            # TTS isn't enough on its own — the human is left talking to a
+            # wall unless someone actually answers before the script resumes.
+            await self._respond_to_barge_in(item.identity)
         return True
+
+    async def _respond_to_barge_in(self, responder_identity: str) -> None:
+        """A barge-in just cut ``responder_identity`` off mid-turn. Wait briefly
+        for the human's finished utterance and have that same agent answer it
+        — looping if the human interrupts the answer too — before the agenda
+        resumes its scripted line.
+        """
+        while True:
+            try:
+                await asyncio.wait_for(self._human_reply_ready.wait(), timeout=self._barge_in_reply_timeout_seconds)
+            except TimeoutError:
+                logger.warning(
+                    "barge-in from human but no finished utterance within %.0fs; resuming agenda",
+                    self._barge_in_reply_timeout_seconds,
+                )
+                self._awaiting_reply_to = None
+                return
+
+            question = self._pending_reply_text
+            self._awaiting_reply_to = None
+            self._human_reply_ready.clear()
+            if responder_identity in self.dropped:
+                return
+            speaker = self._speakers.get(responder_identity)
+            if speaker is None:
+                return
+
+            self.current_speaker = responder_identity
+            try:
+                await asyncio.wait_for(
+                    speaker.speak(f'Someone just asked: "{question}" Answer them directly and briefly, then continue.'),
+                    timeout=self._turn_timeout_seconds,
+                )
+            except TimeoutError:
+                logger.error("agent %s timed out answering a human question, dropping", responder_identity)
+                self.dropped.add(responder_identity)
+                self.record_transcript("moderator", f"{responder_identity} timed out, moving on")
+                return
+            except Exception:
+                logger.exception("agent %s dropped answering a human question", responder_identity)
+                self.dropped.add(responder_identity)
+                self.record_transcript("moderator", f"{responder_identity} dropped, moving on")
+                return
+            finally:
+                if self.current_speaker == responder_identity:
+                    self.current_speaker = None
+
+            if self._awaiting_reply_to != responder_identity:
+                return  # answered cleanly, no further barge-in on the answer itself

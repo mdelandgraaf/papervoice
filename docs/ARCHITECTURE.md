@@ -135,3 +135,12 @@ moderator floor control, human tracks preempt):
    not occur on an actual board call) — see `docs/SMOKE_TEST.md`. Kept the timeout regardless: an
    exception-only "drop" handler doesn't catch a hang, and a stuck turn should degrade exactly like
    a dropped session (marked unavailable, agenda moves on) rather than freezing the whole call.
+8. **Barge-in answers the human, not just silences the agent.** Board feedback on a live PER-75
+   test call: stopping TTS on barge-in worked, but the interrupted agent then just resumed the
+   scripted agenda — nobody ever answered what the human actually said. `Moderator._run_turn`
+   now detects that the turn it just ran was the one a barge-in cut off and routes to
+   `_respond_to_barge_in`, which waits (`barge_in_reply_timeout_seconds`, default 8s) for the
+   transcriber's next finished human utterance and grants the same agent the floor again to answer
+   it — looping if that answer gets barged in on too — before the scripted agenda resumes. If no
+   finished utterance arrives in time (human interrupted but didn't actually ask anything, or
+   trailed off), it gives up quietly and resumes the script rather than hanging the call.
