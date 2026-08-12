@@ -189,6 +189,15 @@ async def run_standup(room_name: str = BOARDROOM_ROOM) -> list[str]:
 
 async def entrypoint(ctx) -> None:
     await ctx.connect()
+    # Agent playout doesn't complete until a real participant is in the room
+    # to receive it (confirmed live: with an empty room every agent's
+    # wait_for_playout() hangs to the moderator's 45s turn timeout and gets
+    # dropped). Block on a human/SIP participant — never our own agent
+    # participants, DEFAULT_PARTICIPANT_KINDS already excludes those — before
+    # spending any agent turns that nobody is there to hear.
+    logger.info("standup ready, waiting for a human to join room %s", ctx.room.name)
+    participant = await ctx.wait_for_participant()
+    logger.info("%s joined, starting the standup", participant.identity)
     await run_standup(ctx.room.name)
 
 
