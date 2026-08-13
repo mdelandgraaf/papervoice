@@ -50,6 +50,7 @@ from papervoice.vendors import paperclip as pc_vendor
 logger = logging.getLogger("papervoice.boardroom")
 
 TRANSCRIBER_IDENTITY = "papervoice-moderator"
+DISPATCH_IDENTITY = "papervoice-dispatch"
 AGENT_LLM_MODEL = "claude-haiku-4-5"
 
 # asyncio.create_task() only holds a *weak* reference to the task it returns;
@@ -455,6 +456,14 @@ async def run_standup(room_name: str = BOARDROOM_ROOM, summary_issue_id: str | N
                 logger.exception("failed to post standup summary to %s", summary_issue_id)
 
 
+async def request_fnc(job_request) -> None:
+    # Without an explicit identity, the SDK's job-dispatch connection joins as
+    # "agent-<job.id>" — a silent 5th participant with no self-explanatory
+    # name (PER-85). Give it one so anyone reading the participant list during
+    # a call knows what it is.
+    await job_request.accept(identity=DISPATCH_IDENTITY)
+
+
 async def entrypoint(ctx) -> None:
     await ctx.connect()
     # Agent playout doesn't complete until a real participant is in the room
@@ -474,4 +483,4 @@ async def entrypoint(ctx) -> None:
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, request_fnc=request_fnc))
