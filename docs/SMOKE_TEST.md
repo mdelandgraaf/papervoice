@@ -78,6 +78,24 @@ boardroom with no human present is not a valid smoke test.
 Pass: all three personas speak in distinct voices without talking over each
 other, and interrupting one out loud stops it within about a second.
 
+## 3c. PER-83 cross-talk + steering-ask exchange (~2 min, part of 3b)
+
+Only needed if you touched the reaction-turn or `ask_board`/`_ask_and_wait` code
+(`_standup_agenda`, `_pass_on_reacting`, `_ask_board_tool`, `Moderator._ask_and_wait`).
+Run in the same call as 3b — no separate setup.
+
+Pass:
+- After the second status update onward, you hear a brief (one sentence or less)
+  reaction from the *next* speaker before their own update — or nothing at all if
+  they had nothing to add (silence is a pass, not a bug).
+- At some point in the call, ask a persona directly for a decision or steering
+  ("what should I prioritize?", "should we ship today?"). Within about 20 seconds
+  of a persona asking you something back, answer out loud — pass: the persona
+  incorporates your answer into what it says next instead of ignoring it or
+  repeating the scripted agenda unchanged.
+- If you don't answer within ~20s, the persona should move on gracefully (say so
+  briefly or just continue) rather than hang the call.
+
 ## Rollback
 
 If `scripts/healthcheck` or the live exchange fails after a dependency bump:

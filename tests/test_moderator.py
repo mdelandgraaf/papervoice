@@ -243,6 +243,76 @@ class ModeratorBargeInResponseTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("interrupted before finishing", resume_calls[0][1])
 
 
+class ModeratorAskAndWaitTest(unittest.IsolatedAsyncioTestCase):
+    """PER-83: agent-initiated steering asks — a persona's own turn can pose a question and
+    hold the floor open for a human reply, generalizing the hold-the-floor machinery
+    `_hold_open_floor`/`_respond_to_barge_in` only ever fire on the human's own initiative.
+    """
+
+    async def test_question_is_recorded_and_reply_is_returned(self):
+        log = []
+        moderator = Moderator([], {"ceo": make_speaker("ceo", log)}, ask_and_wait_timeout_seconds=1)
+
+        task = asyncio.ensure_future(moderator._ask_and_wait("ceo", "should we ship today?"))
+        await asyncio.sleep(0)
+        self.assertIn(("ceo", "should we ship today?"), moderator.transcript)
+
+        moderator.record_transcript("board-member", "yes, ship it")
+        answer = await asyncio.wait_for(task, timeout=1)
+
+        self.assertEqual(answer, "yes, ship it")
+        self.assertIsNone(moderator._awaiting_reply_to)
+
+    async def test_no_reply_within_timeout_returns_none_without_hanging(self):
+        moderator = Moderator([], {"ceo": make_speaker("ceo", [])}, ask_and_wait_timeout_seconds=0.05)
+
+        answer = await asyncio.wait_for(moderator._ask_and_wait("ceo", "any objections?"), timeout=1)
+
+        self.assertIsNone(answer)
+        self.assertIsNone(moderator._awaiting_reply_to)
+
+    async def test_explicit_timeout_argument_overrides_the_default(self):
+        moderator = Moderator([], {"ceo": make_speaker("ceo", [])}, ask_and_wait_timeout_seconds=1000)
+
+        answer = await asyncio.wait_for(
+            moderator._ask_and_wait("ceo", "any objections?", timeout=0.05), timeout=1
+        )
+
+        self.assertIsNone(answer)
+
+    async def test_dropped_identity_returns_none_immediately_without_recording(self):
+        moderator = Moderator([], {"ceo": make_speaker("ceo", [])})
+        moderator.dropped.add("ceo")
+
+        answer = await moderator._ask_and_wait("ceo", "any objections?")
+
+        self.assertIsNone(answer)
+        self.assertEqual(moderator.transcript, [])
+
+    async def test_identity_that_never_joined_returns_none_immediately(self):
+        moderator = Moderator([], {})
+
+        answer = await moderator._ask_and_wait("ceo", "any objections?")
+
+        self.assertIsNone(answer)
+        self.assertEqual(moderator.transcript, [])
+
+    async def test_agent_track_speech_does_not_resolve_the_wait(self):
+        moderator = Moderator(
+            [],
+            {"ceo": make_speaker("ceo", []), "eng": make_speaker("eng", [])},
+            ask_and_wait_timeout_seconds=0.05,
+        )
+
+        task = asyncio.ensure_future(moderator._ask_and_wait("ceo", "any objections?"))
+        await asyncio.sleep(0)
+        moderator.record_transcript("eng", "not a human, should not satisfy the wait")
+
+        answer = await asyncio.wait_for(task, timeout=1)
+
+        self.assertIsNone(answer)
+
+
 class ModeratorOpenFloorTest(unittest.IsolatedAsyncioTestCase):
     """Regression coverage for the board's PER-75 feedback ("suddenly they
     all left the chat"): the call shouldn't hang up the instant the closing

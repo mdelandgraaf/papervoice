@@ -237,18 +237,41 @@ moderator floor control, human tracks preempt):
    before wrapping up, using the same tool every persona already has. This does not require a new
    turn type or moderator change — one more `file_followup_issue` sweep, same closing turn, no added
    per-minute cost.
-6b. **Still not built (PER-76 board feedback, 2026-08-13): agent-to-agent advice/cross-talk, and
-   agents proactively asking the human for a decision.** The current agenda is a strict round-robin
-   handoff (opener -> each persona's status update -> opener closes); agents never get a turn to
-   react to *each other's* update ("Eng, any thoughts on that blocker before we move on?"), and a
-   persona's own turn has no way to pose a question and then wait for the human's answer the way
-   `_respond_to_barge_in` lets a *human-initiated* interruption get answered — steering only flows
-   human-in on their own initiative (barge-in), never agent-out. Building both is a real moderator/
-   agenda change, not a prompt tweak: cross-talk turns add speaking turns per agenda item (multiplies
-   per-minute cost, see "Cost per minute" lens), and an agent-initiated wait-for-human-answer needs
-   the same kind of explicit hold-the-floor state `_hold_open_floor` uses today, generalized to fire
-   from inside a scripted turn instead of only after a barge-in or at meeting end. Scoped as a
-   follow-up rather than folded into this note — see the PER-76 thread for the proposal.
+6b. **Agent-to-agent advice/cross-talk, and agent-initiated steering asks (PER-76 board feedback,
+   built PER-83, 2026-08-13).** The agenda was a strict round-robin handoff (opener -> each persona's
+   status update -> opener closes); agents never got a turn to react to *each other's* update, and a
+   persona's own turn had no way to pose a question and wait for the human's answer the way
+   `_respond_to_barge_in` lets a *human-initiated* interruption get answered.
+   - **Cross-talk**: `_standup_agenda` now inserts an optional `AgendaItem(kind="reaction")` ahead of
+     every status update except the first (there's nothing yet to react to), giving the *next* speaker
+     a brief chance to comment on the *previous* one's update before their own turn — not "every
+     remaining persona reacts to everything," to keep the added turns bounded. Bounded so it never
+     becomes forced filler: the reaction prompt tells the persona to call the `pass_on_reacting`
+     function tool and say nothing if it has nothing useful to add; a turn whose reply produces no
+     spoken text is already a no-op for the moderator's transcript (`Moderator._speak` only records
+     truthy `spoken` text), so passing costs zero extra TTS/transcript content — LLM tokens for the
+     tool call are the only cost, not a spoken turn. Actual added call time: one reaction turn per
+     status-update handoff after the first (N-2 turns for an N-persona roster, not the
+     worst-case-every-persona-reacts (N-1)-per-item the original proposal sketched), each a single
+     short LLM+TTS turn or a near-free tool-call pass — well inside the ~$2-5/meeting band.
+   - **Agent-initiated steering**: `Moderator._ask_and_wait(identity, question, timeout)` generalizes
+     the `_hold_open_floor`/`_respond_to_barge_in` hold-the-floor state machine so it can fire from
+     inside a persona's own turn on demand, not only after a barge-in or at meeting end. It doesn't
+     speak the question itself — the persona's own normal turn already said it as spoken text — it
+     just arms the same `_awaiting_reply_to`/`_human_reply_ready` wait and returns the human's reply
+     text (or `None` on timeout) to the caller. `boardroom.py` exposes it as a per-persona `ask_board`
+     function tool (bound in `_connect_agent` alongside `file_followup_issue`); the LLM decides mid-turn
+     to ask, then calls the tool with the same question to block for the answer and react to it in the
+     same turn. `_COMMON_STYLE` in `personas.py` tells every persona this tool exists and when to use
+     it. Defaults to `DEFAULT_ASK_AND_WAIT_TIMEOUT_SECONDS = 20s` (longer than
+     `barge_in_reply_timeout_seconds`'s 8s, since this is a deliberate question needing thought, not a
+     quick reactive answer) — mostly idle wall-clock time, not LLM/TTS spend, per the original cost
+     note. Only fires when an LLM actually decides to ask; a quiet call adds nothing.
+   - Both are unit-tested without a live room (`tests/test_moderator.py::ModeratorAskAndWaitTest`,
+     `tests/test_boardroom.py::StandupAgendaReactionTurnsTest`/`PassOnReactingToolTest`/
+     `AskBoardToolTest`); the actual on-call behavior (does a reaction ever land as real spoken advice,
+     does a steering question really block and then get answered) still needs a live test call — see
+     the PER-83 thread.
 7. **Short-lived-token fallback while the durable key is pending (CEO-authorized, PER-76, 2026-08-13).**
    The `PAPERCLIP_API_KEY` a long-lived board-minted key was meant to fill (see "Required accounts &
    secrets" above) was still pending confirmation on PER-71 when M3 needed to ship, so `.env`'s

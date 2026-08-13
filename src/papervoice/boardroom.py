@@ -87,6 +87,16 @@ def _standup_agenda(
     failed on a 401/403 (expired/invalid PAPERCLIP_API_KEY). The call still runs — the
     opener just says so out loud instead of everyone silently reporting nothing, so a human
     on the call knows to expect generic updates and no live issue filing this time.
+
+    Agent-to-agent cross-talk (PER-83 board feedback): before every status update except
+    the first, the persona about to speak first gets an optional "reaction" turn
+    (`kind="reaction"`) to briefly comment on the *previous* speaker's update — bounded so it
+    never becomes forced filler: the prompt tells it to call the pass_on_reacting tool and
+    say nothing if it has nothing useful to add, and a turn that produces no spoken text is
+    already a no-op for the moderator (see `Moderator._speak`). One reaction turn per
+    status-update handoff (not "every remaining persona reacts to everything") keeps the
+    added per-minute cost bounded — see docs/ARCHITECTURE.md M3 notes for the actual added
+    call time this turned out to cost.
     """
     context = context or {}
     opener, *rest = roster
@@ -104,6 +114,18 @@ def _standup_agenda(
         )
     ]
     for i, persona in enumerate(rest):
+        if i > 0:
+            prev = rest[i - 1]
+            items.append(
+                AgendaItem(
+                    persona.identity,
+                    f"Before your own update: {prev.display_name} just gave theirs. If you have a"
+                    " genuinely useful reaction — advice, a question, encouragement — say one brief"
+                    " sentence. If not, call the pass_on_reacting tool and don't say anything else;"
+                    " don't force a comment just to fill air time.",
+                    kind="reaction",
+                )
+            )
         nxt = rest[i + 1].display_name if i + 1 < len(rest) else None
         handoff = f" Then hand off to {nxt}." if nxt else f" Then hand back to {opener.display_name} to close."
         briefing = context.get(persona.identity)
@@ -222,6 +244,42 @@ def _file_issue_tool(persona: Persona, moderator: Moderator):
     return file_followup_issue
 
 
+@function_tool
+async def _pass_on_reacting() -> str:
+    """Call this instead of speaking when you have nothing genuinely useful to add during a
+    reaction turn (a brief chance to comment on the previous speaker's update). Silence is
+    fine — don't force a comment just to fill air time.
+    """
+    return "(passed, no comment)"
+
+
+def _ask_board_tool(persona: Persona, moderator: Moderator):
+    """A per-persona LiveKit function tool (PER-83): lets the LLM proactively pose a
+    question to the humans on the call and wait for their answer before continuing its own
+    turn, instead of steering only ever flowing human-in via barge-in. Backed by
+    `Moderator._ask_and_wait`, which speaks nothing itself — the persona's own turn already
+    said the question as normal spoken text; this tool just holds the floor open for the
+    reply and hands it back so the LLM can react in the same turn.
+    """
+
+    @function_tool
+    async def ask_board(question: str) -> str:
+        """Ask the humans on this call a question and wait briefly for their answer — use
+        this when you need the board's steering or a decision before you can continue, not
+        for routine status updates. Say the question as part of your normal reply, then call
+        this tool with the same question to actually wait for the answer.
+
+        Args:
+            question: The question you just asked, exactly as you said it.
+        """
+        answer = await moderator._ask_and_wait(persona.identity, question)
+        if answer is None:
+            return "No answer came back in time — say so briefly and move on."
+        return f'The board answered: "{answer}"'
+
+    return ask_board
+
+
 async def _connect_agent(room_name: str, persona: Persona, moderator: Moderator) -> tuple[AgentSession, rtc.Room]:
     token = lk_vendor.mint_join_token(persona.identity, room_name, ttl_hours=1, agent=True)
     room = rtc.Room()
@@ -232,9 +290,14 @@ async def _connect_agent(room_name: str, persona: Persona, moderator: Moderator)
             tts=el_vendor.plugin_tts(voice_id_override=persona.voice_id),
         )
         await session.start(
-            # file_followup_issue (Milestone 3): lets this persona create a real
-            # Paperclip issue when the board decides something needs tracking.
-            agent=Agent(instructions=persona.instructions, tools=[_file_issue_tool(persona, moderator)]),
+            # file_followup_issue (Milestone 3): lets this persona create a real Paperclip
+            # issue when the board decides something needs tracking. pass_on_reacting and
+            # ask_board (PER-83): let a reaction turn skip speaking, and let this persona
+            # proactively ask the board a question and wait for the answer mid-turn.
+            agent=Agent(
+                instructions=persona.instructions,
+                tools=[_file_issue_tool(persona, moderator), _pass_on_reacting, _ask_board_tool(persona, moderator)],
+            ),
             room=room,
             # No STT/VAD: this agent never listens for itself. The shared
             # transcriber below is the room's only ears; the moderator feeds

@@ -35,6 +35,9 @@ _COMMON_STYLE = (
     " Be concise and conversational — one or two sentences per turn, no lists, no markdown."
     " This is a live multi-party voice call: you only speak when the moderator explicitly"
     " grants you the floor. If a human starts talking while you're mid-sentence, stop immediately."
+    " If you need the board's steering or a decision before you can continue, ask the question"
+    " out loud and then call the ask_board tool with that same question to wait for their answer"
+    " — don't just guess or wait for the human to bring it up on their own."
 )
 
 BOARDROOM_ROSTER = (

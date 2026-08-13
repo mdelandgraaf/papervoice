@@ -17,12 +17,20 @@ logger = logging.getLogger("papervoice.moderator")
 DEFAULT_TURN_TIMEOUT_SECONDS = 45.0
 DEFAULT_BARGE_IN_REPLY_TIMEOUT_SECONDS = 8.0
 DEFAULT_OPEN_FLOOR_SECONDS = 20.0
+DEFAULT_ASK_AND_WAIT_TIMEOUT_SECONDS = 20.0
 
 
 @dataclass(frozen=True)
 class AgendaItem:
     identity: str
     prompt: str
+    # "turn" (default): a scripted open/status-update/close turn. "reaction":
+    # an optional cross-talk turn where `identity` may briefly comment on the
+    # previous speaker's update (see boardroom._standup_agenda) — purely
+    # descriptive metadata for agenda construction/tests; the moderator's
+    # turn-running logic (_run_turn/_speak) treats both the same way, since an
+    # empty/tool-only reply already behaves as a no-op "pass" (see _speak).
+    kind: str = "turn"
 
 
 class SpeakerHandle:
@@ -76,6 +84,12 @@ class Moderator:
     line finishes — not mid-sentence, i.e. not a barge-in — still gets heard
     before every session gets torn down (see PER-75 board feedback: "suddenly
     they all left the chat").
+    Steering isn't only human-initiated: everything above fires on a human's
+    own initiative (interrupting mid-turn, or speaking up once the agenda
+    ends). `_ask_and_wait` is the agent-initiated mirror — a persona's own
+    turn can pose a question and hold the floor open for a human reply before
+    continuing, the same hold-the-floor state machine generalized to fire on
+    demand (see PER-83 board feedback).
     """
 
     def __init__(
@@ -85,12 +99,14 @@ class Moderator:
         turn_timeout_seconds: float = DEFAULT_TURN_TIMEOUT_SECONDS,
         barge_in_reply_timeout_seconds: float = DEFAULT_BARGE_IN_REPLY_TIMEOUT_SECONDS,
         open_floor_seconds: float = DEFAULT_OPEN_FLOOR_SECONDS,
+        ask_and_wait_timeout_seconds: float = DEFAULT_ASK_AND_WAIT_TIMEOUT_SECONDS,
     ) -> None:
         self._agenda = list(agenda)
         self._speakers = dict(speakers)
         self._turn_timeout_seconds = turn_timeout_seconds
         self._barge_in_reply_timeout_seconds = barge_in_reply_timeout_seconds
         self._open_floor_seconds = open_floor_seconds
+        self._ask_and_wait_timeout_seconds = ask_and_wait_timeout_seconds
         self.current_speaker: str | None = None
         self.transcript: list[tuple[str, str]] = []
         self.dropped: set[str] = set()
@@ -171,6 +187,46 @@ class Moderator:
         self._awaiting_reply_to = responder_identity
         self._human_reply_ready.clear()
         await self._respond_to_barge_in(responder_identity, reply_timeout_seconds=self._open_floor_seconds)
+
+    async def _ask_and_wait(self, identity: str, question: str, timeout: float | None = None) -> str | None:
+        """Agent-initiated steering ask (PER-83): let `identity` pose `question`
+        mid-turn and hold the floor open for a human reply before continuing,
+        instead of steering only ever flowing human-in (barge-in) the way
+        `_hold_open_floor`/`_respond_to_barge_in` do. This is the same
+        hold-the-floor state machine those use, generalized so any turn can
+        trigger it on demand rather than only after a barge-in or at meeting
+        end — boardroom.py exposes it as a per-persona `ask_board` function
+        tool the LLM decides to call mid-turn.
+
+        Unlike `_respond_to_barge_in`, this doesn't itself grant the agent a
+        follow-up speaking turn to voice an answer — it just records the
+        question, waits, and hands the raw reply text back to the caller
+        (the in-flight LLM turn, via the tool result) to react to however it
+        sees fit. Records `question` on the shared transcript itself, since
+        the turn asking it hasn't finished (and so hasn't recorded its own
+        spoken text via `_speak`) by the time this call needs the transcript
+        to reflect it.
+
+        Returns the human's reply text, or None if `identity` was already
+        dropped/never joined, or no finished utterance arrived within
+        `timeout` (defaults to `ask_and_wait_timeout_seconds`) — callers must
+        treat None as "no answer" and move on; this never hangs the agenda.
+        """
+        if identity in self.dropped or identity not in self._speakers:
+            return None
+        self.record_transcript(identity, question)
+        wait_timeout = timeout if timeout is not None else self._ask_and_wait_timeout_seconds
+        self._awaiting_reply_to = identity
+        self._human_reply_ready.clear()
+        try:
+            await asyncio.wait_for(self._human_reply_ready.wait(), timeout=wait_timeout)
+        except TimeoutError:
+            logger.warning("ask_and_wait: no reply from a human within %.0fs for %s", wait_timeout, identity)
+            return None
+        finally:
+            if self._awaiting_reply_to == identity:
+                self._awaiting_reply_to = None
+        return self._pending_reply_text
 
     async def _run_turn(self, item: AgendaItem) -> bool:
         if item.identity in self.dropped:

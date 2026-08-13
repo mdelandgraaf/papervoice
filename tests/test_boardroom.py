@@ -19,11 +19,13 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from papervoice.boardroom import (
+    _ask_board_tool,
     _background_tasks,
     _build_summary,
     _file_issue_tool,
     _fire_and_forget,
     _load_context,
+    _pass_on_reacting,
     _standup_agenda,
 )
 from papervoice.moderator import Moderator
@@ -44,14 +46,18 @@ class StandupAgendaTest(unittest.TestCase):
         identities = {item.identity for item in agenda}
         self.assertEqual(identities, {p.identity for p in BOARDROOM_ROSTER})
 
-    def test_opener_speaks_twice_everyone_else_once(self):
+    def test_opener_speaks_twice_first_update_once_everyone_after_reacts_too(self):
+        """Opener: open + close. First `rest` persona: just their own update — there's no
+        prior status update yet for it to react to. Every later `rest` persona: a reaction
+        turn (PER-83) ahead of its own update, so it speaks twice."""
         agenda = _standup_agenda(BOARDROOM_ROSTER)
 
         identities = [item.identity for item in agenda]
-        opener, *rest = BOARDROOM_ROSTER
+        opener, first, *later = BOARDROOM_ROSTER
         self.assertEqual(identities.count(opener.identity), 2)
-        for persona in rest:
-            self.assertEqual(identities.count(persona.identity), 1, persona.identity)
+        self.assertEqual(identities.count(first.identity), 1)
+        for persona in later:
+            self.assertEqual(identities.count(persona.identity), 2, persona.identity)
 
     def test_opener_also_closes(self):
         agenda = _standup_agenda(BOARDROOM_ROSTER)
@@ -69,10 +75,10 @@ class StandupAgendaTest(unittest.TestCase):
         self.assertIn("file_followup_issue", closer_prompt)
         self.assertIn("decisions", closer_prompt.lower())
 
-    def test_middle_items_are_the_non_opener_personas_in_order(self):
+    def test_middle_items_are_the_non_opener_personas_in_order_ignoring_reactions(self):
         agenda = _standup_agenda(BOARDROOM_ROSTER)
 
-        middle_identities = [item.identity for item in agenda[1:-1]]
+        middle_identities = [item.identity for item in agenda[1:-1] if item.kind != "reaction"]
         expected = [p.identity for p in BOARDROOM_ROSTER[1:]]
         self.assertEqual(middle_identities, expected)
 
@@ -140,8 +146,9 @@ class StandupAgendaContextTest(unittest.TestCase):
 
     def test_status_prompts_mention_the_followup_tool(self):
         agenda = _standup_agenda(BOARDROOM_ROSTER)
-        opener, *rest = BOARDROOM_ROSTER
         for item in agenda[1:-1]:
+            if item.kind == "reaction":
+                continue
             self.assertIn("file_followup_issue", item.prompt)
 
     def test_offline_flag_adds_a_spoken_notice_to_the_opener_only(self):
@@ -153,6 +160,45 @@ class StandupAgendaContextTest(unittest.TestCase):
     def test_no_offline_notice_by_default(self):
         agenda = _standup_agenda(BOARDROOM_ROSTER)
         self.assertNotIn("offline", agenda[0].prompt.lower())
+
+
+class StandupAgendaReactionTurnsTest(unittest.TestCase):
+    """PER-83: agent-to-agent cross-talk — the next speaker gets an optional brief chance
+    to react to the previous speaker's update before giving their own."""
+
+    def test_no_reaction_before_the_first_status_update(self):
+        agenda = _standup_agenda(BOARDROOM_ROSTER)
+        opener, first, *_ = BOARDROOM_ROSTER
+        # item 0 is the opener's greeting, item 1 must be `first`'s own update, not a reaction
+        self.assertEqual(agenda[1].identity, first.identity)
+        self.assertEqual(agenda[1].kind, "turn")
+
+    def test_reaction_turn_precedes_every_later_status_update(self):
+        agenda = _standup_agenda(BOARDROOM_ROSTER)
+        opener, first, *later = BOARDROOM_ROSTER
+
+        turns_by_identity = {item.identity: item for item in agenda if item.kind == "turn"}
+        reactions_by_identity = {item.identity: item for item in agenda if item.kind == "reaction"}
+        for persona in later:
+            self.assertIn(persona.identity, reactions_by_identity)
+            reaction_index = agenda.index(reactions_by_identity[persona.identity])
+            update_index = agenda.index(turns_by_identity[persona.identity])
+            self.assertLess(reaction_index, update_index)
+
+    def test_reaction_prompt_names_the_previous_speaker_and_the_pass_tool(self):
+        agenda = _standup_agenda(BOARDROOM_ROSTER)
+        _, _, *later = BOARDROOM_ROSTER
+        reaction = next(item for item in agenda if item.kind == "reaction")
+
+        self.assertIn(BOARDROOM_ROSTER[1].display_name, reaction.prompt)
+        self.assertIn("pass_on_reacting", reaction.prompt)
+
+    def test_reaction_turns_are_optional_not_forced_filler(self):
+        agenda = _standup_agenda(BOARDROOM_ROSTER)
+        reaction = next(item for item in agenda if item.kind == "reaction")
+
+        self.assertIn("if not, call the pass_on_reacting tool", reaction.prompt.lower())
+        self.assertIn("don't force a comment", reaction.prompt.lower())
 
 
 class LoadContextTest(unittest.IsolatedAsyncioTestCase):
@@ -273,6 +319,42 @@ class FileIssueToolTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("expired", result)
         self.assertEqual(moderator.filed_issues, [])
+
+
+class PassOnReactingToolTest(unittest.IsolatedAsyncioTestCase):
+    """PER-83: the reaction-turn "pass" convention — calling this instead of speaking must
+    never itself raise or require any moderator/persona state."""
+
+    async def test_returns_without_side_effects(self):
+        result = await _pass_on_reacting()
+        self.assertIn("passed", result.lower())
+
+
+class AskBoardToolTest(unittest.IsolatedAsyncioTestCase):
+    """PER-83: agent-initiated steering — the ask_board tool is a thin wrapper around
+    Moderator._ask_and_wait that turns its return value into a tool result the LLM can
+    react to in the same turn."""
+
+    async def test_answer_is_relayed_back_through_the_tool(self):
+        persona = BOARDROOM_ROSTER[0]
+        moderator = Moderator(agenda=[], speakers={})
+        tool = _ask_board_tool(persona, moderator)
+
+        with mock.patch.object(moderator, "_ask_and_wait", return_value="ship it") as ask_and_wait:
+            result = await tool(question="Should we ship the beta today?")
+
+        ask_and_wait.assert_called_once_with(persona.identity, "Should we ship the beta today?")
+        self.assertEqual(result, 'The board answered: "ship it"')
+
+    async def test_no_answer_within_timeout_reports_back_without_raising(self):
+        persona = BOARDROOM_ROSTER[0]
+        moderator = Moderator(agenda=[], speakers={})
+        tool = _ask_board_tool(persona, moderator)
+
+        with mock.patch.object(moderator, "_ask_and_wait", return_value=None):
+            result = await tool(question="Should we ship the beta today?")
+
+        self.assertIn("No answer", result)
 
 
 if __name__ == "__main__":
