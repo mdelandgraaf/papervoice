@@ -133,6 +133,60 @@ class LiveKitAdapterTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             await lk.sip_trunk_status()
 
+    async def test_room_has_human_participant_requires_env(self):
+        with self.assertRaises(RuntimeError):
+            await lk.room_has_human_participant("papervoice-test")
+
+    async def test_room_has_human_participant_true_for_standard_kind(self):
+        from livekit import api
+
+        participants = mock.MagicMock(participants=[mock.MagicMock(kind=api.ParticipantInfo.Kind.STANDARD)])
+        fake_room_service = mock.AsyncMock()
+        fake_room_service.list_participants = mock.AsyncMock(return_value=participants)
+        fake_lk = mock.AsyncMock()
+        fake_lk.room = fake_room_service
+        fake_lk.__aenter__ = mock.AsyncMock(return_value=fake_lk)
+        fake_lk.__aexit__ = mock.AsyncMock(return_value=False)
+
+        os.environ.update(LIVEKIT_URL="wss://x", LIVEKIT_API_KEY="k", LIVEKIT_API_SECRET="s")
+        with mock.patch("livekit.api.LiveKitAPI", return_value=fake_lk):
+            self.assertTrue(await lk.room_has_human_participant("papervoice-boardroom"))
+
+    async def test_room_has_human_participant_false_when_only_agents_present(self):
+        from livekit import api
+
+        participants = mock.MagicMock(
+            participants=[
+                mock.MagicMock(kind=api.ParticipantInfo.Kind.AGENT),
+                mock.MagicMock(kind=api.ParticipantInfo.Kind.AGENT),
+            ]
+        )
+        fake_room_service = mock.AsyncMock()
+        fake_room_service.list_participants = mock.AsyncMock(return_value=participants)
+        fake_lk = mock.AsyncMock()
+        fake_lk.room = fake_room_service
+        fake_lk.__aenter__ = mock.AsyncMock(return_value=fake_lk)
+        fake_lk.__aexit__ = mock.AsyncMock(return_value=False)
+
+        os.environ.update(LIVEKIT_URL="wss://x", LIVEKIT_API_KEY="k", LIVEKIT_API_SECRET="s")
+        with mock.patch("livekit.api.LiveKitAPI", return_value=fake_lk):
+            self.assertFalse(await lk.room_has_human_participant("papervoice-boardroom"))
+
+    async def test_room_has_human_participant_false_when_room_missing(self):
+        from livekit import api
+
+        not_found = api.TwirpError(api.TwirpErrorCode.NOT_FOUND, "requested room does not exist", status=404)
+        fake_room_service = mock.AsyncMock()
+        fake_room_service.list_participants = mock.AsyncMock(side_effect=not_found)
+        fake_lk = mock.AsyncMock()
+        fake_lk.room = fake_room_service
+        fake_lk.__aenter__ = mock.AsyncMock(return_value=fake_lk)
+        fake_lk.__aexit__ = mock.AsyncMock(return_value=False)
+
+        os.environ.update(LIVEKIT_URL="wss://x", LIVEKIT_API_KEY="k", LIVEKIT_API_SECRET="s")
+        with mock.patch("livekit.api.LiveKitAPI", return_value=fake_lk):
+            self.assertFalse(await lk.room_has_human_participant("papervoice-boardroom"))
+
     async def test_delete_room_retries_transient_not_found_then_succeeds(self):
         from livekit import api
 

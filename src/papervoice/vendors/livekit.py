@@ -88,6 +88,28 @@ async def verify_room_join(room: str, identity: str = "papervoice-healthcheck") 
         await conn.disconnect()
 
 
+async def room_has_human_participant(name: str) -> bool:
+    """True if any non-agent participant is currently connected to `name`.
+
+    Meant to gate operational actions that kill live connections outright —
+    a worker restart (see PER-84: a restart mid-call would drop every human
+    and agent instantly, unlike a graceful in-process failure the moderator
+    can isolate) — so callers can skip/delay them while a board call is
+    actually in progress. A room that doesn't exist (never created, or
+    already torn down) has no participants, so this returns False rather
+    than raising.
+    """
+    _require_env()
+    async with api.LiveKitAPI() as lk:
+        try:
+            resp = await lk.room.list_participants(api.ListParticipantsRequest(room=name))
+        except api.TwirpError as exc:
+            if exc.code == api.TwirpErrorCode.NOT_FOUND:
+                return False
+            raise
+    return any(p.kind != api.ParticipantInfo.Kind.AGENT for p in resp.participants)
+
+
 async def sip_trunk_status() -> str:
     """Confirm the LiveKit SIP API is reachable and report configured trunks.
 
