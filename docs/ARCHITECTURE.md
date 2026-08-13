@@ -229,6 +229,26 @@ moderator floor control, human tracks preempt):
    "what's the status of PER-80 right now?") beyond the call-start briefing — `context_briefing()` is
    a snapshot, not a live query tool. Left for a follow-up if a real standup surfaces the need; adding
    it would be another `function_tool` alongside `file_followup_issue`, same pattern.
+6a. **Closer sweeps undocumented decisions into tickets.** Board feedback on PER-76 ("have all
+   outcomes of the call processed into new tasks") found that filing was purely opt-in per speaking
+   agent's own turn — if nobody who made a decision happened to call `file_followup_issue`
+   themselves, it went untracked. `_standup_agenda`'s closing turn now explicitly instructs the
+   opener to recap the meeting's decisions/action items and file any that are still missing a ticket
+   before wrapping up, using the same tool every persona already has. This does not require a new
+   turn type or moderator change — one more `file_followup_issue` sweep, same closing turn, no added
+   per-minute cost.
+6b. **Still not built (PER-76 board feedback, 2026-08-13): agent-to-agent advice/cross-talk, and
+   agents proactively asking the human for a decision.** The current agenda is a strict round-robin
+   handoff (opener -> each persona's status update -> opener closes); agents never get a turn to
+   react to *each other's* update ("Eng, any thoughts on that blocker before we move on?"), and a
+   persona's own turn has no way to pose a question and then wait for the human's answer the way
+   `_respond_to_barge_in` lets a *human-initiated* interruption get answered — steering only flows
+   human-in on their own initiative (barge-in), never agent-out. Building both is a real moderator/
+   agenda change, not a prompt tweak: cross-talk turns add speaking turns per agenda item (multiplies
+   per-minute cost, see "Cost per minute" lens), and an agent-initiated wait-for-human-answer needs
+   the same kind of explicit hold-the-floor state `_hold_open_floor` uses today, generalized to fire
+   from inside a scripted turn instead of only after a barge-in or at meeting end. Scoped as a
+   follow-up rather than folded into this note — see the PER-76 thread for the proposal.
 7. **Short-lived-token fallback while the durable key is pending (CEO-authorized, PER-76, 2026-08-13).**
    The `PAPERCLIP_API_KEY` a long-lived board-minted key was meant to fill (see "Required accounts &
    secrets" above) was still pending confirmation on PER-71 when M3 needed to ship, so `.env`'s

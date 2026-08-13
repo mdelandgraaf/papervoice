@@ -60,6 +60,15 @@ class StandupAgendaTest(unittest.TestCase):
         self.assertEqual(agenda[-1].identity, BOARDROOM_ROSTER[0].identity)
         self.assertIn("close", agenda[-1].prompt.lower())
 
+    def test_closer_is_told_to_sweep_undocumented_decisions_into_tickets(self):
+        """PER-76 board feedback: outcomes of the call should become Paperclip tasks, not
+        rely on each agent having remembered to file its own follow-up mid-turn."""
+        agenda = _standup_agenda(BOARDROOM_ROSTER)
+
+        closer_prompt = agenda[-1].prompt
+        self.assertIn("file_followup_issue", closer_prompt)
+        self.assertIn("decisions", closer_prompt.lower())
+
     def test_middle_items_are_the_non_opener_personas_in_order(self):
         agenda = _standup_agenda(BOARDROOM_ROSTER)
 

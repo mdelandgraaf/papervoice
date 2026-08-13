@@ -119,7 +119,11 @@ def _standup_agenda(
     items.append(
         AgendaItem(
             opener.identity,
-            "Close the standup: ask if anyone has final questions before wrapping up, then thank everyone.",
+            "Close the standup: briefly recap any decisions or action items from this meeting"
+            " that don't already have a follow-up ticket, and file each one now with the"
+            " file_followup_issue tool before wrapping up — don't rely on whoever made the"
+            " decision to have filed it themselves. Then ask if anyone has final questions"
+            " before wrapping up, and thank everyone.",
         )
     )
     return items
