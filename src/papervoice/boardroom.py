@@ -451,9 +451,13 @@ async def run_standup(room_name: str = BOARDROOM_ROOM, summary_issue_id: str | N
             await room.disconnect()
         if summary_issue_id:
             try:
-                await asyncio.to_thread(pc_vendor.post_comment, summary_issue_id, _build_summary(moderator, completed))
+                await asyncio.to_thread(
+                    pc_vendor.post_comment_or_queue,
+                    summary_issue_id,
+                    _build_summary(moderator, completed),
+                )
             except Exception:
-                logger.exception("failed to post standup summary to %s", summary_issue_id)
+                logger.exception("failed to post or queue standup summary to %s", summary_issue_id)
 
 
 async def request_fnc(job_request) -> None:

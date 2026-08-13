@@ -11,12 +11,22 @@ needs (PAPERCLIP_API_KEY below) is a Paperclip-internal credential, not an
 ElevenLabs/LiveKit/Twilio-style paid account.
 """
 
+import json
+import logging
 import os
+import tempfile
+from pathlib import Path
 
 import httpx
 
 _OPEN_STATUSES = "todo,in_progress,in_review,blocked"
 _TIMEOUT = 15.0
+_DEFAULT_PENDING_POSTS_DIR = "/var/tmp/papervoice-boardroom/pending-posts"
+logger = logging.getLogger(__name__)
+
+
+def _pending_posts_dir() -> Path:
+    return Path(os.environ.get("PAPERCLIP_PENDING_POSTS_DIR", _DEFAULT_PENDING_POSTS_DIR))
 
 
 def _api_base() -> str:
@@ -122,6 +132,56 @@ def post_comment(issue_id: str, body: str) -> dict:
     )
     resp.raise_for_status()
     return resp.json()
+
+
+def queue_comment(issue_id: str, body: str) -> Path:
+    """Persist a comment for a later wake when Paperclip is unavailable."""
+    directory = _pending_posts_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".pending-", suffix=".tmp", dir=directory)
+    path = Path(temporary).with_suffix(".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump({"issue_id": issue_id, "body": body}, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+    logger.error("queued failed Paperclip comment for retry: %s", path)
+    return path
+
+
+def post_comment_or_queue(issue_id: str, body: str) -> dict | None:
+    """Post a comment, durably queueing it if the API call fails."""
+    try:
+        return post_comment(issue_id, body)
+    except Exception:
+        queue_comment(issue_id, body)
+        logger.exception("failed to post Paperclip comment to %s; queued for retry", issue_id)
+        return None
+
+
+def drain_pending_comments() -> int:
+    """Retry every queued comment; leave failures queued and return successes."""
+    directory = _pending_posts_dir()
+    if not directory.exists():
+        return 0
+    posted = 0
+    for path in sorted(directory.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            post_comment(payload["issue_id"], payload["body"])
+            path.unlink()
+            posted += 1
+            logger.info("posted queued Paperclip comment %s", path.name)
+        except Exception:
+            logger.exception("failed to drain queued Paperclip comment %s; retaining it", path)
+    return posted
 
 
 def is_auth_error(exc: Exception) -> bool:

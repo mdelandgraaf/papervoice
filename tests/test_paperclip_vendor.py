@@ -7,6 +7,7 @@ Run: PYTHONPATH=src python -m unittest discover -s tests -v
 
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -162,6 +163,29 @@ class PaperclipAdapterTest(unittest.TestCase):
         args, kwargs = post.call_args
         self.assertIn("issue-1", args[0])
         self.assertEqual(kwargs["json"]["body"], "summary text")
+
+    def test_failed_post_is_persisted_and_drained_after_expiry(self):
+        self._set_env()
+        with tempfile.TemporaryDirectory() as pending:
+            os.environ["PAPERCLIP_PENDING_POSTS_DIR"] = pending
+            with mock.patch.object(pc, "post_comment", side_effect=RuntimeError("expired token")):
+                self.assertIsNone(pc.post_comment_or_queue("issue-1", "summary text"))
+            queued = list(os.scandir(pending))
+            self.assertEqual(len(queued), 1)
+
+            with mock.patch.object(pc, "post_comment", return_value={"id": "comment-1"}) as post:
+                self.assertEqual(pc.drain_pending_comments(), 1)
+            post.assert_called_once_with("issue-1", "summary text")
+            self.assertEqual(list(os.scandir(pending)), [])
+
+    def test_failed_retry_remains_queued(self):
+        self._set_env()
+        with tempfile.TemporaryDirectory() as pending:
+            os.environ["PAPERCLIP_PENDING_POSTS_DIR"] = pending
+            pc.queue_comment("issue-1", "summary text")
+            with mock.patch.object(pc, "post_comment", side_effect=RuntimeError("still expired")):
+                self.assertEqual(pc.drain_pending_comments(), 0)
+            self.assertEqual(len(list(os.scandir(pending))), 1)
 
     def test_list_agent_ids_returns_id_set(self):
         self._set_env()

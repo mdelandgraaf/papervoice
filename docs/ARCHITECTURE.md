@@ -304,3 +304,10 @@ moderator floor control, human tracks preempt):
    - This is a stopgap, not the design: once PER-71's durable 30–90 day key is minted and delivered,
      swap it into `.env` and delete the "refresh on every wake" step. Tracked as the open item on
      PER-71/PER-76 rather than a new issue, since it's the same key this section already documents.
+8. **Wake-time token refresh and summary durability (PER-86, 2026-08-13).** Until the durable key
+   exists, `scripts/wake-maintenance` is the mandatory first action on every VoiceEngineer wake:
+   it atomically copies the injected run JWT into the boardroom `.env`, probes the automatic-dispatch
+   worker, then drains `/var/tmp/papervoice-boardroom/pending-posts` (override with
+   `PAPERCLIP_PENDING_POSTS_DIR`). A failed post-call summary is written as an atomic JSON payload
+   by `vendors.paperclip.post_comment_or_queue`; it is removed only after a successful retry. This
+   bounds token gaps at the wake cadence and prevents a transient 401/404 from losing the transcript.

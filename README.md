@@ -112,10 +112,10 @@ See `docs/ARCHITECTURE.md` "M3 implementation notes" for the design rationale.
 Same two commands as "How to join the M2 boardroom" above (`papervoice.boardroom start` +
 `scripts/join-link your-name papervoice-boardroom`), plus:
 
-1. **Ask the operator (VoiceEngineer) to refresh `.env`'s `PAPERCLIP_API_KEY` and confirm
+1. **Ask the operator (VoiceEngineer) to run `scripts/wake-maintenance` and confirm
    `scripts/healthcheck` is green immediately before you join** — while PER-71's durable key is
-   pending, `.env` holds a ~1h run-scoped JWT (see `docs/ARCHITECTURE.md` M3 notes point 7), not a
-   long-lived key, so it can go stale between heartbeats.
+   pending, the wake script refreshes `.env`'s ~1h run-scoped JWT, probes the worker, and drains
+   failed summary posts (see `HEARTBEAT.md` and `docs/ARCHITECTURE.md` M3 notes point 8).
 2. Listen for each persona's status update to include a real, specific Paperclip issue (not just
    "no open issues") — that's live context, not the generic M2 script.
 3. Ask the board (out loud, on the call) to decide on some follow-up action; a persona should call
