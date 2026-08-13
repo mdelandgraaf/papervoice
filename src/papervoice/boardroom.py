@@ -302,7 +302,21 @@ async def _connect_agent(room_name: str, persona: Persona, moderator: Moderator)
             # No STT/VAD: this agent never listens for itself. The shared
             # transcriber below is the room's only ears; the moderator feeds
             # each agent the rolling transcript as text when granting the floor.
-            room_options=room_io.RoomOptions(audio_input=False, text_input=False),
+            # close_on_disconnect=False (PER-84): LiveKit's default links this
+            # session's lifecycle to the first human participant and tears the
+            # whole AgentSession down the instant that participant disconnects
+            # for any reason, including a momentary blip. With N personas each
+            # independently linked to the same human, one blip closed all N
+            # sessions in lockstep on a live board call (all three "dropped"
+            # within milliseconds of each other) and there is no reconnect —
+            # a closed AgentSession never reopens even if the human rejoins.
+            # Moderator._speak already has its own per-turn try/except plus a
+            # hard timeout (see docs/ARCHITECTURE.md M2 note 6/7) that
+            # degrades one persona at a time and tolerates a hung/absent
+            # human — that is the intended failure-isolation boundary, not
+            # this SDK default, which defeats it by acting on all sessions at
+            # once before the moderator ever gets a chance to isolate one.
+            room_options=room_io.RoomOptions(audio_input=False, text_input=False, close_on_disconnect=False),
         )
     except Exception:
         # room.connect() above already put this identity in the room as a
@@ -351,6 +365,11 @@ async def _connect_transcriber(room_name: str, moderator: Moderator) -> tuple[Ag
             # an agent's own TTS trigger barge-in against itself, exactly
             # the anti-pattern docs/ARCHITECTURE.md warns against.
             participant_kinds=[rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD, rtc.ParticipantKind.PARTICIPANT_KIND_SIP],
+            # close_on_disconnect=False (PER-84): same reasoning as
+            # _connect_agent — this session must survive a human blip so it
+            # picks the room's ears back up on reconnect instead of staying
+            # permanently deaf for the rest of the call.
+            close_on_disconnect=False,
         ),
     )
     return session, room

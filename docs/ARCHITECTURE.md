@@ -188,6 +188,21 @@ moderator floor control, human tracks preempt):
     empty room's job dying (still registered and dispatchable afterward) and a freshly-created
     test room gets dispatched a job within ~1s of `create_room`, with the job correctly idling on
     `wait_for_participant()` — no agent turn (LLM/TTS spend) until a human is actually present.
+12. **One human disconnect used to close every agent session at once (PER-84).** Root-caused after
+    all three personas dropped mid-turn within milliseconds of each other on a live board test call
+    (2026-08-13 10:54 UTC, human singing, then a `CLIENT_INITIATED` LiveKit disconnect of the human
+    participant ~4s later — a deploy landed in the same call window but two minutes *after* the
+    drop, so ruled out as the trigger; no ElevenLabs errors in the worker log). Cause: `AgentSession`
+    defaults to `close_on_disconnect=True` and, with no `participant_identity` pinned, links to "the
+    first participant" — the human. With N personas each independently linked to that same human,
+    the single disconnect event force-closed all N `AgentSession`s in lockstep, before
+    `Moderator._speak`'s per-turn try/except (note 6 above) ever got a chance to isolate just one.
+    A closed `AgentSession` never reopens even if the human immediately rejoins with the same
+    identity, so this was strictly worse than a real per-agent failure. Fix: `close_on_disconnect=False`
+    on every agent and transcriber `RoomOptions` — session lifecycle no longer depends on the human's
+    connection at all; `Moderator._speak`'s existing per-turn timeout/try-except (already designed to
+    tolerate a hung or absent human) is now the only failure-isolation boundary, restoring "the call
+    keeps going with whoever is left" even when the disruption is the human blipping, not an agent.
 
 ## M3 implementation notes (PER-76)
 
