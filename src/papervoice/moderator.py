@@ -84,6 +84,9 @@ class Moderator:
         self.current_speaker: str | None = None
         self.transcript: list[tuple[str, str]] = []
         self.dropped: set[str] = set()
+        # Paperclip issues filed live during the call (see boardroom.py's
+        # file_followup_issue tool), for the post-call summary comment.
+        self.filed_issues: list[tuple[str, str]] = []
         # Set the instant a barge-in cuts an agent off; cleared once that
         # agent has answered whatever the human said (or the wait times out).
         # Lets record_transcript() and _run_turn() recognize "this final
@@ -95,6 +98,10 @@ class Moderator:
 
     def add_speaker(self, identity: str, handle: SpeakerHandle) -> None:
         self._speakers[identity] = handle
+
+    def record_filed_issue(self, identifier: str, title: str) -> None:
+        """Record a Paperclip issue filed live during the call, for the post-call summary."""
+        self.filed_issues.append((identifier, title))
 
     def record_transcript(self, speaker_identity: str, text: str) -> None:
         """Append a line to the shared transcript every agent's next turn sees as context."""

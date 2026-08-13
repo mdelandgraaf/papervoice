@@ -36,7 +36,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, WorkerOptions, cli
+from livekit.agents import Agent, AgentSession, WorkerOptions, cli, function_tool
 from livekit.agents.voice import room_io
 from livekit.agents.voice.events import UserInputTranscribedEvent, UserStateChangedEvent
 from livekit.plugins import anthropic, silero
@@ -45,6 +45,7 @@ from papervoice.moderator import AgendaItem, Moderator, SpeakerHandle
 from papervoice.personas import BOARDROOM_ROOM, BOARDROOM_ROSTER, Persona
 from papervoice.vendors import elevenlabs as el_vendor
 from papervoice.vendors import livekit as lk_vendor
+from papervoice.vendors import paperclip as pc_vendor
 
 logger = logging.getLogger("papervoice.boardroom")
 
@@ -73,19 +74,33 @@ def _fire_and_forget(coro, *, name: str) -> asyncio.Task:
     return task
 
 
-def _standup_agenda(roster: tuple[Persona, ...]) -> list[AgendaItem]:
+def _standup_agenda(roster: tuple[Persona, ...], context: dict[str, str] | None = None) -> list[AgendaItem]:
+    """Build the agenda. `context` (Milestone 3) is identity -> a one-line live Paperclip
+    briefing from _load_context(); folded into each status-update prompt so agents report
+    real issue state instead of a generic "give an update", per docs/ARCHITECTURE.md M3.
+    """
+    context = context or {}
     opener, *rest = roster
     items = [
         AgendaItem(
             opener.identity,
-            "Open the standup: greet everyone, say this is the Papervoice milestone-two"
+            "Open the standup: greet everyone, say this is the Papervoice milestone-three"
             f" test call, and hand it to {rest[0].display_name} for their update.",
         )
     ]
     for i, persona in enumerate(rest):
         nxt = rest[i + 1].display_name if i + 1 < len(rest) else None
         handoff = f" Then hand off to {nxt}." if nxt else f" Then hand back to {opener.display_name} to close."
-        items.append(AgendaItem(persona.identity, f"Give a brief status update.{handoff}"))
+        briefing = context.get(persona.identity)
+        state = f" Your current Paperclip status: {briefing}" if briefing else ""
+        items.append(
+            AgendaItem(
+                persona.identity,
+                f"Give a brief status update based on your real Paperclip issue state below."
+                f"{state} If something needs a follow-up ticket, file it with the"
+                f" file_followup_issue tool.{handoff}",
+            )
+        )
     items.append(
         AgendaItem(
             opener.identity,
@@ -95,7 +110,76 @@ def _standup_agenda(roster: tuple[Persona, ...]) -> list[AgendaItem]:
     return items
 
 
-async def _connect_agent(room_name: str, persona: Persona) -> tuple[AgentSession, rtc.Room]:
+async def _load_context(roster: tuple[Persona, ...]) -> dict[str, str]:
+    """Fetch each persona's live Paperclip briefing at call start (Milestone 3).
+
+    A failed fetch (API down, bad credentials) never blocks the call — it just
+    leaves that persona speaking without live context, logged loudly so it's
+    caught before the next call rather than silently every time.
+    """
+    context: dict[str, str] = {}
+    for persona in roster:
+        try:
+            context[persona.identity] = await asyncio.to_thread(
+                pc_vendor.context_briefing, persona.paperclip_agent_id
+            )
+        except Exception:
+            logger.exception("failed to load Paperclip context for %s, continuing without it", persona.identity)
+    return context
+
+
+def _build_summary(moderator: Moderator, completed: list[str]) -> str:
+    """Post-call summary markdown (Milestone 3): who spoke, and any issues filed live."""
+    lines = ["## Papervoice standup summary", "", f"Completed turns: {', '.join(completed) or 'none'}."]
+    if moderator.dropped:
+        lines.append(f"Dropped mid-call: {', '.join(sorted(moderator.dropped))}.")
+    if moderator.filed_issues:
+        lines.append("")
+        lines.append("Follow-up issues filed during the call:")
+        lines.extend(f"- {identifier}: {title}" for identifier, title in moderator.filed_issues)
+    lines.append("")
+    lines.append("Transcript tail:")
+    lines.append("```")
+    lines.append(moderator.recent_transcript_text(max_lines=40) or "(no transcript recorded)")
+    lines.append("```")
+    return "\n".join(lines)
+
+
+def _file_issue_tool(persona: Persona, moderator: Moderator):
+    """A per-persona LiveKit function tool (Milestone 3): lets the LLM file a real Paperclip
+    issue mid-conversation when the board decides something needs tracking. Defaults the
+    assignee to the speaking persona's own bound Paperclip agent, if it has one.
+    """
+
+    @function_tool
+    async def file_followup_issue(title: str, description: str = "") -> str:
+        """Create a Paperclip follow-up issue for a concrete action item the board just
+        decided on. Do not use this for routine status updates — only for something that
+        needs to be tracked and followed up on after the call.
+
+        Args:
+            title: Short issue title.
+            description: Optional extra detail — what was decided and why.
+        """
+        try:
+            issue = await asyncio.to_thread(
+                pc_vendor.create_issue,
+                title=title,
+                description=description,
+                assignee_agent_id=persona.paperclip_agent_id,
+            )
+        except Exception:
+            logger.exception("failed to file follow-up issue %r from %s", title, persona.identity)
+            return "Sorry, I couldn't file that issue — the Paperclip API call failed."
+        identifier = issue.get("identifier") or "unknown"
+        moderator.record_filed_issue(identifier, title)
+        moderator.record_transcript("moderator", f"{persona.display_name} filed {identifier}: {title}")
+        return f"Filed {identifier}: {title}"
+
+    return file_followup_issue
+
+
+async def _connect_agent(room_name: str, persona: Persona, moderator: Moderator) -> tuple[AgentSession, rtc.Room]:
     token = lk_vendor.mint_join_token(persona.identity, room_name, ttl_hours=1, agent=True)
     room = rtc.Room()
     await room.connect(os.environ["LIVEKIT_URL"], token)
@@ -105,7 +189,9 @@ async def _connect_agent(room_name: str, persona: Persona) -> tuple[AgentSession
             tts=el_vendor.plugin_tts(voice_id_override=persona.voice_id),
         )
         await session.start(
-            agent=Agent(instructions=persona.instructions),
+            # file_followup_issue (Milestone 3): lets this persona create a real
+            # Paperclip issue when the board decides something needs tracking.
+            agent=Agent(instructions=persona.instructions, tools=[_file_issue_tool(persona, moderator)]),
             room=room,
             # No STT/VAD: this agent never listens for itself. The shared
             # transcriber below is the room's only ears; the moderator feeds
@@ -184,11 +270,18 @@ def _speaker_handle(identity: str, session: AgentSession, moderator: Moderator) 
     return SpeakerHandle(identity, speak, interrupt)
 
 
-async def run_standup(room_name: str = BOARDROOM_ROOM) -> list[str]:
-    """Connect every persona + the shared transcriber, then run the agenda. Returns completed identities."""
-    moderator = Moderator(agenda=_standup_agenda(BOARDROOM_ROSTER), speakers={})
+async def run_standup(room_name: str = BOARDROOM_ROOM, summary_issue_id: str | None = None) -> list[str]:
+    """Connect every persona + the shared transcriber, then run the agenda. Returns completed identities.
+
+    Milestone 3: loads each persona's live Paperclip context before building the agenda,
+    and — if `summary_issue_id` is given — posts a post-call summary comment to it,
+    including any follow-up issues filed live via the file_followup_issue tool.
+    """
+    context = await _load_context(BOARDROOM_ROSTER)
+    moderator = Moderator(agenda=_standup_agenda(BOARDROOM_ROSTER, context), speakers={})
     sessions: list[AgentSession] = []
     rooms: list[rtc.Room] = []
+    completed: list[str] = []
     try:
         transcriber_session, transcriber_room = await _connect_transcriber(room_name, moderator)
         sessions.append(transcriber_session)
@@ -196,7 +289,7 @@ async def run_standup(room_name: str = BOARDROOM_ROOM) -> list[str]:
 
         for persona in BOARDROOM_ROSTER:
             try:
-                session, room = await _connect_agent(room_name, persona)
+                session, room = await _connect_agent(room_name, persona, moderator)
             except Exception:
                 logger.exception("agent %s failed to join, continuing without it", persona.identity)
                 moderator.dropped.add(persona.identity)
@@ -205,12 +298,18 @@ async def run_standup(room_name: str = BOARDROOM_ROOM) -> list[str]:
             rooms.append(room)
             moderator.add_speaker(persona.identity, _speaker_handle(persona.identity, session, moderator))
 
-        return await moderator.run_agenda()
+        completed = await moderator.run_agenda()
+        return completed
     finally:
         for session in sessions:
             await session.aclose()
         for room in rooms:
             await room.disconnect()
+        if summary_issue_id:
+            try:
+                await asyncio.to_thread(pc_vendor.post_comment, summary_issue_id, _build_summary(moderator, completed))
+            except Exception:
+                logger.exception("failed to post standup summary to %s", summary_issue_id)
 
 
 async def entrypoint(ctx) -> None:
@@ -224,7 +323,11 @@ async def entrypoint(ctx) -> None:
     logger.info("standup ready, waiting for a human to join room %s", ctx.room.name)
     participant = await ctx.wait_for_participant()
     logger.info("%s joined, starting the standup", participant.identity)
-    await run_standup(ctx.room.name)
+    # Optional (Milestone 3): where to post the post-call summary. Left unset,
+    # the standup still runs and files issues live — it just doesn't post a
+    # summary comment anywhere afterward.
+    summary_issue_id = os.environ.get("PAPERCLIP_STANDUP_SUMMARY_ISSUE_ID")
+    await run_standup(ctx.room.name, summary_issue_id=summary_issue_id)
 
 
 if __name__ == "__main__":

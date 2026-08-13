@@ -78,7 +78,9 @@ Implementation note: LiveKit Cloud's room API is eventually consistent and dedup
 - STT provider key (e.g. `DEEPGRAM_API_KEY`) unless ElevenLabs Scribe is used
 - LLM key(s) for agent personas (e.g. `ANTHROPIC_API_KEY`)
 - Twilio/SIP trunk credentials for phone dial-in (Milestone 1–2, optional if browser-only first)
-- `PAPERCLIP_API_KEY` scoped for standup context/actions (Milestone 3)
+- `PAPERCLIP_API_KEY` — a long-lived Paperclip API key for the VoiceEngineer agent's own identity,
+  used by the standalone standup process to load live issue context, file follow-up issues, and post
+  the post-call summary (Milestone 3). Not a new vendor account — see M3 implementation notes.
 
 The board (via CEO) provisions accounts and spending; the VoiceEngineer never creates paid accounts on their own.
 
@@ -177,3 +179,40 @@ moderator floor control, human tracks preempt):
     empty room's job dying (still registered and dispatchable afterward) and a freshly-created
     test room gets dispatched a job within ~1s of `create_room`, with the job correctly idling on
     `wait_for_participant()` — no agent turn (LLM/TTS spend) until a human is actually present.
+
+## M3 implementation notes (PER-76)
+
+1. **Thin adapter, same shape as the ElevenLabs/LiveKit ones.** `src/papervoice/vendors/paperclip.py`
+   is the only module allowed to touch the Paperclip API — `agent_context()`/`company_snapshot()`/
+   `context_briefing()` for call-start reads, `create_issue()`/`post_comment()` for in-call and
+   post-call writes, `list_agent_ids()` for the healthcheck. Auth is `PAPERCLIP_API_KEY` (a
+   long-lived key for this process's own Paperclip agent identity — see "Required accounts &
+   secrets" below), not the short-lived per-run JWT a heartbeat gets; this process runs
+   continuously, outside any single heartbeat.
+2. **Personas bind to real Paperclip agents, not every persona has one.** `Persona.paperclip_agent_id`
+   (`personas.py`) maps CEO -> Aissistent and Eng -> VoiceEngineer, the two roles with a real backing
+   agent as of 2026-08-13. There is no dedicated Ops agent yet, so that persona's `paperclip_agent_id`
+   is `None`; `context_briefing(None)` falls back to a company-wide open-issue snapshot instead of
+   speaking from nothing. Re-verify these ids with `scripts/healthcheck` after any hire/rename.
+3. **Context loads once at call start, folded into the agenda text, not fetched live per turn.**
+   `boardroom._load_context()` fetches every persona's briefing before the agenda is built;
+   `_standup_agenda()` appends it to each status-update prompt. A single fetch (not one per persona
+   per turn) keeps the read cheap and keeps call start from depending on Paperclip API latency mid-call.
+   A failed fetch for one persona is logged and that persona just speaks without live context — it
+   never blocks the call (same graceful-degradation posture as an agent session dropping, see M2 notes).
+4. **Filing issues is a real LLM tool call, not agenda scripting.** Each persona's `Agent` gets a
+   `file_followup_issue` `function_tool` (`boardroom._file_issue_tool`) bound to that persona's
+   `paperclip_agent_id` as the default assignee. The LLM decides when to call it (the agenda prompt
+   tells it to use the tool "if something needs a follow-up ticket") — this is real tool-calling
+   through livekit-agents' `Agent(tools=[...])`, not a keyword-matching layer over the transcript.
+   A failed create (bad key, API down) returns a spoken apology instead of raising into the turn.
+5. **Post-call summary is opt-in via `PAPERCLIP_STANDUP_SUMMARY_ISSUE_ID`.** There's no single
+   "right" issue to post every standup's summary to yet (no dedicated standup-log issue exists), so
+   `run_standup()` only posts if a target issue id is set; unset, the call still runs and can still
+   file issues live, it just doesn't post a summary anywhere. `boardroom._build_summary()` is a pure
+   function (identities that completed, anyone dropped, issues filed, a transcript tail) — unit
+   tested without any live Paperclip call.
+6. **Not yet built:** the moderator/agents don't yet read the *current issue thread* mid-call (e.g.
+   "what's the status of PER-80 right now?") beyond the call-start briefing — `context_briefing()` is
+   a snapshot, not a live query tool. Left for a follow-up if a real standup surfaces the need; adding
+   it would be another `function_tool` alongside `file_followup_issue`, same pattern.

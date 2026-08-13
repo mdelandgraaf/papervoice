@@ -12,9 +12,14 @@ the system depends on:
      and not yet provisioned (see docs/ARCHITECTURE.md), so 0 configured trunks is healthy;
      this only catches the SIP API itself going unreachable or the SDK surface breaking.
   6. Boardroom voice roster: every M2 persona's voice_id still exists on the account.
+  7. Paperclip API reachability: a real authenticated call (Milestone 3), so a bad/expired
+     PAPERCLIP_API_KEY or URL drift is caught here instead of during a call.
+  8. Paperclip persona roster: every persona's bound paperclip_agent_id (personas.py)
+     still exists in the company — catches an agent being renamed/removed/re-hired.
 
 Exit code 0 = all green. Costs: two short TTS/STT calls (< $0.01), no LiveKit charges
-(room create/delete/join and SIP trunk listing are free on LiveKit Cloud).
+(room create/delete/join and SIP trunk listing are free on LiveKit Cloud), one free
+Paperclip API read.
 """
 
 import asyncio
@@ -32,6 +37,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 from papervoice.personas import BOARDROOM_ROSTER
 from papervoice.vendors import elevenlabs as el
 from papervoice.vendors import livekit as lk
+from papervoice.vendors import paperclip as pc
 
 
 def check_elevenlabs_tts() -> str:
@@ -86,6 +92,23 @@ def check_boardroom_voices() -> str:
     return f"{len(BOARDROOM_ROSTER)} persona voices present ({', '.join(p.display_name for p in BOARDROOM_ROSTER)})"
 
 
+def check_paperclip_api() -> str:
+    t0 = time.monotonic()
+    issues = pc.company_snapshot(limit=1)
+    return f"reachable, {len(issues)} open issue(s) in top-priority snapshot in {time.monotonic() - t0:.2f}s"
+
+
+def check_paperclip_persona_roster() -> str:
+    bound = [p for p in BOARDROOM_ROSTER if p.paperclip_agent_id]
+    if not bound:
+        return "no persona bound to a Paperclip agent (nothing to check)"
+    known = pc.list_agent_ids()
+    missing = [p.identity for p in bound if p.paperclip_agent_id not in known]
+    if missing:
+        raise RuntimeError(f"paperclip_agent_id missing from company for: {', '.join(missing)}")
+    return f"{len(bound)}/{len(BOARDROOM_ROSTER)} persona(s) bound to a live Paperclip agent"
+
+
 def main() -> int:
     failures = 0
     checks = (
@@ -95,6 +118,8 @@ def main() -> int:
         ("LiveKit room join", check_livekit_room_join),
         ("LiveKit SIP trunk status", check_sip_trunk),
         ("Boardroom voice roster", check_boardroom_voices),
+        ("Paperclip API reachability", check_paperclip_api),
+        ("Paperclip persona roster", check_paperclip_persona_roster),
     )
     for label, check in checks:
         try:

@@ -17,7 +17,7 @@ Origin: issue **PER-71** — "Give the paperclip agents voice capabilities".
 - [x] Investigation & architecture (see `docs/ARCHITECTURE.md`)
 - [x] Milestone 1 — single agent voice call (one ElevenLabs agent + one human, phone or browser)
 - [x] Milestone 2 — multi-agent conference with moderator turn-taking (code + automated smoke test done; awaiting a board member to join a live call — see below)
-- [ ] Milestone 3 — Paperclip context & actions (standup reads real issue state, files follow-ups)
+- [~] Milestone 3 — Paperclip context & actions (standup reads real issue state, files follow-ups, posts a summary). Code + unit tests done; live verification against the real Paperclip API is blocked on provisioning `PAPERCLIP_API_KEY` (see PER-76) — `scripts/healthcheck` will show this red until that's set.
 - [x] Milestone 4 — durability: health checks, pinned versions, update smoke test
 
 ## Repository layout
@@ -29,10 +29,10 @@ requirements.txt          — pinned dependency versions (upgrade deliberately, 
 scripts/healthcheck       — verifies every vendor surface (ElevenLabs TTS/STT, LiveKit room create/join, SIP trunk) still behaves as pinned
 scripts/join-link         — prints a browser join URL for a test call
 src/papervoice/agent.py      — the M1 voiced agent (single agent, LiveKit Agents worker)
-src/papervoice/boardroom.py  — the M2 boardroom: connects every persona + shared transcriber, runs the standup
+src/papervoice/boardroom.py  — the M2/M3 boardroom: connects every persona + shared transcriber, loads live Paperclip context, runs the standup, posts a summary
 src/papervoice/moderator.py  — floor control + agenda + barge-in state machine (no LiveKit imports, unit-tested standalone)
-src/papervoice/personas.py   — the M2 board persona roster (identity, ElevenLabs voice, instructions per agent)
-src/papervoice/vendors/      — thin adapters; only these modules touch vendor SDKs/APIs
+src/papervoice/personas.py   — the board persona roster (identity, ElevenLabs voice, instructions, bound Paperclip agent per persona)
+src/papervoice/vendors/      — thin adapters; only these modules touch vendor SDKs/APIs (ElevenLabs, LiveKit, Paperclip)
 ```
 
 ## Setup (once)
@@ -88,6 +88,24 @@ LiveKit accounts; the VoiceEngineer never creates paid accounts on their own.
    simulated drop.)
 5. Smoke test passes if: every persona speaks in a different voice, nobody talks over anyone
    without your barge-in, and your barge-in visibly cuts an agent off.
+
+## Milestone 3 — Paperclip context & actions
+
+Requires `PAPERCLIP_API_URL`, `PAPERCLIP_API_KEY`, `PAPERCLIP_COMPANY_ID` in `.env` (see
+`.env.example`) — a long-lived key for this process's own Paperclip agent identity, not a new
+vendor account. Without it the standup still runs (M2 behavior), it just skips the Paperclip
+pieces below and `scripts/healthcheck`'s two Paperclip checks show red.
+
+- **Call start:** each persona bound to a real Paperclip agent (`personas.py`) loads its own
+  open issues; unbound personas (currently Ops) get a company-wide snapshot instead. This is
+  folded into the agenda so status updates speak from real state.
+- **During the call:** any persona can call the `file_followup_issue` tool to create a real
+  Paperclip issue when the board decides something needs tracking — this is genuine LLM tool
+  use, not keyword matching on the transcript.
+- **After the call:** if `PAPERCLIP_STANDUP_SUMMARY_ISSUE_ID` is set, a summary comment (who
+  spoke, who dropped, issues filed, transcript tail) is posted to that issue.
+
+See `docs/ARCHITECTURE.md` "M3 implementation notes" for the design rationale.
 
 ## Owner
 

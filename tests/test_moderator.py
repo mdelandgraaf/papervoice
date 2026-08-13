@@ -293,5 +293,23 @@ class ModeratorTranscriptTest(unittest.TestCase):
         self.assertNotIn("line 24", text)
 
 
+class ModeratorFiledIssuesTest(unittest.TestCase):
+    """Milestone 3: issues filed live during the call, for the post-call summary."""
+
+    def test_starts_empty(self):
+        moderator = Moderator([], {})
+        self.assertEqual(moderator.filed_issues, [])
+
+    def test_record_filed_issue_appends_in_order(self):
+        moderator = Moderator([], {})
+        moderator.record_filed_issue("PER-1", "First follow-up")
+        moderator.record_filed_issue("PER-2", "Second follow-up")
+
+        self.assertEqual(
+            moderator.filed_issues,
+            [("PER-1", "First follow-up"), ("PER-2", "Second follow-up")],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
