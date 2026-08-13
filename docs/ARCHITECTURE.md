@@ -216,3 +216,20 @@ moderator floor control, human tracks preempt):
    "what's the status of PER-80 right now?") beyond the call-start briefing — `context_briefing()` is
    a snapshot, not a live query tool. Left for a follow-up if a real standup surfaces the need; adding
    it would be another `function_tool` alongside `file_followup_issue`, same pattern.
+7. **Short-lived-token fallback while the durable key is pending (CEO-authorized, PER-76, 2026-08-13).**
+   The `PAPERCLIP_API_KEY` a long-lived board-minted key was meant to fill (see "Required accounts &
+   secrets" above) was still pending confirmation on PER-71 when M3 needed to ship, so `.env`'s
+   `PAPERCLIP_API_KEY` is, for now, a VoiceEngineer heartbeat's own **run-scoped JWT** (~1h TTL) instead
+   — refreshed by hand into `.env` on a wake shortly before a call, never committed. Consequences:
+   - A call started more than ~55 minutes after the last refresh can have its token expire mid-call.
+     `pc_vendor.is_auth_error()` + `boardroom.py` tell that failure mode (401/403) apart from any other
+     Paperclip failure specifically so it degrades *loudly*: `_load_context` logs `"board tools
+     offline"` and, if *every* persona's context fetch hits it, the opener says so out loud
+     (`_standup_agenda`'s `paperclip_offline`) instead of the call silently reporting generic updates;
+     `file_followup_issue` gives a distinct spoken apology ("Paperclip access has expired for this
+     call") instead of a generic API-failure one. Any other Paperclip failure (API down, single persona
+     misconfigured) still degrades the same way M3 always did — logged, that persona/action just
+     proceeds without it, call unaffected.
+   - This is a stopgap, not the design: once PER-71's durable 30–90 day key is minted and delivered,
+     swap it into `.env` and delete the "refresh on every wake" step. Tracked as the open item on
+     PER-71/PER-76 rather than a new issue, since it's the same key this section already documents.

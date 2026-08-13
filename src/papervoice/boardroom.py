@@ -74,18 +74,33 @@ def _fire_and_forget(coro, *, name: str) -> asyncio.Task:
     return task
 
 
-def _standup_agenda(roster: tuple[Persona, ...], context: dict[str, str] | None = None) -> list[AgendaItem]:
+def _standup_agenda(
+    roster: tuple[Persona, ...],
+    context: dict[str, str] | None = None,
+    paperclip_offline: bool = False,
+) -> list[AgendaItem]:
     """Build the agenda. `context` (Milestone 3) is identity -> a one-line live Paperclip
     briefing from _load_context(); folded into each status-update prompt so agents report
     real issue state instead of a generic "give an update", per docs/ARCHITECTURE.md M3.
+
+    `paperclip_offline` (short-lived-token fallback, PER-76): set when every context fetch
+    failed on a 401/403 (expired/invalid PAPERCLIP_API_KEY). The call still runs — the
+    opener just says so out loud instead of everyone silently reporting nothing, so a human
+    on the call knows to expect generic updates and no live issue filing this time.
     """
     context = context or {}
     opener, *rest = roster
+    offline_notice = (
+        " Mention briefly that Paperclip board tools are offline for this call (access"
+        " expired), so updates and follow-ups won't reflect live issue state."
+        if paperclip_offline
+        else ""
+    )
     items = [
         AgendaItem(
             opener.identity,
             "Open the standup: greet everyone, say this is the Papervoice milestone-three"
-            f" test call, and hand it to {rest[0].display_name} for their update.",
+            f" test call, and hand it to {rest[0].display_name} for their update.{offline_notice}",
         )
     ]
     for i, persona in enumerate(rest):
@@ -110,22 +125,38 @@ def _standup_agenda(roster: tuple[Persona, ...], context: dict[str, str] | None 
     return items
 
 
-async def _load_context(roster: tuple[Persona, ...]) -> dict[str, str]:
+async def _load_context(roster: tuple[Persona, ...]) -> tuple[dict[str, str], bool]:
     """Fetch each persona's live Paperclip briefing at call start (Milestone 3).
 
     A failed fetch (API down, bad credentials) never blocks the call — it just
     leaves that persona speaking without live context, logged loudly so it's
     caught before the next call rather than silently every time.
+
+    Returns `(context, offline)`. `offline` is True only when *every* persona's
+    fetch failed on a 401/403 — i.e. PAPERCLIP_API_KEY itself is expired/invalid
+    (the short-lived-token fallback, PER-76), not a one-off or partial failure —
+    so the opener can say so out loud instead of the call quietly degrading with
+    no one told (see `_standup_agenda`'s `paperclip_offline`).
     """
     context: dict[str, str] = {}
+    auth_failures = 0
     for persona in roster:
         try:
             context[persona.identity] = await asyncio.to_thread(
                 pc_vendor.context_briefing, persona.paperclip_agent_id
             )
-        except Exception:
-            logger.exception("failed to load Paperclip context for %s, continuing without it", persona.identity)
-    return context
+        except Exception as exc:
+            if pc_vendor.is_auth_error(exc):
+                auth_failures += 1
+                logger.error(
+                    "Paperclip auth failed (401/403) loading context for %s — board tools"
+                    " offline for this call, is PAPERCLIP_API_KEY expired?",
+                    persona.identity,
+                )
+            else:
+                logger.exception("failed to load Paperclip context for %s, continuing without it", persona.identity)
+    offline = bool(roster) and auth_failures == len(roster)
+    return context, offline
 
 
 def _build_summary(moderator: Moderator, completed: list[str]) -> str:
@@ -168,7 +199,15 @@ def _file_issue_tool(persona: Persona, moderator: Moderator):
                 description=description,
                 assignee_agent_id=persona.paperclip_agent_id,
             )
-        except Exception:
+        except Exception as exc:
+            if pc_vendor.is_auth_error(exc):
+                logger.error(
+                    "Paperclip auth failed (401/403) filing %r from %s — board tools offline"
+                    " for this call, is PAPERCLIP_API_KEY expired?",
+                    title,
+                    persona.identity,
+                )
+                return "Sorry, I can't file that right now — Paperclip access has expired for this call."
             logger.exception("failed to file follow-up issue %r from %s", title, persona.identity)
             return "Sorry, I couldn't file that issue — the Paperclip API call failed."
         identifier = issue.get("identifier") or "unknown"
@@ -277,8 +316,10 @@ async def run_standup(room_name: str = BOARDROOM_ROOM, summary_issue_id: str | N
     and — if `summary_issue_id` is given — posts a post-call summary comment to it,
     including any follow-up issues filed live via the file_followup_issue tool.
     """
-    context = await _load_context(BOARDROOM_ROSTER)
-    moderator = Moderator(agenda=_standup_agenda(BOARDROOM_ROSTER, context), speakers={})
+    context, paperclip_offline = await _load_context(BOARDROOM_ROSTER)
+    moderator = Moderator(
+        agenda=_standup_agenda(BOARDROOM_ROSTER, context, paperclip_offline=paperclip_offline), speakers={}
+    )
     sessions: list[AgentSession] = []
     rooms: list[rtc.Room] = []
     completed: list[str] = []

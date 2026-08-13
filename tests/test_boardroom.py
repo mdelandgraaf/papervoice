@@ -14,6 +14,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import httpx
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from papervoice.boardroom import (
@@ -27,6 +29,12 @@ from papervoice.boardroom import (
 from papervoice.moderator import Moderator
 from papervoice.personas import BOARDROOM_ROSTER
 from papervoice.vendors import paperclip as pc_vendor
+
+
+def _auth_error(status_code: int = 401) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", "https://example.invalid")
+    response = httpx.Response(status_code, request=request)
+    return httpx.HTTPStatusError("unauthorized", request=request, response=response)
 
 
 class StandupAgendaTest(unittest.TestCase):
@@ -127,15 +135,26 @@ class StandupAgendaContextTest(unittest.TestCase):
         for item in agenda[1:-1]:
             self.assertIn("file_followup_issue", item.prompt)
 
+    def test_offline_flag_adds_a_spoken_notice_to_the_opener_only(self):
+        agenda = _standup_agenda(BOARDROOM_ROSTER, paperclip_offline=True)
+        self.assertIn("offline", agenda[0].prompt.lower())
+        for item in agenda[1:]:
+            self.assertNotIn("offline", item.prompt.lower())
+
+    def test_no_offline_notice_by_default(self):
+        agenda = _standup_agenda(BOARDROOM_ROSTER)
+        self.assertNotIn("offline", agenda[0].prompt.lower())
+
 
 class LoadContextTest(unittest.IsolatedAsyncioTestCase):
     async def test_fetches_briefing_per_persona_using_bound_agent_id(self):
         with mock.patch.object(pc_vendor, "context_briefing", side_effect=lambda agent_id: f"briefing-for-{agent_id}") as briefing:
-            context = await _load_context(BOARDROOM_ROSTER)
+            context, offline = await _load_context(BOARDROOM_ROSTER)
         self.assertEqual(len(context), len(BOARDROOM_ROSTER))
         for persona in BOARDROOM_ROSTER:
             self.assertEqual(context[persona.identity], f"briefing-for-{persona.paperclip_agent_id}")
         self.assertEqual(briefing.call_count, len(BOARDROOM_ROSTER))
+        self.assertFalse(offline)
 
     async def test_one_persona_failing_does_not_block_the_others(self):
         opener, *rest = BOARDROOM_ROSTER
@@ -146,10 +165,30 @@ class LoadContextTest(unittest.IsolatedAsyncioTestCase):
             return "ok"
 
         with mock.patch.object(pc_vendor, "context_briefing", side_effect=fake_briefing):
-            context = await _load_context(BOARDROOM_ROSTER)
+            context, offline = await _load_context(BOARDROOM_ROSTER)
         self.assertNotIn(opener.identity, context)
         for persona in rest:
             self.assertEqual(context[persona.identity], "ok")
+        self.assertFalse(offline)
+
+    async def test_one_auth_failure_among_others_is_not_reported_as_fully_offline(self):
+        opener, *rest = BOARDROOM_ROSTER
+
+        def fake_briefing(agent_id):
+            if agent_id == opener.paperclip_agent_id:
+                raise _auth_error()
+            return "ok"
+
+        with mock.patch.object(pc_vendor, "context_briefing", side_effect=fake_briefing):
+            context, offline = await _load_context(BOARDROOM_ROSTER)
+        self.assertNotIn(opener.identity, context)
+        self.assertFalse(offline)
+
+    async def test_every_persona_auth_failing_is_reported_offline(self):
+        with mock.patch.object(pc_vendor, "context_briefing", side_effect=_auth_error()):
+            context, offline = await _load_context(BOARDROOM_ROSTER)
+        self.assertEqual(context, {})
+        self.assertTrue(offline)
 
 
 class BuildSummaryTest(unittest.TestCase):
@@ -203,6 +242,17 @@ class FileIssueToolTest(unittest.IsolatedAsyncioTestCase):
             result = await tool(title="Whatever")
 
         self.assertIn("couldn't file", result)
+        self.assertEqual(moderator.filed_issues, [])
+
+    async def test_auth_failure_gives_a_specific_spoken_apology(self):
+        persona = BOARDROOM_ROSTER[0]
+        moderator = Moderator(agenda=[], speakers={})
+        tool = _file_issue_tool(persona, moderator)
+
+        with mock.patch.object(pc_vendor, "create_issue", side_effect=_auth_error()):
+            result = await tool(title="Whatever")
+
+        self.assertIn("expired", result)
         self.assertEqual(moderator.filed_issues, [])
 
 

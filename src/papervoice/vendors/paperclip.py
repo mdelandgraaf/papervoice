@@ -124,6 +124,18 @@ def post_comment(issue_id: str, body: str) -> dict:
     return resp.json()
 
 
+def is_auth_error(exc: Exception) -> bool:
+    """True if `exc` is an HTTP 401/403 from the Paperclip API.
+
+    Used by boardroom.py to tell "board tools offline" (expired/invalid
+    PAPERCLIP_API_KEY — see the short-lived-token fallback in
+    docs/ARCHITECTURE.md's M3 notes, PER-76) apart from any other failure, so
+    the call can log and speak a clear, specific notice instead of a generic
+    "something went wrong."
+    """
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in (401, 403)
+
+
 def list_agent_ids() -> set[str]:
     """All agent ids in the company — used by scripts/healthcheck to catch the persona
     roster's paperclip_agent_id values drifting off the company (agent renamed/removed)."""

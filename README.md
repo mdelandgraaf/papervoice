@@ -17,7 +17,7 @@ Origin: issue **PER-71** — "Give the paperclip agents voice capabilities".
 - [x] Investigation & architecture (see `docs/ARCHITECTURE.md`)
 - [x] Milestone 1 — single agent voice call (one ElevenLabs agent + one human, phone or browser)
 - [x] Milestone 2 — multi-agent conference with moderator turn-taking (code + automated smoke test done; awaiting a board member to join a live call — see below)
-- [~] Milestone 3 — Paperclip context & actions (standup reads real issue state, files follow-ups, posts a summary). Code + unit tests done; live verification against the real Paperclip API is blocked on provisioning `PAPERCLIP_API_KEY` (see PER-76) — `scripts/healthcheck` will show this red until that's set.
+- [~] Milestone 3 — Paperclip context & actions (standup reads real issue state, files follow-ups, posts a summary). Code + unit tests done; `scripts/healthcheck`'s Paperclip checks pass live using a short-lived-token fallback (a VoiceEngineer run's own ~1h JWT, refreshed by hand into `.env` — see `docs/ARCHITECTURE.md` M3 notes point 7) while the durable board-minted `PAPERCLIP_API_KEY` is still pending on PER-71. Awaiting a board member to join a live test call — see PER-76.
 - [x] Milestone 4 — durability: health checks, pinned versions, update smoke test
 
 ## Repository layout
@@ -106,6 +106,27 @@ pieces below and `scripts/healthcheck`'s two Paperclip checks show red.
   spoke, who dropped, issues filed, transcript tail) is posted to that issue.
 
 See `docs/ARCHITECTURE.md` "M3 implementation notes" for the design rationale.
+
+### Testing M3 live (board test call)
+
+Same two commands as "How to join the M2 boardroom" above (`papervoice.boardroom start` +
+`scripts/join-link your-name papervoice-boardroom`), plus:
+
+1. **Ask the operator (VoiceEngineer) to refresh `.env`'s `PAPERCLIP_API_KEY` and confirm
+   `scripts/healthcheck` is green immediately before you join** — while PER-71's durable key is
+   pending, `.env` holds a ~1h run-scoped JWT (see `docs/ARCHITECTURE.md` M3 notes point 7), not a
+   long-lived key, so it can go stale between heartbeats.
+2. Listen for each persona's status update to include a real, specific Paperclip issue (not just
+   "no open issues") — that's live context, not the generic M2 script.
+3. Ask the board (out loud, on the call) to decide on some follow-up action; a persona should call
+   `file_followup_issue` and say the new issue's identifier back to you. Check it actually exists
+   in Paperclip after the call.
+4. **If instead you hear "Paperclip board tools are offline for this call"** at the open, or a
+   persona apologizes that "Paperclip access has expired," the token went stale — the call itself
+   is still fine (M2 behavior unaffected), but ask the operator to refresh `.env` and restart the
+   worker before testing the Paperclip pieces again.
+5. Pass: real issue state spoken back to you, at least one issue filed live and confirmed to exist,
+   no crash — matching the M2 pass criteria for voice/turn-taking on top.
 
 ## Owner
 

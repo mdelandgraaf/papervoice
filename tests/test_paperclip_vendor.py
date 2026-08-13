@@ -11,9 +11,17 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import httpx
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from papervoice.vendors import paperclip as pc
+
+
+def _status_error(status_code: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", "https://example.invalid")
+    response = httpx.Response(status_code, request=request)
+    return httpx.HTTPStatusError("error", request=request, response=response)
 
 
 class PaperclipAdapterTest(unittest.TestCase):
@@ -162,6 +170,14 @@ class PaperclipAdapterTest(unittest.TestCase):
         fake_resp.json = mock.Mock(return_value=[{"id": "a"}, {"id": "b"}])
         with mock.patch("httpx.get", return_value=fake_resp):
             self.assertEqual(pc.list_agent_ids(), {"a", "b"})
+
+    def test_is_auth_error_true_for_401_and_403(self):
+        self.assertTrue(pc.is_auth_error(_status_error(401)))
+        self.assertTrue(pc.is_auth_error(_status_error(403)))
+
+    def test_is_auth_error_false_for_other_status_and_other_exceptions(self):
+        self.assertFalse(pc.is_auth_error(_status_error(500)))
+        self.assertFalse(pc.is_auth_error(RuntimeError("boom")))
 
 
 if __name__ == "__main__":
