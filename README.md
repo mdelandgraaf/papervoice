@@ -68,9 +68,15 @@ LiveKit accounts; the VoiceEngineer never creates paid accounts on their own.
 
 1. An operator (VoiceEngineer or CEO) runs, in two terminals:
    ```bash
-   . .venv/bin/activate && PYTHONPATH=src python -m papervoice.boardroom connect --room papervoice-boardroom
+   . .venv/bin/activate && PYTHONPATH=src python -m papervoice.boardroom start
    . .venv/bin/activate && scripts/join-link your-name papervoice-boardroom
    ```
+   Use `start`, not `connect --room` — `start` registers for automatic dispatch and
+   only creates the room when you actually join, so a link handed to the board stays
+   valid for its full TTL (48h by default) no matter when they click it. `connect --room`
+   pre-creates the room and dies once LiveKit's ~5-minute empty-room timeout fires with
+   nobody in it — fine for an immediate hands-on smoke test, wrong for a link left for
+   someone to test later (see PER-79).
 2. Open the printed `meet.livekit.io` URL, allow microphone access. You'll hear the CEO persona
    open the standup, hand off to Eng, then Ops, then close — each in a distinct ElevenLabs voice.
 3. **Barge-in test:** while an agent is mid-sentence, start talking. It should stop within roughly

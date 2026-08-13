@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """Print a browser join link for a Papervoice test call.
 
-Usage: scripts/join-link [participant-name] [room]
+Usage: scripts/join-link [participant-name] [room] [ttl-hours]
 
-Creates the room if needed, mints a 2-hour access token, and prints a
-LiveKit Meet URL the board member can open in any browser (mic permission required).
+Mints a long-TTL access token (48h default; pass a third arg to override) and
+prints a LiveKit Meet URL the board member can open in any browser (mic
+permission required). Deliberately does NOT create the room here — the
+boardroom worker must be running in automatic-dispatch mode
+(`papervoice.boardroom start`, not the one-shot `connect --room`), so the
+room is created lazily by the human's own join. Pre-creating it would start
+LiveKit's empty-room timeout (~5 min) ticking immediately, and the dispatched
+job would die waiting for a participant long before a board member with a
+link that's "valid for 24h+" actually clicks it (see PER-79).
 """
 
-import asyncio
 import os
 import sys
 import urllib.parse
@@ -21,17 +27,21 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from papervoice.vendors import livekit as lk
 
+DEFAULT_TTL_HOURS = 48  # keep >= 24h for any link handed to the board — see PER-79
+
 
 def main() -> int:
     identity = sys.argv[1] if len(sys.argv) > 1 else "board-member"
     room = sys.argv[2] if len(sys.argv) > 2 else lk.DEFAULT_ROOM
-    asyncio.run(lk.create_room(room))
-    token = lk.mint_join_token(identity, room)
+    ttl_hours = int(sys.argv[3]) if len(sys.argv) > 3 else DEFAULT_TTL_HOURS
+    token = lk.mint_join_token(identity, room, ttl_hours=ttl_hours)
     url = "https://meet.livekit.io/custom?" + urllib.parse.urlencode(
         {"liveKitUrl": os.environ["LIVEKIT_URL"], "token": token}
     )
     print(f"Room:  {room}")
-    print(f"Join as {identity!r} (valid 2h):\n{url}")
+    print(f"Join as {identity!r} (valid {ttl_hours}h):\n{url}")
+    print("Requires the boardroom worker running in `start` mode (automatic dispatch),")
+    print("not `connect --room` — otherwise nothing will pick up the join.")
     return 0
 
 

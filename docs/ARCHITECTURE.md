@@ -158,3 +158,22 @@ moderator floor control, human tracks preempt):
     ever driving it — a silent "muted" agent nobody could ever grant the floor to. `_connect_agent`
     now disconnects that room connection before re-raising, so a failed join cleans up after itself
     instead of leaving a zombie participant for the rest of the call.
+11. **Worker dispatch mode matters for how long a join link stays usable (PER-79).** The one-shot
+    `python -m papervoice.boardroom connect --room X` command (used by M1/smoke-test docs for an
+    immediate, hands-on test) pre-creates the room and dispatches a single job the moment the
+    worker starts. If nobody joins within LiveKit's empty-room timeout (observed ~5 min), that
+    room is torn down server-side, the job's `ctx.wait_for_participant()` raises
+    `RuntimeError: room disconnected while waiting for participant`, and — because it was a
+    one-shot dispatch — nothing ever retries, even though the worker process is still running and
+    even though a join token minted with a 24h+ TTL is still cryptographically valid. A board
+    member handed that link hours later hits a dead room. Root cause confirmed live: an agent's
+    own room presence does not count against LiveKit's empty-room timeout (by design, so agent
+    workers can't keep rooms alive forever), so `ctx.connect()` inside `entrypoint()` does not
+    prevent the countdown. Fix: run the boardroom worker with `python -m papervoice.boardroom
+    start` instead — this registers for LiveKit's automatic dispatch (no room pre-creation), so
+    the room is created lazily by the human's own join, dispatching a fresh job at that moment
+    regardless of how much time has passed since the link was minted. `scripts/join-link` no
+    longer pre-creates the room for this reason. Confirmed live: a `start`-mode worker survives an
+    empty room's job dying (still registered and dispatchable afterward) and a freshly-created
+    test room gets dispatched a job within ~1s of `create_room`, with the job correctly idling on
+    `wait_for_participant()` — no agent turn (LLM/TTS spend) until a human is actually present.

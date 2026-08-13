@@ -13,9 +13,18 @@ it, marks that agent unavailable, and keeps the agenda moving — the call
 does not go dead.
 
 Run (from repo root, with .venv active):
-    PYTHONPATH=src python -m papervoice.boardroom connect --room papervoice-boardroom
+    PYTHONPATH=src python -m papervoice.boardroom start
 Then have humans join with:
     scripts/join-link your-name papervoice-boardroom
+
+Use `start` (registers for automatic dispatch on any new room), not the
+one-shot `connect --room X` (dev/smoke-test convenience command): `connect`
+pre-creates the room and dispatches a single job immediately, so if nobody
+joins within LiveKit's empty-room timeout (~5 min) that job dies and no
+retry happens even with a long-TTL join link still in hand. `start` leaves
+the room uncreated until a human's own join creates it, so a link handed to
+the board stays good for its full TTL regardless of when they click it. See
+PER-79.
 """
 
 import asyncio
