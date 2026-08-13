@@ -361,6 +361,21 @@ class ModeratorTranscriptTest(unittest.TestCase):
         self.assertIn("line 29", text)
         self.assertNotIn("line 24", text)
 
+    def test_full_transcript_text_includes_every_line(self):
+        moderator = Moderator([], {})
+        for i in range(30):
+            moderator.record_transcript("human", f"line {i}")
+
+        text = moderator.full_transcript_text()
+
+        self.assertEqual(len(text.splitlines()), 30)
+        self.assertIn("line 0", text)
+        self.assertIn("line 29", text)
+
+    def test_full_transcript_text_empty_when_nothing_recorded(self):
+        moderator = Moderator([], {})
+        self.assertEqual(moderator.full_transcript_text(), "")
+
 
 class ModeratorFiledIssuesTest(unittest.TestCase):
     """Milestone 3: issues filed live during the call, for the post-call summary."""

@@ -169,9 +169,9 @@ def _build_summary(moderator: Moderator, completed: list[str]) -> str:
         lines.append("Follow-up issues filed during the call:")
         lines.extend(f"- {identifier}: {title}" for identifier, title in moderator.filed_issues)
     lines.append("")
-    lines.append("Transcript tail:")
+    lines.append("Full transcript:")
     lines.append("```")
-    lines.append(moderator.recent_transcript_text(max_lines=40) or "(no transcript recorded)")
+    lines.append(moderator.full_transcript_text() or "(no transcript recorded)")
     lines.append("```")
     return "\n".join(lines)
 

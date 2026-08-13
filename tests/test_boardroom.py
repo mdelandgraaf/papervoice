@@ -215,6 +215,16 @@ class BuildSummaryTest(unittest.TestCase):
         self.assertIn("agent-ops", summary)
         self.assertIn("Dropped mid-call", summary)
 
+    def test_transcript_is_not_truncated_to_a_tail(self):
+        moderator = Moderator(agenda=[], speakers={})
+        for i in range(50):
+            moderator.record_transcript("agent-ceo", f"line {i}")
+
+        summary = _build_summary(moderator, ["agent-ceo"])
+
+        self.assertIn("line 0", summary)
+        self.assertIn("line 49", summary)
+
 
 class FileIssueToolTest(unittest.IsolatedAsyncioTestCase):
     async def test_success_records_on_moderator_and_returns_identifier(self):

@@ -126,6 +126,12 @@ class Moderator:
         lines = self.transcript[-max_lines:]
         return "\n".join(f"{who}: {said}" for who, said in lines)
 
+    def full_transcript_text(self) -> str:
+        """Every recorded line, unlike recent_transcript_text()'s rolling window — used for
+        the post-call summary so a board member can read the whole meeting, not just a tail
+        (see PER-76 board feedback: "is there a way to view the transcription?")."""
+        return "\n".join(f"{who}: {said}" for who, said in self.transcript)
+
     async def on_human_speech_started(self) -> None:
         """Barge-in: a human started talking. Revoke the floor and cancel agent TTS immediately."""
         if self.current_speaker is None:

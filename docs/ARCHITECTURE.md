@@ -219,8 +219,12 @@ moderator floor control, human tracks preempt):
    "right" issue to post every standup's summary to yet (no dedicated standup-log issue exists), so
    `run_standup()` only posts if a target issue id is set; unset, the call still runs and can still
    file issues live, it just doesn't post a summary anywhere. `boardroom._build_summary()` is a pure
-   function (identities that completed, anyone dropped, issues filed, a transcript tail) — unit
-   tested without any live Paperclip call.
+   function (identities that completed, anyone dropped, issues filed, the full transcript) — unit
+   tested without any live Paperclip call. The transcript in the comment is the **full** call, not a
+   tail (board asked for this on PER-76, 2026-08-13) — `Moderator.transcript` is never persisted
+   anywhere else, so the summary comment is the only place to read it back after the call ends. A
+   very long meeting means a very long comment; there's no dedicated transcript document/store yet,
+   so this trades comment length for not losing history — revisit if that becomes a real problem.
 6. **Not yet built:** the moderator/agents don't yet read the *current issue thread* mid-call (e.g.
    "what's the status of PER-80 right now?") beyond the call-start briefing — `context_briefing()` is
    a snapshot, not a live query tool. Left for a follow-up if a real standup surfaces the need; adding
