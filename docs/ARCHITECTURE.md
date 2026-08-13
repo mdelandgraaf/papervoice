@@ -143,9 +143,18 @@ moderator floor control, human tracks preempt):
    now detects that the turn it just ran was the one a barge-in cut off and routes to
    `_respond_to_barge_in`, which waits (`barge_in_reply_timeout_seconds`, default 8s) for the
    transcriber's next finished human utterance and grants the same agent the floor again to answer
-   it — looping if that answer gets barged in on too — before the scripted agenda resumes. If no
-   finished utterance arrives in time (human interrupted but didn't actually ask anything, or
-   trailed off), it gives up quietly and resumes the script rather than hanging the call.
+   it — looping if that answer gets barged in on too. If no finished utterance arrives in time
+   (human interrupted but didn't actually ask anything, or trailed off), it gives up quietly.
+   **Answering isn't finishing.** A live PER-76 board test call found the next gap: answering the
+   human's question is a separate turn from the scripted update that got cut off, and the agenda
+   used to move straight to the next agenda item right after the answer — silently dropping
+   whatever the interrupted agent hadn't said yet ("I think Eng wasn't finished with his update").
+   `_run_turn` now grants the same agent one further turn after the barge-in answer, re-sending the
+   original prompt with an explicit "you were interrupted, finish it" instruction, before moving on
+   to the next agenda item. This depends on the moderator's rolling transcript including the
+   agent's own prior turns (not just human ones) so the continuation knows what it already said —
+   `SpeakerHandle.speak()` now returns the spoken text (boardroom.py's `_spoken_text()` reads it off
+   the finished `SpeechHandle`'s chat items) and `Moderator._speak()` records it.
 9. **The call doesn't hang up the instant the closing line finishes.** Board feedback on the same
    PER-75 test call: after the scripted agenda ended, every session tore down immediately —
    "suddenly they all left the chat" — with no chance for a human to ask a final question.

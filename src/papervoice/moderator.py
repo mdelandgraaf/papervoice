@@ -31,15 +31,18 @@ class SpeakerHandle:
     def __init__(
         self,
         identity: str,
-        speak: Callable[[str], Awaitable[None]],
+        speak: Callable[[str], Awaitable[str | None]],
         interrupt: Callable[[], Awaitable[None]],
     ) -> None:
         self.identity = identity
         self._speak = speak
         self._interrupt = interrupt
 
-    async def speak(self, prompt: str) -> None:
-        await self._speak(prompt)
+    async def speak(self, prompt: str) -> str | None:
+        """Speak `prompt` and return the text actually said, if known (used to
+        feed the moderator's rolling transcript). None if the caller doesn't
+        track it (e.g. plain test doubles)."""
+        return await self._speak(prompt)
 
     async def interrupt(self) -> None:
         await self._interrupt()
@@ -60,6 +63,13 @@ class Moderator:
     detects a turn a human just cut off and routes to `_respond_to_barge_in`,
     which grants the floor back to that same agent to actually answer before
     the scripted agenda resumes (see PER-75 board feedback).
+    Answering isn't finishing: answering the human's question is a different
+    turn from the scripted update that got cut off, and the agenda used to
+    move straight to the next agenda item afterward — silently dropping
+    whatever the interrupted agent hadn't said yet (confirmed live on a PER-76
+    board test call: "I think Eng wasn't finished with his update"). After
+    the barge-in answer, `_run_turn` now grants the same agent one more turn
+    to finish the original prompt before moving on.
     The call doesn't hang up the instant the script ends, either: once the
     agenda is exhausted, `run_agenda` holds the floor open for
     `open_floor_seconds` so a human who wants to speak up after the closing
@@ -161,32 +171,59 @@ class Moderator:
             logger.warning("skipping %s: already dropped this call", item.identity)
             self.record_transcript("moderator", f"{item.identity} is unavailable, moving on")
             return False
-        speaker = self._speakers.get(item.identity)
-        if speaker is None:
+        if item.identity not in self._speakers:
             logger.warning("skipping %s: never joined", item.identity)
             self.record_transcript("moderator", f"{item.identity} never joined, moving on")
             return False
-        self.current_speaker = item.identity
-        try:
-            await asyncio.wait_for(speaker.speak(item.prompt), timeout=self._turn_timeout_seconds)
-        except TimeoutError:
-            logger.error("agent %s timed out mid-turn (>%.0fs), dropping", item.identity, self._turn_timeout_seconds)
-            self.dropped.add(item.identity)
-            self.record_transcript("moderator", f"{item.identity} timed out, moving on")
+
+        if not await self._speak(item.identity, item.prompt):
             return False
-        except Exception:
-            logger.exception("agent %s dropped mid-turn", item.identity)
-            self.dropped.add(item.identity)
-            self.record_transcript("moderator", f"{item.identity} dropped, moving on")
-            return False
-        finally:
-            if self.current_speaker == item.identity:
-                self.current_speaker = None
+
         if self._awaiting_reply_to == item.identity:
             # This turn is the one a human just barged in on: stopping the
             # TTS isn't enough on its own — the human is left talking to a
             # wall unless someone actually answers before the script resumes.
             await self._respond_to_barge_in(item.identity)
+            if item.identity not in self.dropped and item.identity in self._speakers:
+                # Answering the human's question is a different turn from the
+                # scripted update that got cut off — it doesn't get the rest
+                # of that update said. Give the same agent one more turn to
+                # finish it before the agenda moves on (see PER-76 board
+                # feedback: "I think Eng wasn't finished with his update").
+                await self._speak(
+                    item.identity,
+                    f"{item.prompt}\n\nYou were interrupted before finishing this — pick up"
+                    " where you left off and finish it now. Don't repeat anything you already"
+                    " said.",
+                )
+        return True
+
+    async def _speak(self, identity: str, prompt: str) -> bool:
+        """Grant `identity` the floor for one utterance, recording what it
+        said (if the SpeakerHandle reports it) to the shared transcript.
+        Returns False only when the turn had to be abandoned outright
+        (timeout or a dropped session) — an ordinary barge-in still returns
+        True, since the moderator handles that as a separate concern.
+        """
+        speaker = self._speakers[identity]
+        self.current_speaker = identity
+        try:
+            spoken = await asyncio.wait_for(speaker.speak(prompt), timeout=self._turn_timeout_seconds)
+        except TimeoutError:
+            logger.error("agent %s timed out mid-turn (>%.0fs), dropping", identity, self._turn_timeout_seconds)
+            self.dropped.add(identity)
+            self.record_transcript("moderator", f"{identity} timed out, moving on")
+            return False
+        except Exception:
+            logger.exception("agent %s dropped mid-turn", identity)
+            self.dropped.add(identity)
+            self.record_transcript("moderator", f"{identity} dropped, moving on")
+            return False
+        finally:
+            if self.current_speaker == identity:
+                self.current_speaker = None
+        if spoken:
+            self.record_transcript(identity, spoken)
         return True
 
     async def _respond_to_barge_in(
@@ -196,8 +233,9 @@ class Moderator:
         agenda just ended and the floor is being held open for a final
         question — see `_hold_open_floor`). Wait briefly for the human's
         finished utterance and have that same agent answer it — looping if
-        the human interrupts the answer too — before the agenda resumes its
-        scripted line (or the call ends).
+        the human interrupts the answer too — before returning control to
+        the caller (which, mid-agenda, gives the agent a further turn to
+        finish whatever it was originally saying — see `_run_turn`).
         """
         timeout = reply_timeout_seconds if reply_timeout_seconds is not None else self._barge_in_reply_timeout_seconds
         while True:
@@ -214,31 +252,14 @@ class Moderator:
             question = self._pending_reply_text
             self._awaiting_reply_to = None
             self._human_reply_ready.clear()
-            if responder_identity in self.dropped:
-                return
-            speaker = self._speakers.get(responder_identity)
-            if speaker is None:
+            if responder_identity in self.dropped or responder_identity not in self._speakers:
                 return
 
-            self.current_speaker = responder_identity
-            try:
-                await asyncio.wait_for(
-                    speaker.speak(f'Someone just asked: "{question}" Answer them directly and briefly, then continue.'),
-                    timeout=self._turn_timeout_seconds,
-                )
-            except TimeoutError:
-                logger.error("agent %s timed out answering a human question, dropping", responder_identity)
-                self.dropped.add(responder_identity)
-                self.record_transcript("moderator", f"{responder_identity} timed out, moving on")
+            if not await self._speak(
+                responder_identity,
+                f'Someone just asked: "{question}" Answer them directly and briefly, then continue.',
+            ):
                 return
-            except Exception:
-                logger.exception("agent %s dropped answering a human question", responder_identity)
-                self.dropped.add(responder_identity)
-                self.record_transcript("moderator", f"{responder_identity} dropped, moving on")
-                return
-            finally:
-                if self.current_speaker == responder_identity:
-                    self.current_speaker = None
 
             if self._awaiting_reply_to != responder_identity:
                 return  # answered cleanly, no further barge-in on the answer itself

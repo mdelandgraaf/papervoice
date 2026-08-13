@@ -60,6 +60,29 @@ def make_interruptible_speaker(identity, log):
     return SpeakerHandle(identity, speak, interrupt)
 
 
+def make_interruptible_texting_speaker(identity, log):
+    """Like make_interruptible_speaker, but speak() also reports back what it
+    'said' (as a real SpeakerHandle does via boardroom.py's _spoken_text) —
+    exercises Moderator._speak recording the agent's own turns, including a
+    barge-in continuation, into the shared transcript."""
+    unblocked = asyncio.Event()
+    calls = 0
+
+    async def speak(prompt):
+        nonlocal calls
+        calls += 1
+        log.append((identity, prompt))
+        if calls == 1:
+            await unblocked.wait()
+            unblocked.clear()
+        return f"{identity}-said-call-{calls}"
+
+    async def interrupt():
+        unblocked.set()
+
+    return SpeakerHandle(identity, speak, interrupt)
+
+
 class ModeratorAgendaTest(unittest.IsolatedAsyncioTestCase):
     async def test_runs_agenda_in_order(self):
         log = []
@@ -137,6 +160,44 @@ class ModeratorBargeInResponseTest(unittest.IsolatedAsyncioTestCase):
         self.assertLess(log.index(("ceo", answer_prompt)), log.index(("eng", "update")))
         self.assertIsNone(moderator.current_speaker)
 
+    async def test_interrupted_agent_gets_a_further_turn_to_finish_the_original_update(self):
+        """PER-76 board feedback from a live test call: answering the human's
+        question is a different turn from the scripted update that got cut
+        off — the agenda used to move straight to the next speaker
+        afterward, silently dropping whatever the interrupted agent hadn't
+        said yet ("I think Eng wasn't finished with his update")."""
+        log = []
+        agenda = [AgendaItem("ceo", "open"), AgendaItem("eng", "update")]
+        speakers = {"ceo": make_interruptible_texting_speaker("ceo", log), "eng": make_speaker("eng", log)}
+        moderator = Moderator(agenda, speakers)
+
+        task = asyncio.ensure_future(moderator.run_agenda())
+        await asyncio.sleep(0)  # let ceo's "open" turn start and block on speak()
+        self.assertEqual(moderator.current_speaker, "ceo")
+
+        await moderator.on_human_speech_started()  # barge-in: interrupts ceo, revokes the floor
+        moderator.record_transcript("board-member", "what's our runway?")
+
+        completed = await asyncio.wait_for(task, timeout=1)
+
+        self.assertEqual(completed, ["ceo", "eng"])
+        ceo_prompts = [prompt for who, prompt in log if who == "ceo"]
+        # original "open" turn, the barge-in answer, and one more turn to finish "open"
+        self.assertEqual(len(ceo_prompts), 3)
+        self.assertEqual(ceo_prompts[0], "open")
+        self.assertIn("what's our runway?", ceo_prompts[1])
+        self.assertTrue(ceo_prompts[2].startswith("open\n\n"))
+        self.assertIn("interrupted before finishing", ceo_prompts[2])
+        # order: answer, then resume, then eng's own turn — never resumed after eng starts
+        resume_index = next(i for i, (who, p) in enumerate(log) if who == "ceo" and p == ceo_prompts[2])
+        self.assertLess(log.index(("ceo", ceo_prompts[1])), resume_index)
+        self.assertLess(resume_index, log.index(("eng", "update")))
+        self.assertIsNone(moderator.current_speaker)
+        # the resumed turn's spoken text lands in the shared transcript too,
+        # so a further barge-in continuation (or the post-call summary) has
+        # real content to work from, not just the human's side of it.
+        self.assertIn(("ceo", "ceo-said-call-3"), moderator.transcript)
+
     async def test_no_finished_utterance_within_timeout_resumes_agenda_without_hanging(self):
         agenda = [AgendaItem("ceo", "open"), AgendaItem("eng", "update")]
         log = []
@@ -154,8 +215,8 @@ class ModeratorBargeInResponseTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("ceo", moderator.dropped)
 
     async def test_agent_track_speech_never_counts_as_the_barge_in_question(self):
-        """record_transcript() is also how an agent's own speech could be logged
-        (moderator.py doesn't do this yet, but the guard must hold regardless) —
+        """record_transcript() is also how an agent's own speech gets logged
+        (via Moderator._speak, whenever a SpeakerHandle reports what it said) —
         a speaker identity, never a human one, must not resolve the pending reply."""
         agenda = [AgendaItem("ceo", "open")]
         log = []
@@ -170,8 +231,16 @@ class ModeratorBargeInResponseTest(unittest.IsolatedAsyncioTestCase):
         completed = await asyncio.wait_for(task, timeout=1)
 
         self.assertEqual(completed, ["ceo"])
-        answer_calls = [entry for entry in log if entry[0] == "ceo" and entry[1] != "open"]
+        # eng's transcript entry must never be mistaken for the human's finished
+        # barge-in utterance — no "Someone just asked" answer turn should fire.
+        answer_calls = [entry for entry in log if entry[0] == "ceo" and entry[1].startswith("Someone just asked")]
         self.assertEqual(answer_calls, [])
+        # the barge-in still cut ceo off mid-"open", so it still gets a further
+        # turn to finish that original content once the (unanswered) Q&A window
+        # times out — this is the resume behavior, not a barge-in answer.
+        resume_calls = [entry for entry in log if entry[0] == "ceo" and entry[1] != "open"]
+        self.assertEqual(len(resume_calls), 1)
+        self.assertIn("interrupted before finishing", resume_calls[0][1])
 
 
 class ModeratorOpenFloorTest(unittest.IsolatedAsyncioTestCase):

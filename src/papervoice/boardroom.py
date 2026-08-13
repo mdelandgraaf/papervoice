@@ -36,7 +36,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, WorkerOptions, cli, function_tool
+from livekit.agents import Agent, AgentSession, WorkerOptions, cli, function_tool, llm
 from livekit.agents.voice import room_io
 from livekit.agents.voice.events import UserInputTranscribedEvent, UserStateChangedEvent
 from livekit.plugins import anthropic, silero
@@ -289,12 +289,28 @@ async def _connect_transcriber(room_name: str, moderator: Moderator) -> tuple[Ag
     return session, room
 
 
+def _spoken_text(handle) -> str | None:
+    """Extract what an agent actually said from a finished SpeechHandle, so the
+    moderator's rolling transcript covers agent turns too, not just human
+    ones. Needed so a barge-in continuation (`Moderator._run_turn`) knows
+    what it already said and doesn't repeat itself, and so the post-call
+    summary's transcript tail isn't human-only (see PER-76 board feedback).
+    """
+    texts = [
+        item.text_content
+        for item in handle.chat_items
+        if isinstance(item, llm.ChatMessage) and item.role == "assistant" and item.text_content
+    ]
+    return "\n".join(texts) if texts else None
+
+
 def _speaker_handle(identity: str, session: AgentSession, moderator: Moderator) -> SpeakerHandle:
-    async def speak(prompt: str) -> None:
+    async def speak(prompt: str) -> str | None:
         context = moderator.recent_transcript_text()
         instructions = prompt if not context else f"Recent conversation:\n{context}\n\n{prompt}"
         handle = session.generate_reply(instructions=instructions, allow_interruptions=False)
         await handle.wait_for_playout()
+        return _spoken_text(handle)
 
     async def interrupt() -> None:
         # force=True: agent turns run with allow_interruptions=False (they
