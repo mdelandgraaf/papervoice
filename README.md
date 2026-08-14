@@ -16,8 +16,8 @@ Origin: issue **PER-71** — "Give the paperclip agents voice capabilities".
 
 - [x] Investigation & architecture (see `docs/ARCHITECTURE.md`)
 - [x] Milestone 1 — single agent voice call (one ElevenLabs agent + one human, phone or browser)
-- [x] Milestone 2 — multi-agent conference with moderator turn-taking (code + automated smoke test done; awaiting a board member to join a live call — see below)
-- [~] Milestone 3 — Paperclip context & actions (standup reads real issue state, files follow-ups, posts a summary). Code + unit tests done; `scripts/healthcheck`'s Paperclip checks pass live using a short-lived-token fallback (a VoiceEngineer run's own ~1h JWT, refreshed by hand into `.env` — see `docs/ARCHITECTURE.md` M3 notes point 7) while the durable board-minted `PAPERCLIP_API_KEY` is still pending on PER-71. Awaiting a board member to join a live test call — see PER-76.
+- [x] Milestone 2 — multi-agent conference with moderator turn-taking, including human barge-in and agent-to-agent reaction turns. Verified in a live board call and accepted under PER-75.
+- [x] Milestone 3 — Paperclip context & actions (standup reads real issue state, files follow-ups, and posts a full transcript summary). Verified in a live board call and accepted under PER-76. The worker refreshes its short-lived Paperclip token on every wake and persists failed summary posts for retry; see `docs/ARCHITECTURE.md` and `docs/SMOKE_TEST.md`.
 - [x] Milestone 4 — durability: health checks, pinned versions, update smoke test
 
 ## Repository layout
