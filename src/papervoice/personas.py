@@ -12,8 +12,17 @@ default follow-up issues it files to that assignee. Company org as of
 builder). There is no dedicated "Ops" agent yet, so that persona is left
 unbound and falls back to a company-wide snapshot (see boardroom.py). Re-verify
 these ids with scripts/healthcheck if agents are renamed, replaced, or hired.
+
+PER-89: dynamic roster via `load_roster_from_paperclip()`. Reads company agents
+whose `metadata.papervoice.enabled` is True, builds personas from their real
+Paperclip profile (name, title, capabilities), and falls back to BOARDROOM_ROSTER
+when the API is unreachable or no agents are enabled. Enabling an agent for
+papervoice requires writing `metadata.papervoice: {enabled: true, voice_id: "...",
+livekit_identity: "...", display_name: "...", roster_order: N}` on the agent via
+PATCH /api/agents/:id (requires agents:configure on that agent).
 """
 
+import logging
 from dataclasses import dataclass
 
 BOARDROOM_ROOM = "papervoice-boardroom"
@@ -71,3 +80,72 @@ BOARDROOM_ROSTER = (
 
 def persona_by_identity(identity: str) -> Persona | None:
     return next((p for p in BOARDROOM_ROSTER if p.identity == identity), None)
+
+
+_logger = logging.getLogger(__name__)
+
+
+def _build_instructions(config: "PapervoiceAgentConfig", is_opener: bool) -> str:
+    """Construct persona instructions from a Paperclip agent's live profile fields."""
+    intro = f"You are {config.name}"
+    if config.title:
+        intro += f", {config.title}"
+    intro += "."
+    body_parts: list[str] = []
+    if config.capabilities:
+        body_parts.append(config.capabilities)
+    if is_opener:
+        body_parts.append("You open the standup, keep it on time, and close it.")
+    else:
+        body_parts.append("Give your status update: what shipped, what's in flight, and any blockers.")
+    body = " ".join(body_parts)
+    return f"{intro} {body}" + _COMMON_STYLE
+
+
+def build_persona_from_agent(config: "PapervoiceAgentConfig", is_opener: bool) -> Persona:
+    """Build a Persona from a live Paperclip agent's voice config and profile.
+
+    `is_opener` marks the agent as the standup opener/closer — they greet the
+    room and run the closing sweep instead of giving a status update.
+    """
+    return Persona(
+        identity=config.livekit_identity,
+        display_name=config.display_name,
+        voice_id=config.voice_id,
+        instructions=_build_instructions(config, is_opener=is_opener),
+        paperclip_agent_id=config.agent_id,
+    )
+
+
+def load_roster_from_paperclip() -> tuple[Persona, ...]:
+    """Build the boardroom roster from Paperclip agents with metadata.papervoice.enabled.
+
+    Agents are ordered by their metadata.papervoice.roster_order value; the first
+    agent in that order becomes the opener/closer. Falls back to the static
+    BOARDROOM_ROSTER if the Paperclip API is unreachable or no agents are enabled —
+    the call must keep working even if Paperclip is down at call start.
+
+    Enable an agent for papervoice by PATCHing its metadata (requires agents:configure):
+      {"metadata": {"papervoice": {"enabled": true, "voice_id": "...",
+                                   "livekit_identity": "agent-ceo",
+                                   "display_name": "CEO", "roster_order": 0}}}
+    """
+    from papervoice.vendors import paperclip as pc_vendor  # deferred to avoid top-level env check
+
+    try:
+        configs = pc_vendor.get_voice_enabled_agents()
+    except Exception:
+        _logger.warning("failed to load papervoice roster from Paperclip API; using static fallback")
+        return BOARDROOM_ROSTER
+    if not configs:
+        _logger.warning("no papervoice-enabled agents found in Paperclip; using static fallback")
+        return BOARDROOM_ROSTER
+    return tuple(build_persona_from_agent(cfg, is_opener=(i == 0)) for i, cfg in enumerate(configs))
+
+
+# Forward-reference type alias (resolved at call time, not import time — avoids a hard
+# dependency on vendors at module-load for the type hints above)
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from papervoice.vendors.paperclip import PapervoiceAgentConfig

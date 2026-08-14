@@ -42,7 +42,7 @@ from livekit.agents.voice.events import UserInputTranscribedEvent, UserStateChan
 from livekit.plugins import anthropic, silero
 
 from papervoice.moderator import AgendaItem, Moderator, SpeakerHandle
-from papervoice.personas import BOARDROOM_ROOM, BOARDROOM_ROSTER, Persona
+from papervoice.personas import BOARDROOM_ROOM, Persona, load_roster_from_paperclip
 from papervoice.vendors import elevenlabs as el_vendor
 from papervoice.vendors import livekit as lk_vendor
 from papervoice.vendors import paperclip as pc_vendor
@@ -412,16 +412,27 @@ def _speaker_handle(identity: str, session: AgentSession, moderator: Moderator) 
     return SpeakerHandle(identity, speak, interrupt)
 
 
-async def run_standup(room_name: str = BOARDROOM_ROOM, summary_issue_id: str | None = None) -> list[str]:
+async def run_standup(
+    room_name: str = BOARDROOM_ROOM,
+    summary_issue_id: str | None = None,
+    roster: tuple[Persona, ...] | None = None,
+) -> list[str]:
     """Connect every persona + the shared transcriber, then run the agenda. Returns completed identities.
 
     Milestone 3: loads each persona's live Paperclip context before building the agenda,
     and — if `summary_issue_id` is given — posts a post-call summary comment to it,
     including any follow-up issues filed live via the file_followup_issue tool.
+
+    PER-89: `roster` is built dynamically from Paperclip agents with
+    metadata.papervoice.enabled when not supplied (calls load_roster_from_paperclip(),
+    which falls back to the static BOARDROOM_ROSTER if the API is unreachable).
+    Pass an explicit roster in tests or when the caller has already loaded it.
     """
-    context, paperclip_offline = await _load_context(BOARDROOM_ROSTER)
+    if roster is None:
+        roster = await asyncio.to_thread(load_roster_from_paperclip)
+    context, paperclip_offline = await _load_context(roster)
     moderator = Moderator(
-        agenda=_standup_agenda(BOARDROOM_ROSTER, context, paperclip_offline=paperclip_offline), speakers={}
+        agenda=_standup_agenda(roster, context, paperclip_offline=paperclip_offline), speakers={}
     )
     sessions: list[AgentSession] = []
     rooms: list[rtc.Room] = []
@@ -431,7 +442,7 @@ async def run_standup(room_name: str = BOARDROOM_ROOM, summary_issue_id: str | N
         sessions.append(transcriber_session)
         rooms.append(transcriber_room)
 
-        for persona in BOARDROOM_ROSTER:
+        for persona in roster:
             try:
                 session, room = await _connect_agent(room_name, persona, moderator)
             except Exception:

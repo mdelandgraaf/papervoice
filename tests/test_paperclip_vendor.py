@@ -195,6 +195,80 @@ class PaperclipAdapterTest(unittest.TestCase):
         with mock.patch("httpx.get", return_value=fake_resp):
             self.assertEqual(pc.list_agent_ids(), {"a", "b"})
 
+    # --- get_voice_enabled_agents (PER-89) ---
+
+    def _fake_agents_resp(self, agents: list[dict]):
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = mock.Mock()
+        fake_resp.json = mock.Mock(return_value=agents)
+        return fake_resp
+
+    def test_get_voice_enabled_agents_returns_enabled_only(self):
+        self._set_env()
+        agents = [
+            {"id": "a1", "name": "CEO", "role": "ceo", "title": None, "capabilities": None,
+             "metadata": {"papervoice": {"enabled": True, "voice_id": "v1", "livekit_identity": "agent-ceo",
+                                         "display_name": "CEO", "roster_order": 0}}},
+            {"id": "a2", "name": "Bot", "role": "general", "title": None, "capabilities": None,
+             "metadata": {"papervoice": {"enabled": False}}},
+            {"id": "a3", "name": "Eng", "role": "engineer", "title": "Lead Eng", "capabilities": "Builds stuff",
+             "metadata": {"papervoice": {"enabled": True, "voice_id": "v2", "livekit_identity": "agent-eng",
+                                         "display_name": "Eng", "roster_order": 1}}},
+        ]
+        with mock.patch("httpx.get", return_value=self._fake_agents_resp(agents)):
+            result = pc.get_voice_enabled_agents()
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0].agent_id, "a1")
+        self.assertEqual(result[1].agent_id, "a3")
+
+    def test_get_voice_enabled_agents_sorted_by_roster_order(self):
+        self._set_env()
+        agents = [
+            {"id": "a2", "name": "Eng", "role": "engineer", "title": None, "capabilities": None,
+             "metadata": {"papervoice": {"enabled": True, "voice_id": "v2", "roster_order": 1}}},
+            {"id": "a1", "name": "CEO", "role": "ceo", "title": None, "capabilities": None,
+             "metadata": {"papervoice": {"enabled": True, "voice_id": "v1", "roster_order": 0}}},
+        ]
+        with mock.patch("httpx.get", return_value=self._fake_agents_resp(agents)):
+            result = pc.get_voice_enabled_agents()
+        self.assertEqual(result[0].agent_id, "a1")
+        self.assertEqual(result[1].agent_id, "a2")
+
+    def test_get_voice_enabled_agents_skips_missing_voice_id(self):
+        self._set_env()
+        agents = [
+            {"id": "a1", "name": "CEO", "role": "ceo", "title": None, "capabilities": None,
+             "metadata": {"papervoice": {"enabled": True}}},  # no voice_id
+        ]
+        with mock.patch("httpx.get", return_value=self._fake_agents_resp(agents)):
+            result = pc.get_voice_enabled_agents()
+        self.assertEqual(result, [])
+
+    def test_get_voice_enabled_agents_derives_defaults_when_optional_fields_missing(self):
+        self._set_env()
+        agents = [
+            {"id": "a1", "name": "My Agent", "role": "general", "title": "Title A", "capabilities": "Does stuff",
+             "metadata": {"papervoice": {"enabled": True, "voice_id": "v1", "roster_order": 0}}},
+        ]
+        with mock.patch("httpx.get", return_value=self._fake_agents_resp(agents)):
+            result = pc.get_voice_enabled_agents()
+        self.assertEqual(len(result), 1)
+        cfg = result[0]
+        self.assertEqual(cfg.livekit_identity, "agent-my-agent")
+        self.assertEqual(cfg.display_name, "My Agent")
+        self.assertEqual(cfg.title, "Title A")
+        self.assertEqual(cfg.capabilities, "Does stuff")
+
+    def test_get_voice_enabled_agents_handles_null_metadata(self):
+        self._set_env()
+        agents = [
+            {"id": "a1", "name": "Headless", "role": "general", "title": None, "capabilities": None,
+             "metadata": None},
+        ]
+        with mock.patch("httpx.get", return_value=self._fake_agents_resp(agents)):
+            result = pc.get_voice_enabled_agents()
+        self.assertEqual(result, [])
+
     def test_is_auth_error_true_for_401_and_403(self):
         self.assertTrue(pc.is_auth_error(_status_error(401)))
         self.assertTrue(pc.is_auth_error(_status_error(403)))

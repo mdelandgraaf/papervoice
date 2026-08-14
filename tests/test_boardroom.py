@@ -29,7 +29,7 @@ from papervoice.boardroom import (
     _standup_agenda,
 )
 from papervoice.moderator import Moderator
-from papervoice.personas import BOARDROOM_ROSTER
+from papervoice.personas import BOARDROOM_ROSTER, build_persona_from_agent, load_roster_from_paperclip
 from papervoice.vendors import paperclip as pc_vendor
 
 
@@ -355,6 +355,84 @@ class AskBoardToolTest(unittest.IsolatedAsyncioTestCase):
             result = await tool(question="Should we ship the beta today?")
 
         self.assertIn("No answer", result)
+
+
+class DynamicRosterTest(unittest.TestCase):
+    """PER-89: dynamic boardroom roster built from Paperclip agents with metadata.papervoice.enabled."""
+
+    def _make_config(self, **kwargs):
+        defaults = dict(
+            agent_id="agent-1",
+            name="TestAgent",
+            role="engineer",
+            title="Test Engineer",
+            capabilities="Builds stuff.",
+            voice_id="voice-abc",
+            livekit_identity="agent-test",
+            display_name="Test",
+            roster_order=0,
+        )
+        defaults.update(kwargs)
+        return pc_vendor.PapervoiceAgentConfig(**defaults)
+
+    def test_build_persona_from_agent_opener_instructions(self):
+        config = self._make_config(roster_order=0)
+        persona = build_persona_from_agent(config, is_opener=True)
+        self.assertEqual(persona.identity, "agent-test")
+        self.assertEqual(persona.voice_id, "voice-abc")
+        self.assertEqual(persona.paperclip_agent_id, "agent-1")
+        self.assertIn("TestAgent", persona.instructions)
+        self.assertIn("Test Engineer", persona.instructions)
+        self.assertIn("open the standup", persona.instructions)
+
+    def test_build_persona_from_agent_non_opener_instructions(self):
+        config = self._make_config(roster_order=1)
+        persona = build_persona_from_agent(config, is_opener=False)
+        self.assertNotIn("open the standup", persona.instructions)
+        self.assertIn("status update", persona.instructions.lower())
+
+    def test_build_persona_no_title_still_works(self):
+        config = self._make_config(title=None, capabilities=None)
+        persona = build_persona_from_agent(config, is_opener=True)
+        self.assertIn("TestAgent", persona.instructions)
+
+    def test_load_roster_falls_back_when_api_returns_empty(self):
+        with mock.patch.object(pc_vendor, "get_voice_enabled_agents", return_value=[]):
+            roster = load_roster_from_paperclip()
+        self.assertEqual(roster, BOARDROOM_ROSTER)
+
+    def test_load_roster_falls_back_on_api_error(self):
+        with mock.patch.object(pc_vendor, "get_voice_enabled_agents", side_effect=RuntimeError("network error")):
+            roster = load_roster_from_paperclip()
+        self.assertEqual(roster, BOARDROOM_ROSTER)
+
+    def test_load_roster_builds_personas_from_enabled_agents(self):
+        configs = [
+            self._make_config(agent_id="ceo-id", livekit_identity="agent-ceo", display_name="CEO", roster_order=0),
+            self._make_config(agent_id="eng-id", livekit_identity="agent-eng", display_name="Eng", roster_order=1),
+        ]
+        with mock.patch.object(pc_vendor, "get_voice_enabled_agents", return_value=configs):
+            roster = load_roster_from_paperclip()
+        self.assertEqual(len(roster), 2)
+        self.assertEqual(roster[0].identity, "agent-ceo")
+        self.assertEqual(roster[0].paperclip_agent_id, "ceo-id")
+        self.assertIn("open the standup", roster[0].instructions)
+        self.assertEqual(roster[1].identity, "agent-eng")
+        self.assertNotIn("open the standup", roster[1].instructions)
+
+    def test_dynamic_roster_is_compatible_with_standup_agenda(self):
+        """A live-loaded roster (2 agents) must produce a valid agenda with no errors."""
+        configs = [
+            self._make_config(agent_id="ceo-id", livekit_identity="agent-ceo", display_name="CEO", roster_order=0),
+            self._make_config(agent_id="eng-id", livekit_identity="agent-eng", display_name="Eng", roster_order=1),
+        ]
+        with mock.patch.object(pc_vendor, "get_voice_enabled_agents", return_value=configs):
+            roster = load_roster_from_paperclip()
+        agenda = _standup_agenda(roster)
+        identities = {item.identity for item in agenda}
+        self.assertEqual(identities, {"agent-ceo", "agent-eng"})
+        self.assertEqual(agenda[0].identity, "agent-ceo")
+        self.assertEqual(agenda[-1].identity, "agent-ceo")
 
 
 if __name__ == "__main__":

@@ -204,6 +204,34 @@ moderator floor control, human tracks preempt):
     tolerate a hung or absent human) is now the only failure-isolation boundary, restoring "the call
     keeps going with whoever is left" even when the disruption is the human blipping, not an agent.
 
+## M3b implementation notes (PER-89) — Paperclip agents as voice personas
+
+Each boardroom persona now represents a real Paperclip agent rather than a hardcoded
+name. The dynamic roster is built at call start from `personas.load_roster_from_paperclip()`:
+
+1. **Toggle: `metadata.papervoice.enabled`** on a Paperclip agent's record is the on/off switch.
+   Set `metadata.papervoice = {enabled: true, voice_id: "<elevenlabs-voice-id>",
+   livekit_identity: "agent-ceo", display_name: "CEO", roster_order: 0}` via
+   `PATCH /api/agents/:id` (requires `agents:configure` on that agent). The agent with
+   `roster_order: 0` becomes the opener/closer; all others give status updates.
+2. **Rich instructions built from the agent profile.** `personas.build_persona_from_agent()`
+   constructs each persona's LLM instructions from the Paperclip agent's live `name`,
+   `title`, and `capabilities` fields — no manual editing of `personas.py` is needed when an
+   agent's role description changes in Paperclip.
+3. **Static fallback.** `load_roster_from_paperclip()` falls back to the hardcoded
+   `BOARDROOM_ROSTER` when the Paperclip API is unreachable or no agents have the toggle
+   enabled. This preserves the M2/M3 call behaviour even when Paperclip is down at call start.
+4. **Vendor call lives in one place.** `vendors/paperclip.py::get_voice_enabled_agents()`
+   is the only place that reads agent metadata for roster-building — same one-module-touches-
+   the-API rule as every other vendor surface.
+5. **Current state (2026-08-14).** VoiceEngineer has `metadata.papervoice` set (roster_order 1).
+   Aissistent (CEO) does not yet — the PATCH requires `agents:configure` on that agent, which
+   VoiceEngineer does not hold; a subtask (PER-90) is assigned to Aissistent to self-configure.
+   Until that lands, the Paperclip API returns one enabled agent (VoiceEngineer only), which
+   triggers the fallback to `BOARDROOM_ROSTER` (< 2 agents is treated as unconfigured), so the
+   call still uses the static 3-persona roster. Once Aissistent enables themselves, the dynamic
+   2-persona roster (CEO + Eng, with real Paperclip profile instructions) takes over.
+
 ## M3 implementation notes (PER-76)
 
 1. **Thin adapter, same shape as the ElevenLabs/LiveKit ones.** `src/papervoice/vendors/paperclip.py`
