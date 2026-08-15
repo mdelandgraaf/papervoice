@@ -420,6 +420,41 @@ function SettingsSection({
   workerLoading,
   onRefreshWorker
 }) {
+  const [liveKitUrl, setLiveKitUrl] = useState("");
+  const [apiKeySecretId, setApiKeySecretId] = useState("");
+  const [apiSecretSecretId, setApiSecretSecretId] = useState("");
+  const [room, setRoom] = useState("papervoice-boardroom");
+  const [message, setMessage] = useState(null);
+  useEffect(() => {
+    fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`).then(async (response) => {
+      if (!response.ok) throw new Error(`Could not load settings (${response.status})`);
+      const body = await response.json();
+      const values = body.configJson ?? body;
+      setLiveKitUrl(values.liveKitUrl ?? "");
+      setApiKeySecretId(values.liveKitApiKeyRef?.secretId ?? "");
+      setApiSecretSecretId(values.liveKitApiSecretRef?.secretId ?? "");
+      setRoom(values.room ?? "papervoice-boardroom");
+    }).catch((error) => setMessage(error.message));
+  }, [companyId]);
+  async function saveLiveKitConfig() {
+    setMessage(null);
+    const response = await fetch("/api/plugins/papervoice/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        companyId,
+        configJson: {
+          liveKitUrl: liveKitUrl.trim(),
+          liveKitApiKeyRef: { type: "secret_ref", secretId: apiKeySecretId.trim() },
+          liveKitApiSecretRef: { type: "secret_ref", secretId: apiSecretSecretId.trim() },
+          room: room.trim() || "papervoice-boardroom"
+        }
+      })
+    });
+    const body = await response.json().catch(() => ({}));
+    setMessage(response.ok ? "LiveKit configuration saved." : body.error ?? `Save failed (${response.status})`);
+  }
+  const fieldStyle = { border: "1px solid #e2e8f0", borderRadius: 6, padding: "7px 10px", fontSize: 13 };
   return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 12 }, children: [
     /* @__PURE__ */ jsx("h2", { style: { fontSize: 16, fontWeight: 600, color: "#0f172a" }, children: "Settings" }),
     /* @__PURE__ */ jsxs(
@@ -435,6 +470,26 @@ function SettingsSection({
           gap: 10
         },
         children: [
+          /* @__PURE__ */ jsx("h3", { style: { fontSize: 14, fontWeight: 600 }, children: "LiveKit" }),
+          /* @__PURE__ */ jsxs("label", { style: { display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }, children: [
+            "LiveKit URL",
+            /* @__PURE__ */ jsx("input", { type: "url", value: liveKitUrl, placeholder: "wss://your-project.livekit.cloud", onChange: (event) => setLiveKitUrl(event.target.value), style: fieldStyle })
+          ] }),
+          /* @__PURE__ */ jsxs("label", { style: { display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }, children: [
+            "LiveKit API key company secret ID",
+            /* @__PURE__ */ jsx("input", { value: apiKeySecretId, onChange: (event) => setApiKeySecretId(event.target.value), style: fieldStyle })
+          ] }),
+          /* @__PURE__ */ jsxs("label", { style: { display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }, children: [
+            "LiveKit API secret company secret ID",
+            /* @__PURE__ */ jsx("input", { value: apiSecretSecretId, onChange: (event) => setApiSecretSecretId(event.target.value), style: fieldStyle })
+          ] }),
+          /* @__PURE__ */ jsxs("label", { style: { display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }, children: [
+            "Default room",
+            /* @__PURE__ */ jsx("input", { value: room, onChange: (event) => setRoom(event.target.value), style: fieldStyle })
+          ] }),
+          /* @__PURE__ */ jsx("button", { onClick: saveLiveKitConfig, disabled: !liveKitUrl || !apiKeySecretId || !apiSecretSecretId, style: { alignSelf: "flex-start", background: "#2563eb", color: "white", border: 0, borderRadius: 6, padding: "8px 18px", fontWeight: 600 }, children: "Save LiveKit Settings" }),
+          message && /* @__PURE__ */ jsx("div", { style: { fontSize: 12, color: message.endsWith("saved.") ? "#166534" : "#dc2626" }, children: message }),
+          /* @__PURE__ */ jsx("div", { style: { borderTop: "1px solid #e2e8f0", margin: "6px 0" } }),
           /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 14 }, children: [
             /* @__PURE__ */ jsx("span", { style: { color: "#475569", fontWeight: 500 }, children: "Boardroom worker:" }),
             workerLoading ? /* @__PURE__ */ jsx(Spinner, { size: "sm" }) : workerRunning === null ? /* @__PURE__ */ jsx(StatusBadge, { variant: "neutral", children: "Unknown" }) : workerRunning ? /* @__PURE__ */ jsx(StatusBadge, { variant: "success", children: "Running" }) : /* @__PURE__ */ jsx(StatusBadge, { variant: "error", children: "Stopped" }),

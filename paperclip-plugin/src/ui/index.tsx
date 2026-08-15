@@ -24,6 +24,13 @@ interface WorkerStatusResult {
   running: boolean;
 }
 
+interface CompanySecretSummary {
+  id: string;
+  name: string;
+  key?: string;
+  status?: string;
+}
+
 function useWorkerStatus(companyId: string) {
   const [running, setRunning] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
@@ -435,6 +442,46 @@ function SettingsSection({
   workerLoading: boolean;
   onRefreshWorker: () => void;
 }) {
+  const [liveKitUrl, setLiveKitUrl] = useState("");
+  const [apiKeySecretId, setApiKeySecretId] = useState("");
+  const [apiSecretSecretId, setApiSecretSecretId] = useState("");
+  const [room, setRoom] = useState("papervoice-boardroom");
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Could not load settings (${response.status})`);
+        const body = await response.json();
+        const values = body.configJson ?? body;
+        setLiveKitUrl(values.liveKitUrl ?? "");
+        setApiKeySecretId(values.liveKitApiKeyRef?.secretId ?? "");
+        setApiSecretSecretId(values.liveKitApiSecretRef?.secretId ?? "");
+        setRoom(values.room ?? "papervoice-boardroom");
+      })
+      .catch((error) => setMessage(error.message));
+  }, [companyId]);
+
+  async function saveLiveKitConfig() {
+    setMessage(null);
+    const response = await fetch("/api/plugins/papervoice/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        companyId,
+        configJson: {
+          liveKitUrl: liveKitUrl.trim(),
+          liveKitApiKeyRef: { type: "secret_ref", secretId: apiKeySecretId.trim() },
+          liveKitApiSecretRef: { type: "secret_ref", secretId: apiSecretSecretId.trim() },
+          room: room.trim() || "papervoice-boardroom",
+        },
+      }),
+    });
+    const body = await response.json().catch(() => ({}));
+    setMessage(response.ok ? "LiveKit configuration saved." : body.error ?? `Save failed (${response.status})`);
+  }
+
+  const fieldStyle = { border: "1px solid #e2e8f0", borderRadius: 6, padding: "7px 10px", fontSize: 13 };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <h2 style={{ fontSize: 16, fontWeight: 600, color: "#0f172a" }}>Settings</h2>
@@ -449,6 +496,16 @@ function SettingsSection({
           gap: 10,
         }}
       >
+        <h3 style={{ fontSize: 14, fontWeight: 600 }}>LiveKit</h3>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>LiveKit URL<input type="url" value={liveKitUrl} placeholder="wss://your-project.livekit.cloud" onChange={(event) => setLiveKitUrl(event.target.value)} style={fieldStyle} /></label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>LiveKit API key company secret ID<input value={apiKeySecretId} onChange={(event) => setApiKeySecretId(event.target.value)} style={fieldStyle} /></label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>LiveKit API secret company secret ID<input value={apiSecretSecretId} onChange={(event) => setApiSecretSecretId(event.target.value)} style={fieldStyle} /></label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>Default room<input value={room} onChange={(event) => setRoom(event.target.value)} style={fieldStyle} /></label>
+        <button onClick={saveLiveKitConfig} disabled={!liveKitUrl || !apiKeySecretId || !apiSecretSecretId} style={{ alignSelf: "flex-start", background: "#2563eb", color: "white", border: 0, borderRadius: 6, padding: "8px 18px", fontWeight: 600 }}>
+          Save LiveKit Settings
+        </button>
+        {message && <div style={{ fontSize: 12, color: message.endsWith("saved.") ? "#166534" : "#dc2626" }}>{message}</div>}
+        <div style={{ borderTop: "1px solid #e2e8f0", margin: "6px 0" }} />
         <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14 }}>
           <span style={{ color: "#475569", fontWeight: 500 }}>Boardroom worker:</span>
           {workerLoading ? (
