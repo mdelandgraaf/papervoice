@@ -7,7 +7,7 @@ var manifest = {
   description: "Manage Papervoice voice AI agents for live standups \u2014 enable/disable agents, generate join links, and check boardroom status, all from the Paperclip sidebar.",
   author: "VoiceEngineer",
   categories: ["ui"],
-  capabilities: ["agents.read"],
+  capabilities: ["agents.read", "api.routes.register"],
   entrypoints: {
     worker: "dist/worker.js",
     ui: "dist/ui"
@@ -48,7 +48,8 @@ var manifest = {
       routeKey: "worker-status",
       method: "GET",
       path: "/worker-status",
-      authMode: "board"
+      auth: "board",
+      capability: "api.routes.register"
     }
   ],
   ui: {
