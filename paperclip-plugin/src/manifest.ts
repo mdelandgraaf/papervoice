@@ -9,7 +9,11 @@ const manifest: PaperclipPluginManifestV1 = {
     "Manage Papervoice voice AI agents for live standups — enable/disable agents, generate join links, and check boardroom status, all from the Paperclip sidebar.",
   author: "VoiceEngineer",
   categories: ["ui"],
-  capabilities: ["agents.read", "api.routes.register"],
+  capabilities: [
+    "agents.read",
+    "api.routes.register",
+    "instance.settings.register",
+  ],
   entrypoints: {
     worker: "dist/worker.js",
     ui: "dist/ui",
