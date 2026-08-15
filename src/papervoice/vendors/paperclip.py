@@ -209,6 +209,36 @@ def list_agent_ids() -> set[str]:
     return {agent["id"] for agent in resp.json()}
 
 
+def get_all_agents() -> list[dict]:
+    """All company agents with full records — used by the dashboard to render the roster.
+
+    Each dict includes at minimum: id, name, role, title, capabilities, metadata.
+    """
+    resp = httpx.get(
+        f"{_api_base()}/api/companies/{_company_id()}/agents",
+        headers=_headers(),
+        timeout=_TIMEOUT,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def update_agent_voice_config(agent_id: str, config: dict | None) -> None:
+    """PATCH an agent's metadata.papervoice settings via the Paperclip API.
+
+    Pass a dict (with at minimum `enabled`, and `voice_id` when enabling) to
+    set the voice config, or None to clear it. Requires agents:configure on the
+    target agent — will 403 if the caller lacks that grant.
+    """
+    resp = httpx.patch(
+        f"{_api_base()}/api/agents/{agent_id}",
+        headers=_headers(),
+        json={"metadata": {"papervoice": config}},
+        timeout=_TIMEOUT,
+    )
+    resp.raise_for_status()
+
+
 @dataclass(frozen=True)
 class PapervoiceAgentConfig:
     """A Paperclip agent whose metadata.papervoice.enabled is True, enriched with voice config.

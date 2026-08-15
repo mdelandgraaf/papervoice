@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Start the Papervoice web dashboard.
+#
+# Usage: scripts/dashboard [--port PORT] [--host HOST]
+# Defaults: http://0.0.0.0:7860
+#
+# The dashboard serves the Papervoice control page (agent toggles, join-link
+# generator, worker status) on the local network. Run only on the Tailscale
+# interface or behind your perimeter — it can write Paperclip agent metadata.
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PORT="${PAPERVOICE_DASHBOARD_PORT:-7860}"
+HOST="${PAPERVOICE_DASHBOARD_HOST:-0.0.0.0}"
+
+# Activate venv if present and not already active
+if [[ -z "${VIRTUAL_ENV:-}" && -d "$repo_dir/.venv" ]]; then
+  source "$repo_dir/.venv/bin/activate"
+fi
+
+export PYTHONPATH="$repo_dir/src"
+
+echo "Papervoice dashboard starting at http://$HOST:$PORT"
+exec uvicorn papervoice.dashboard:app --host "$HOST" --port "$PORT" "$@"

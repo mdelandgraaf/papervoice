@@ -13,3 +13,6 @@ livekit-plugins-silero==1.6.0
 livekit-api==1.2.0
 python-dotenv==1.2.2
 httpx==0.28.1
+# Dashboard web server (pure-Python wheels; no AVX required — see host constraint above)
+fastapi==0.115.6
+uvicorn==0.32.1

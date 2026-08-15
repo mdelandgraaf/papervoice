@@ -277,6 +277,64 @@ class PaperclipAdapterTest(unittest.TestCase):
         self.assertFalse(pc.is_auth_error(_status_error(500)))
         self.assertFalse(pc.is_auth_error(RuntimeError("boom")))
 
+    # --- get_all_agents (PER-91 dashboard) ---
+
+    def test_get_all_agents_returns_full_records(self):
+        self._set_env()
+        agents = [
+            {"id": "a1", "name": "CEO", "role": "ceo", "title": "Chief Executive",
+             "capabilities": "Leads the company", "metadata": {"papervoice": {"enabled": True, "voice_id": "v1"}}},
+            {"id": "a2", "name": "Eng", "role": "engineer", "title": None, "capabilities": None, "metadata": None},
+        ]
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = mock.Mock()
+        fake_resp.json = mock.Mock(return_value=agents)
+        with mock.patch("httpx.get", return_value=fake_resp) as get:
+            result = pc.get_all_agents()
+        self.assertEqual(result, agents)
+        _, kwargs = get.call_args
+        self.assertIn("agents", kwargs.get("url", "") + get.call_args[0][0])
+
+    def test_get_all_agents_raises_on_api_error(self):
+        self._set_env()
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = mock.Mock(side_effect=_status_error(503))
+        with mock.patch("httpx.get", return_value=fake_resp):
+            with self.assertRaises(httpx.HTTPStatusError):
+                pc.get_all_agents()
+
+    # --- update_agent_voice_config (PER-91 dashboard) ---
+
+    def test_update_agent_voice_config_sends_patch_with_metadata(self):
+        self._set_env()
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = mock.Mock()
+        config = {"enabled": True, "voice_id": "v1", "display_name": "CEO",
+                  "livekit_identity": "agent-ceo", "roster_order": 0}
+        with mock.patch("httpx.patch", return_value=fake_resp) as patch:
+            pc.update_agent_voice_config("agent-1", config)
+        _, kwargs = patch.call_args
+        self.assertEqual(kwargs["json"], {"metadata": {"papervoice": config}})
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer pc-test-key")
+        self.assertIn("agent-1", patch.call_args[0][0])
+
+    def test_update_agent_voice_config_sends_none_to_clear(self):
+        self._set_env()
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = mock.Mock()
+        with mock.patch("httpx.patch", return_value=fake_resp) as patch:
+            pc.update_agent_voice_config("agent-1", None)
+        _, kwargs = patch.call_args
+        self.assertEqual(kwargs["json"], {"metadata": {"papervoice": None}})
+
+    def test_update_agent_voice_config_raises_on_403(self):
+        self._set_env()
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = mock.Mock(side_effect=_status_error(403))
+        with mock.patch("httpx.patch", return_value=fake_resp):
+            with self.assertRaises(httpx.HTTPStatusError):
+                pc.update_agent_voice_config("agent-1", {"enabled": True, "voice_id": "v1"})
+
 
 if __name__ == "__main__":
     unittest.main()
