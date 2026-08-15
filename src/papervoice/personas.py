@@ -66,15 +66,10 @@ BOARDROOM_ROSTER = (
         + _COMMON_STYLE,
         paperclip_agent_id=ENG_AGENT_ID,
     ),
-    Persona(
-        identity="agent-ops",
-        display_name="Ops",
-        voice_id="XrExE9yKIg1WjnnlVkGX",  # Matilda — knowledgeable, professional
-        instructions="You are the Ops lead. Report on infra health, costs, and anything needing board attention."
-        + _COMMON_STYLE,
-        # No dedicated Ops agent yet — context_briefing() falls back to a
-        # company-wide open-issue snapshot when paperclip_agent_id is None.
-    ),
+    # Ops persona removed from static fallback: only CEO (Aissistent) and Eng
+    # (VoiceEngineer) are configured as papervoice agents in Paperclip. Adding
+    # Ops here caused it to appear in calls whenever the API key expired and the
+    # fallback was used, even though no Ops agent exists in the company (PER-93).
 )
 
 

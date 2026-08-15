@@ -2,7 +2,9 @@
 set -euo pipefail
 
 # Mandatory first action for every VoiceEngineer wake. The injected run JWT is
-# copied into the local boardroom .env without ever printing it.
+# copied into the local boardroom .env without ever printing it, then the
+# boardroom worker is restarted (if no human is in the call) so it picks up the
+# fresh token — load_dotenv() only fires at process startup, not on each call.
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 env_file="${PAPERCLIP_BOARDROOM_ENV_FILE:-$repo_dir/.env}"
 : "${PAPERCLIP_API_KEY:?PAPERCLIP_API_KEY must be injected for wake refresh}"
@@ -17,11 +19,61 @@ chmod 600 "$tmp_file"
 mv -f "$tmp_file" "$env_file"
 echo "refreshed Paperclip boardroom token in $env_file"
 
-if ! pgrep -f 'python(3)? -m papervoice\.boardroom start' >/dev/null; then
-  echo "boardroom worker probe: NOT RUNNING" >&2
-  exit 1
+# Restart the worker so it picks up the new token. Skip if humans are in the
+# call — a mid-call restart drops every participant immediately (PER-84).
+worker_pid=$(pgrep -f 'python(3)? -m papervoice\.boardroom start' 2>/dev/null || true)
+if [[ -z "$worker_pid" ]]; then
+  echo "boardroom worker probe: NOT RUNNING — restarting" >&2
+  need_restart=true
+else
+  echo "boardroom worker probe: running (pid $worker_pid)"
+  room_occupied=$(
+    PYTHONPATH="$repo_dir/src" \
+      "$repo_dir/.venv/bin/python" -c "
+import asyncio, sys
+from dotenv import load_dotenv
+load_dotenv('$env_file')
+from papervoice.vendors import livekit as lk
+from papervoice.personas import BOARDROOM_ROOM
+result = asyncio.run(lk.room_has_human_participant(BOARDROOM_ROOM))
+sys.stdout.write('true' if result else 'false')
+" 2>/dev/null
+  )
+  if [[ "$room_occupied" == "true" ]]; then
+    echo "boardroom worker: call in progress — skipping restart, new token loads on next call start"
+    need_restart=false
+  else
+    echo "boardroom worker: room empty — restarting to pick up fresh token"
+    need_restart=true
+  fi
 fi
-echo "boardroom worker probe: running"
+
+if [[ "$need_restart" == "true" ]]; then
+  if [[ -n "$worker_pid" ]]; then
+    kill "$worker_pid" 2>/dev/null || true
+    sleep 2
+  fi
+  # Run from /var/tmp/papervoice-boardroom (durable TMPDIR, see memory note PER-84)
+  mkdir -p /var/tmp/papervoice-boardroom
+  # Export vars from .env then launch; use env file directly via dotenv inside
+  # the worker rather than xargs-expanding secrets onto the command line
+  set -a
+  # shellcheck disable=SC1090
+  source "$env_file"
+  set +a
+  nohup \
+    env PYTHONPATH="$repo_dir/src" \
+    "$repo_dir/.venv/bin/python" -m papervoice.boardroom start \
+    >> /var/tmp/papervoice-boardroom/worker.log 2>&1 &
+  new_pid=$!
+  sleep 2
+  if kill -0 "$new_pid" 2>/dev/null; then
+    echo "boardroom worker restarted (pid $new_pid)"
+  else
+    echo "boardroom worker failed to start — check /var/tmp/papervoice-boardroom/worker.log" >&2
+    exit 1
+  fi
+fi
 
 # Drain only after refresh and probe, so queued posts use the current token.
 PYTHONPATH="$repo_dir/src" "$repo_dir/scripts/drain-pending-posts"
