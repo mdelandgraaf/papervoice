@@ -423,6 +423,8 @@ function SettingsSection({
   const [liveKitUrl, setLiveKitUrl] = useState("");
   const [apiKeySecretId, setApiKeySecretId] = useState("");
   const [apiSecretSecretId, setApiSecretSecretId] = useState("");
+  const [companySecrets, setCompanySecrets] = useState([]);
+  const [secretsLoading, setSecretsLoading] = useState(true);
   const [room, setRoom] = useState("papervoice-boardroom");
   const [message, setMessage] = useState(null);
   useEffect(() => {
@@ -435,6 +437,14 @@ function SettingsSection({
       setApiSecretSecretId(values.liveKitApiSecretRef?.secretId ?? "");
       setRoom(values.room ?? "papervoice-boardroom");
     }).catch((error) => setMessage(error.message));
+  }, [companyId]);
+  useEffect(() => {
+    setSecretsLoading(true);
+    fetch(`/api/companies/${encodeURIComponent(companyId)}/secrets`).then(async (response) => {
+      if (!response.ok) throw new Error(`Could not load company secrets (${response.status})`);
+      const secrets = await response.json();
+      setCompanySecrets(secrets.filter((secret) => !secret.status || secret.status === "active"));
+    }).catch((error) => setMessage(error.message)).finally(() => setSecretsLoading(false));
   }, [companyId]);
   async function saveLiveKitConfig() {
     setMessage(null);
@@ -476,12 +486,24 @@ function SettingsSection({
             /* @__PURE__ */ jsx("input", { type: "url", value: liveKitUrl, placeholder: "wss://your-project.livekit.cloud", onChange: (event) => setLiveKitUrl(event.target.value), style: fieldStyle })
           ] }),
           /* @__PURE__ */ jsxs("label", { style: { display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }, children: [
-            "LiveKit API key company secret ID",
-            /* @__PURE__ */ jsx("input", { value: apiKeySecretId, onChange: (event) => setApiKeySecretId(event.target.value), style: fieldStyle })
+            "LiveKit API key company secret",
+            /* @__PURE__ */ jsxs("select", { value: apiKeySecretId, disabled: secretsLoading, onChange: (event) => setApiKeySecretId(event.target.value), style: fieldStyle, children: [
+              /* @__PURE__ */ jsx("option", { value: "", children: secretsLoading ? "Loading company secrets\u2026" : "Select a company secret" }),
+              companySecrets.map((secret) => /* @__PURE__ */ jsxs("option", { value: secret.id, children: [
+                secret.name,
+                secret.key ? ` (${secret.key})` : ""
+              ] }, secret.id))
+            ] })
           ] }),
           /* @__PURE__ */ jsxs("label", { style: { display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }, children: [
-            "LiveKit API secret company secret ID",
-            /* @__PURE__ */ jsx("input", { value: apiSecretSecretId, onChange: (event) => setApiSecretSecretId(event.target.value), style: fieldStyle })
+            "LiveKit API secret company secret",
+            /* @__PURE__ */ jsxs("select", { value: apiSecretSecretId, disabled: secretsLoading, onChange: (event) => setApiSecretSecretId(event.target.value), style: fieldStyle, children: [
+              /* @__PURE__ */ jsx("option", { value: "", children: secretsLoading ? "Loading company secrets\u2026" : "Select a company secret" }),
+              companySecrets.map((secret) => /* @__PURE__ */ jsxs("option", { value: secret.id, children: [
+                secret.name,
+                secret.key ? ` (${secret.key})` : ""
+              ] }, secret.id))
+            ] })
           ] }),
           /* @__PURE__ */ jsxs("label", { style: { display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }, children: [
             "Default room",

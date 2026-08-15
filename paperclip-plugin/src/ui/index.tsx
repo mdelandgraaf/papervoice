@@ -445,6 +445,8 @@ function SettingsSection({
   const [liveKitUrl, setLiveKitUrl] = useState("");
   const [apiKeySecretId, setApiKeySecretId] = useState("");
   const [apiSecretSecretId, setApiSecretSecretId] = useState("");
+  const [companySecrets, setCompanySecrets] = useState<CompanySecretSummary[]>([]);
+  const [secretsLoading, setSecretsLoading] = useState(true);
   const [room, setRoom] = useState("papervoice-boardroom");
   const [message, setMessage] = useState<string | null>(null);
 
@@ -460,6 +462,18 @@ function SettingsSection({
         setRoom(values.room ?? "papervoice-boardroom");
       })
       .catch((error) => setMessage(error.message));
+  }, [companyId]);
+
+  useEffect(() => {
+    setSecretsLoading(true);
+    fetch(`/api/companies/${encodeURIComponent(companyId)}/secrets`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Could not load company secrets (${response.status})`);
+        const secrets = (await response.json()) as CompanySecretSummary[];
+        setCompanySecrets(secrets.filter((secret) => !secret.status || secret.status === "active"));
+      })
+      .catch((error) => setMessage(error.message))
+      .finally(() => setSecretsLoading(false));
   }, [companyId]);
 
   async function saveLiveKitConfig() {
@@ -498,8 +512,20 @@ function SettingsSection({
       >
         <h3 style={{ fontSize: 14, fontWeight: 600 }}>LiveKit</h3>
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>LiveKit URL<input type="url" value={liveKitUrl} placeholder="wss://your-project.livekit.cloud" onChange={(event) => setLiveKitUrl(event.target.value)} style={fieldStyle} /></label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>LiveKit API key company secret ID<input value={apiKeySecretId} onChange={(event) => setApiKeySecretId(event.target.value)} style={fieldStyle} /></label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>LiveKit API secret company secret ID<input value={apiSecretSecretId} onChange={(event) => setApiSecretSecretId(event.target.value)} style={fieldStyle} /></label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+          LiveKit API key company secret
+          <select value={apiKeySecretId} disabled={secretsLoading} onChange={(event) => setApiKeySecretId(event.target.value)} style={fieldStyle}>
+            <option value="">{secretsLoading ? "Loading company secrets…" : "Select a company secret"}</option>
+            {companySecrets.map((secret) => <option key={secret.id} value={secret.id}>{secret.name}{secret.key ? ` (${secret.key})` : ""}</option>)}
+          </select>
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+          LiveKit API secret company secret
+          <select value={apiSecretSecretId} disabled={secretsLoading} onChange={(event) => setApiSecretSecretId(event.target.value)} style={fieldStyle}>
+            <option value="">{secretsLoading ? "Loading company secrets…" : "Select a company secret"}</option>
+            {companySecrets.map((secret) => <option key={secret.id} value={secret.id}>{secret.name}{secret.key ? ` (${secret.key})` : ""}</option>)}
+          </select>
+        </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>Default room<input value={room} onChange={(event) => setRoom(event.target.value)} style={fieldStyle} /></label>
         <button onClick={saveLiveKitConfig} disabled={!liveKitUrl || !apiKeySecretId || !apiSecretSecretId} style={{ alignSelf: "flex-start", background: "#2563eb", color: "white", border: 0, borderRadius: 6, padding: "8px 18px", fontWeight: 600 }}>
           Save LiveKit Settings
