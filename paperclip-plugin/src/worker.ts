@@ -2,13 +2,6 @@ import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
 import { createHmac, createHash } from "node:crypto";
 import { execSync } from "node:child_process";
 
-interface PluginConfig {
-  liveKitUrl?: string;
-  liveKitApiKey?: string;
-  liveKitApiSecret?: string;
-  boardroomRoom?: string;
-}
-
 function mintLiveKitToken(
   apiKey: string,
   apiSecret: string,
@@ -73,14 +66,15 @@ const plugin = definePlugin({
         room: string;
         ttlHours: number;
       }) => {
-        const config = (await ctx.config.get(params.companyId)) as PluginConfig;
-        const { liveKitUrl, liveKitApiKey, liveKitApiSecret } = config;
+        const liveKitUrl = process.env.LIVEKIT_URL;
+        const liveKitApiKey = process.env.LIVEKIT_API_KEY;
+        const liveKitApiSecret = process.env.LIVEKIT_API_SECRET;
         if (!liveKitUrl || !liveKitApiKey || !liveKitApiSecret) {
           throw new Error(
-            "Papervoice plugin is not fully configured. Set liveKitUrl, liveKitApiKey, and liveKitApiSecret in the plugin settings.",
+            "Papervoice plugin requires LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET in its Paperclip-managed environment.",
           );
         }
-        const room = params.room || (config.boardroomRoom ?? "papervoice-boardroom");
+        const room = params.room || process.env.PAPERVOICE_BOARDROOM_ROOM || "papervoice-boardroom";
         const token = mintLiveKitToken(
           liveKitApiKey,
           liveKitApiSecret,
