@@ -9,7 +9,8 @@ var manifest = {
   categories: ["ui"],
   capabilities: [
     "agents.read",
-    "api.routes.register"
+    "api.routes.register",
+    "instance.settings.register"
   ],
   entrypoints: {
     worker: "dist/worker.js",

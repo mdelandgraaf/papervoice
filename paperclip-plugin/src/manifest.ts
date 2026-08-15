@@ -12,6 +12,7 @@ const manifest: PaperclipPluginManifestV1 = {
   capabilities: [
     "agents.read",
     "api.routes.register",
+    "instance.settings.register",
   ],
   entrypoints: {
     worker: "dist/worker.js",
