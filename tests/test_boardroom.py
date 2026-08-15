@@ -164,7 +164,21 @@ class StandupAgendaContextTest(unittest.TestCase):
 
 class StandupAgendaReactionTurnsTest(unittest.TestCase):
     """PER-83: agent-to-agent cross-talk — the next speaker gets an optional brief chance
-    to react to the previous speaker's update before giving their own."""
+    to react to the previous speaker's update before giving their own.
+
+    Reaction turns only fire for the 3rd+ person in the roster (i > 0 in the
+    rest slice). These tests use a 3-person fixture so the reaction-turn branch
+    is actually exercised — using BOARDROOM_ROSTER (2 people) would leave `later`
+    empty and the reaction tests would vacuously pass or fail to find any reaction.
+    """
+
+    def setUp(self):
+        from papervoice.personas import Persona
+        self._three_persona_roster = (
+            Persona("agent-ceo", "CEO", "voice-ceo", "You are the CEO."),
+            Persona("agent-eng", "Eng", "voice-eng", "You are Eng."),
+            Persona("agent-ops", "Ops", "voice-ops", "You are Ops."),
+        )
 
     def test_no_reaction_before_the_first_status_update(self):
         agenda = _standup_agenda(BOARDROOM_ROSTER)
@@ -174,8 +188,9 @@ class StandupAgendaReactionTurnsTest(unittest.TestCase):
         self.assertEqual(agenda[1].kind, "turn")
 
     def test_reaction_turn_precedes_every_later_status_update(self):
-        agenda = _standup_agenda(BOARDROOM_ROSTER)
-        opener, first, *later = BOARDROOM_ROSTER
+        roster = self._three_persona_roster
+        agenda = _standup_agenda(roster)
+        opener, first, *later = roster
 
         turns_by_identity = {item.identity: item for item in agenda if item.kind == "turn"}
         reactions_by_identity = {item.identity: item for item in agenda if item.kind == "reaction"}
@@ -186,15 +201,15 @@ class StandupAgendaReactionTurnsTest(unittest.TestCase):
             self.assertLess(reaction_index, update_index)
 
     def test_reaction_prompt_names_the_previous_speaker_and_the_pass_tool(self):
-        agenda = _standup_agenda(BOARDROOM_ROSTER)
-        _, _, *later = BOARDROOM_ROSTER
+        roster = self._three_persona_roster
+        agenda = _standup_agenda(roster)
         reaction = next(item for item in agenda if item.kind == "reaction")
 
-        self.assertIn(BOARDROOM_ROSTER[1].display_name, reaction.prompt)
+        self.assertIn(roster[1].display_name, reaction.prompt)
         self.assertIn("pass_on_reacting", reaction.prompt)
 
     def test_reaction_turns_are_optional_not_forced_filler(self):
-        agenda = _standup_agenda(BOARDROOM_ROSTER)
+        agenda = _standup_agenda(self._three_persona_roster)
         reaction = next(item for item in agenda if item.kind == "reaction")
 
         self.assertIn("if not, call the pass_on_reacting tool", reaction.prompt.lower())

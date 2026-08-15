@@ -8,16 +8,18 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 env_file="${PAPERCLIP_BOARDROOM_ENV_FILE:-$repo_dir/.env}"
 : "${PAPERCLIP_API_KEY:?PAPERCLIP_API_KEY must be injected for wake refresh}"
+: "${ELEVENLABS_API_KEY:?ELEVENLABS_API_KEY must be injected for wake refresh}"
 mkdir -p "$(dirname "$env_file")"
 tmp_file="$(mktemp "${env_file}.tmp.XXXXXX")"
 trap 'rm -f "$tmp_file"' EXIT
 if [[ -f "$env_file" ]]; then
-  awk '!/^PAPERCLIP_API_KEY=/' "$env_file" >"$tmp_file"
+  awk '!/^PAPERCLIP_API_KEY=/ && !/^ELEVENLABS_API_KEY=/' "$env_file" >"$tmp_file"
 fi
 printf 'PAPERCLIP_API_KEY=%s\n' "$PAPERCLIP_API_KEY" >>"$tmp_file"
+printf 'ELEVENLABS_API_KEY=%s\n' "$ELEVENLABS_API_KEY" >>"$tmp_file"
 chmod 600 "$tmp_file"
 mv -f "$tmp_file" "$env_file"
-echo "refreshed Paperclip boardroom token in $env_file"
+echo "refreshed Paperclip boardroom token and ElevenLabs API key in $env_file"
 
 # Restart the worker so it picks up the new token. Skip if humans are in the
 # call — a mid-call restart drops every participant immediately (PER-84).
@@ -50,7 +52,7 @@ fi
 
 if [[ "$need_restart" == "true" ]]; then
   if [[ -n "$worker_pid" ]]; then
-    kill "$worker_pid" 2>/dev/null || true
+    pkill -f 'python(3)? -m papervoice\.boardroom start' 2>/dev/null || true
     sleep 2
   fi
   # Run from /var/tmp/papervoice-boardroom (durable TMPDIR, see memory note PER-84)
@@ -62,7 +64,7 @@ if [[ "$need_restart" == "true" ]]; then
   source "$env_file"
   set +a
   nohup \
-    env PYTHONPATH="$repo_dir/src" \
+    env PYTHONPATH="$repo_dir/src" TMPDIR=/var/tmp/papervoice-boardroom \
     "$repo_dir/.venv/bin/python" -m papervoice.boardroom start \
     >> /var/tmp/papervoice-boardroom/worker.log 2>&1 &
   new_pid=$!
