@@ -13,10 +13,38 @@ const manifest: PaperclipPluginManifestV1 = {
     "agents.read",
     "api.routes.register",
     "instance.settings.register",
+    "secrets.read-ref",
   ],
   entrypoints: {
     worker: "dist/worker.js",
     ui: "dist/ui",
+  },
+  instanceConfigSchema: {
+    type: "object",
+    properties: {
+      liveKitUrl: {
+        type: "string",
+        title: "LiveKit URL",
+        description: "The wss:// URL for the LiveKit project.",
+      },
+      liveKitApiKeyRef: {
+        type: "object",
+        title: "LiveKit API key secret",
+        description: "A Paperclip company secret reference for LIVEKIT_API_KEY.",
+      },
+      liveKitApiSecretRef: {
+        type: "object",
+        title: "LiveKit API secret",
+        description: "A Paperclip company secret reference for LIVEKIT_API_SECRET.",
+      },
+      room: {
+        type: "string",
+        title: "Default room",
+        default: "papervoice-boardroom",
+      },
+    },
+    required: ["liveKitUrl", "liveKitApiKeyRef", "liveKitApiSecretRef"],
+    additionalProperties: false,
   },
   apiRoutes: [
     {

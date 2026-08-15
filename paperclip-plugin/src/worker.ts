@@ -1,6 +1,16 @@
 import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
+import type { EnvSecretRefBinding } from "@paperclipai/plugin-sdk";
 import { createHmac, createHash } from "node:crypto";
 import { execSync } from "node:child_process";
+
+function isSecretRef(value: unknown): value is EnvSecretRefBinding {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      (value as { type?: unknown }).type === "secret_ref" &&
+      typeof (value as { secretId?: unknown }).secretId === "string",
+  );
+}
 
 function mintLiveKitToken(
   apiKey: string,
@@ -66,15 +76,22 @@ const plugin = definePlugin({
         room: string;
         ttlHours: number;
       }) => {
-        const liveKitUrl = process.env.LIVEKIT_URL;
-        const liveKitApiKey = process.env.LIVEKIT_API_KEY;
-        const liveKitApiSecret = process.env.LIVEKIT_API_SECRET;
-        if (!liveKitUrl || !liveKitApiKey || !liveKitApiSecret) {
+        const config = await ctx.config.get(params.companyId);
+        const liveKitUrl = config.liveKitUrl;
+        const apiKeyRef = config.liveKitApiKeyRef;
+        const apiSecretRef = config.liveKitApiSecretRef;
+        if (typeof liveKitUrl !== "string" || !isSecretRef(apiKeyRef) || !isSecretRef(apiSecretRef)) {
           throw new Error(
-            "Papervoice plugin requires LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET in its Paperclip-managed environment.",
+            "Configure the Papervoice plugin with liveKitUrl, liveKitApiKeyRef, and liveKitApiSecretRef before generating a link.",
           );
         }
-        const room = params.room || process.env.PAPERVOICE_BOARDROOM_ROOM || "papervoice-boardroom";
+        const [liveKitApiKey, liveKitApiSecret] = await Promise.all([
+          ctx.secrets.resolve(apiKeyRef, { companyId: params.companyId, configPath: "liveKitApiKeyRef" }),
+          ctx.secrets.resolve(apiSecretRef, { companyId: params.companyId, configPath: "liveKitApiSecretRef" }),
+        ]);
+        const room =
+          params.room ||
+          (typeof config.room === "string" ? config.room : "papervoice-boardroom");
         const token = mintLiveKitToken(
           liveKitApiKey,
           liveKitApiSecret,
