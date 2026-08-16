@@ -208,6 +208,12 @@ moderator floor control, human tracks preempt):
     tolerate a hung or absent human) is now the only failure-isolation boundary, restoring "the call
     keeps going with whoever is left" even when the disruption is the human blipping, not an agent.
 
+13. **Call departure is explicit (PER-162).** A post-agenda inactivity timer used to tear down every
+    session after 20 quiet seconds, including while the board was preparing a follow-up. Production
+    now keeps the room open indefinitely: the last human participant disconnecting ends the whole
+    call, while a clear sentence-level imperative naming a roster agent (for example, "Eng, please
+    leave") closes only that agent session. Questions and unnamed group phrases do not dismiss anyone.
+
 ## M3b implementation notes (PER-89) — Paperclip agents as voice personas
 
 Each boardroom persona now represents a real Paperclip agent rather than a hardcoded

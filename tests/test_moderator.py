@@ -406,6 +406,34 @@ class ModeratorOpenFloorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed, ["ceo"])
         self.assertIsNone(moderator.current_speaker)
 
+    async def test_production_open_floor_does_not_end_due_to_silence(self):
+        moderator = _Moderator([AgendaItem("ceo", "close")], {"ceo": make_speaker("ceo", [])})
+        task = asyncio.create_task(moderator.run_agenda())
+        await asyncio.sleep(0.08)
+        self.assertFalse(task.done())
+        moderator.end_call()
+        self.assertEqual(await asyncio.wait_for(task, timeout=1), ["ceo"])
+
+    async def test_explicit_dismissal_removes_only_named_speaker(self):
+        moderator = Moderator([], {"ceo": make_speaker("ceo", []), "eng": make_speaker("eng", [])})
+        self.assertTrue(await moderator.dismiss_speaker("eng"))
+        self.assertIn("ceo", moderator._speakers)
+        self.assertNotIn("eng", moderator._speakers)
+        self.assertEqual(moderator.dismissed, {"eng"})
+
+    async def test_dismissing_responder_keeps_call_open_with_remaining_agent(self):
+        moderator = _Moderator(
+            [AgendaItem("ceo", "close")],
+            {"ceo": make_speaker("ceo", []), "eng": make_speaker("eng", [])},
+        )
+        task = asyncio.create_task(moderator.run_agenda())
+        await asyncio.sleep(0)
+        await moderator.dismiss_speaker("ceo")
+        await asyncio.sleep(0.05)
+        self.assertFalse(task.done())
+        moderator.end_call()
+        self.assertEqual(await asyncio.wait_for(task, timeout=1), ["ceo"])
+
     async def test_no_open_floor_when_the_closer_never_joined(self):
         agenda = [AgendaItem("missing", "close")]
         moderator = Moderator(agenda, {}, open_floor_seconds=0.05)

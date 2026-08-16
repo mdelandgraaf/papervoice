@@ -16,7 +16,9 @@ logger = logging.getLogger("papervoice.moderator")
 
 DEFAULT_TURN_TIMEOUT_SECONDS = 45.0
 DEFAULT_BARGE_IN_REPLY_TIMEOUT_SECONDS = 8.0
-DEFAULT_OPEN_FLOOR_SECONDS = 20.0
+# Kept as an optional test/compatibility escape hatch. Production passes None:
+# the board, not silence, decides when the call is over (PER-162).
+DEFAULT_OPEN_FLOOR_SECONDS: float | None = None
 DEFAULT_ASK_AND_WAIT_TIMEOUT_SECONDS = 20.0
 
 
@@ -41,10 +43,12 @@ class SpeakerHandle:
         identity: str,
         speak: Callable[[str], Awaitable[str | None]],
         interrupt: Callable[[], Awaitable[None]],
+        leave: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self.identity = identity
         self._speak = speak
         self._interrupt = interrupt
+        self._leave = leave
 
     async def speak(self, prompt: str) -> str | None:
         """Speak `prompt` and return the text actually said, if known (used to
@@ -54,6 +58,10 @@ class SpeakerHandle:
 
     async def interrupt(self) -> None:
         await self._interrupt()
+
+    async def leave(self) -> None:
+        if self._leave is not None:
+            await self._leave()
 
 
 class Moderator:
@@ -78,12 +86,10 @@ class Moderator:
     board test call: "I think Eng wasn't finished with his update"). After
     the barge-in answer, `_run_turn` now grants the same agent one more turn
     to finish the original prompt before moving on.
-    The call doesn't hang up the instant the script ends, either: once the
-    agenda is exhausted, `run_agenda` holds the floor open for
-    `open_floor_seconds` so a human who wants to speak up after the closing
-    line finishes — not mid-sentence, i.e. not a barge-in — still gets heard
-    before every session gets torn down (see PER-75 board feedback: "suddenly
-    they all left the chat").
+    The call does not hang up when the script ends: once the agenda is exhausted,
+    `run_agenda` keeps the floor open until the last human leaves. Silence is
+    never a departure signal. A sentence-level imperative naming one agent may
+    dismiss only that agent (PER-162).
     Steering isn't only human-initiated: everything above fires on a human's
     own initiative (interrupting mid-turn, or speaking up once the agenda
     ends). `_ask_and_wait` is the agent-initiated mirror — a persona's own
@@ -98,7 +104,7 @@ class Moderator:
         speakers: dict[str, SpeakerHandle],
         turn_timeout_seconds: float = DEFAULT_TURN_TIMEOUT_SECONDS,
         barge_in_reply_timeout_seconds: float = DEFAULT_BARGE_IN_REPLY_TIMEOUT_SECONDS,
-        open_floor_seconds: float = DEFAULT_OPEN_FLOOR_SECONDS,
+        open_floor_seconds: float | None = DEFAULT_OPEN_FLOOR_SECONDS,
         ask_and_wait_timeout_seconds: float = DEFAULT_ASK_AND_WAIT_TIMEOUT_SECONDS,
     ) -> None:
         self._agenda = list(agenda)
@@ -110,6 +116,8 @@ class Moderator:
         self.current_speaker: str | None = None
         self.transcript: list[tuple[str, str]] = []
         self.dropped: set[str] = set()
+        self.dismissed: set[str] = set()
+        self._call_ended = asyncio.Event()
         # Paperclip issues filed live during the call (see boardroom.py's
         # file_followup_issue tool), for the post-call summary comment.
         self.filed_issues: list[tuple[str, str]] = []
@@ -127,6 +135,27 @@ class Moderator:
 
     def add_speaker(self, identity: str, handle: SpeakerHandle) -> None:
         self._speakers[identity] = handle
+
+    async def dismiss_speaker(self, identity: str) -> bool:
+        """Remove only the explicitly named agent from the live conversation."""
+        speaker = self._speakers.pop(identity, None)
+        if speaker is None:
+            return False
+        self.dismissed.add(identity)
+        if self.current_speaker == identity:
+            self.current_speaker = None
+            await speaker.interrupt()
+        if self._awaiting_reply_to == identity:
+            self._awaiting_reply_to = None
+            self._human_reply_ready.set()
+        await speaker.leave()
+        return True
+
+    def end_call(self) -> None:
+        """End the call because the last human participant left."""
+        self._call_ended.set()
+        self._human_reply_ready.set()
+        self._human_speech_stopped.set()
 
     def record_filed_issue(self, identifier: str, title: str) -> None:
         """Record a Paperclip issue filed live during the call, for the post-call summary."""
@@ -177,8 +206,8 @@ class Moderator:
         self._human_speech_stopped.set()
 
     async def run_agenda(self) -> list[str]:
-        """Run the standup agenda in order, then hold the floor open briefly
-        for a final human question before the call ends. Returns the
+        """Run the standup agenda in order, then hold the floor open until the
+        human leaves the call. Returns the
         identities that completed their turn."""
         completed = []
         for item in self._agenda:
@@ -189,24 +218,25 @@ class Moderator:
         return completed
 
     async def _hold_open_floor(self, responder_identity: str) -> None:
-        """Keep the post-agenda discussion open until a full quiet interval.
+        """Keep the post-agenda discussion open until the human leaves.
 
-        Each human utterance resets the ``open_floor_seconds`` inactivity
-        window after the responder finishes answering it. Treating this as a
-        one-question grace period used to tear every session down immediately
-        after the first answer even when the board was still having a
-        discussion (PER-152).
+        A finite ``open_floor_seconds`` remains available only for focused tests;
+        production uses no inactivity deadline (PER-162).
         """
-        if responder_identity in self.dropped or responder_identity not in self._speakers:
-            return
-        while responder_identity not in self.dropped and responder_identity in self._speakers:
+        while not self._call_ended.is_set():
+            if responder_identity in self.dropped or responder_identity not in self._speakers:
+                available = [identity for identity in self._speakers if identity not in self.dropped]
+                if not available:
+                    return
+                responder_identity = available[0]
             self._awaiting_reply_to = responder_identity
             self._human_reply_ready.clear()
             answered = await self._respond_to_barge_in(
                 responder_identity,
                 reply_timeout_seconds=self._open_floor_seconds,
+                wait_until_call_ends=self._open_floor_seconds is None,
             )
-            if not answered:
+            if not answered and self._open_floor_seconds is not None:
                 return
 
     async def _ask_and_wait(self, identity: str, question: str, timeout: float | None = None) -> str | None:
@@ -310,7 +340,7 @@ class Moderator:
         return True
 
     async def _respond_to_barge_in(
-        self, responder_identity: str, *, reply_timeout_seconds: float | None = None
+        self, responder_identity: str, *, reply_timeout_seconds: float | None = None, wait_until_call_ends: bool = False
     ) -> bool:
         """A barge-in just cut ``responder_identity`` off mid-turn (or the
         agenda just ended and the floor is being held open for a final
@@ -323,7 +353,18 @@ class Moderator:
         timeout = reply_timeout_seconds if reply_timeout_seconds is not None else self._barge_in_reply_timeout_seconds
         while True:
             try:
-                await asyncio.wait_for(self._human_reply_ready.wait(), timeout=timeout)
+                if wait_until_call_ends:
+                    reply_wait = asyncio.create_task(self._human_reply_ready.wait())
+                    end_wait = asyncio.create_task(self._call_ended.wait())
+                    done, pending = await asyncio.wait(
+                        {reply_wait, end_wait}, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    for task in pending:
+                        task.cancel()
+                    if end_wait in done:
+                        return False
+                else:
+                    await asyncio.wait_for(self._human_reply_ready.wait(), timeout=timeout)
             except TimeoutError:
                 if reply_timeout_seconds is not None and self._human_speaking:
                     logger.info("human still speaking at inactivity deadline; keeping floor open")
@@ -342,6 +383,8 @@ class Moderator:
             question = self._pending_reply_text
             self._awaiting_reply_to = None
             self._human_reply_ready.clear()
+            if self._call_ended.is_set():
+                return False
             if responder_identity in self.dropped or responder_identity not in self._speakers:
                 return False
 

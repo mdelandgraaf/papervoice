@@ -30,6 +30,7 @@ PER-79.
 import asyncio
 import logging
 import os
+import re
 
 from dotenv import load_dotenv
 
@@ -73,6 +74,20 @@ def _fire_and_forget(coro, *, name: str) -> asyncio.Task:
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return task
+
+
+def _dismissal_target(text: str, roster: tuple[Persona, ...]) -> str | None:
+    """Resolve only an explicit, named request for one agent to leave."""
+    normalized = " ".join(text.lower().split())
+    for persona in roster:
+        names = {persona.display_name.lower(), persona.identity.lower().removeprefix("agent-")}
+        for name in names:
+            escaped = re.escape(name)
+            direct = rf"\A(?:please )?{escaped}[, ]+(?:please )?(?:leave|exit|drop off|go now)(?:[.!?]|\Z)"
+            indirect = rf"\A(?:ask|tell) {escaped} to (?:leave|exit|drop off)(?:[.!?]|\Z)"
+            if re.search(direct, normalized) or re.search(indirect, normalized):
+                return persona.identity
+    return None
 
 
 def _standup_agenda(
@@ -333,7 +348,9 @@ async def _connect_agent(room_name: str, persona: Persona, moderator: Moderator)
     return session, room
 
 
-async def _connect_transcriber(room_name: str, moderator: Moderator) -> tuple[AgentSession, rtc.Room]:
+async def _connect_transcriber(
+    room_name: str, moderator: Moderator, roster: tuple[Persona, ...]
+) -> tuple[AgentSession, rtc.Room]:
     token = lk_vendor.mint_join_token(TRANSCRIBER_IDENTITY, room_name, ttl_hours=1, agent=True)
     room = rtc.Room()
     await room.connect(os.environ["LIVEKIT_URL"], token)
@@ -343,6 +360,11 @@ async def _connect_transcriber(room_name: str, moderator: Moderator) -> tuple[Ag
 
     def on_transcribed(ev: UserInputTranscribedEvent) -> None:
         if ev.is_final and ev.transcript.strip():
+            text = ev.transcript.strip()
+            target = _dismissal_target(text, roster)
+            if target is not None:
+                logger.info("explicit request for %s to leave", target)
+                _fire_and_forget(moderator.dismiss_speaker(target), name=f"dismiss-{target}")
             moderator.record_transcript(ev.speaker_id or "human", ev.transcript.strip())
 
     def on_user_state_changed(ev: UserStateChangedEvent) -> None:
@@ -354,6 +376,18 @@ async def _connect_transcriber(room_name: str, moderator: Moderator) -> tuple[Ag
 
     session.on("user_input_transcribed", on_transcribed)
     session.on("user_state_changed", on_user_state_changed)
+
+    human_kinds = {rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD, rtc.ParticipantKind.PARTICIPANT_KIND_SIP}
+
+    def on_participant_disconnected(participant: rtc.RemoteParticipant) -> None:
+        if participant.kind not in human_kinds:
+            return
+        humans_remaining = any(p.kind in human_kinds for p in room.remote_participants.values())
+        if not humans_remaining:
+            logger.info("last human left; ending call")
+            moderator.end_call()
+
+    room.on("participant_disconnected", on_participant_disconnected)
 
     await session.start(
         agent=Agent(instructions="You silently transcribe the room; you never speak."),
@@ -393,7 +427,9 @@ def _spoken_text(handle) -> str | None:
     return "\n".join(texts) if texts else None
 
 
-def _speaker_handle(identity: str, session: AgentSession, moderator: Moderator) -> SpeakerHandle:
+def _speaker_handle(
+    identity: str, session: AgentSession, room: rtc.Room, moderator: Moderator
+) -> SpeakerHandle:
     async def speak(prompt: str) -> str | None:
         context = moderator.recent_transcript_text()
         instructions = prompt if not context else f"Recent conversation:\n{context}\n\n{prompt}"
@@ -411,7 +447,12 @@ def _speaker_handle(identity: str, session: AgentSession, moderator: Moderator) 
         # of discarding it silently.
         await session.interrupt(force=True)
 
-    return SpeakerHandle(identity, speak, interrupt)
+    async def leave() -> None:
+        await session.aclose()
+        await room.disconnect()
+
+    return SpeakerHandle(identity, speak, interrupt, leave)
+
 
 
 async def run_standup(
@@ -440,7 +481,7 @@ async def run_standup(
     rooms: list[rtc.Room] = []
     completed: list[str] = []
     try:
-        transcriber_session, transcriber_room = await _connect_transcriber(room_name, moderator)
+        transcriber_session, transcriber_room = await _connect_transcriber(room_name, moderator, roster)
         sessions.append(transcriber_session)
         rooms.append(transcriber_room)
 
@@ -453,7 +494,7 @@ async def run_standup(
                 continue
             sessions.append(session)
             rooms.append(room)
-            moderator.add_speaker(persona.identity, _speaker_handle(persona.identity, session, moderator))
+            moderator.add_speaker(persona.identity, _speaker_handle(persona.identity, session, room, moderator))
 
         completed = await moderator.run_agenda()
         return completed

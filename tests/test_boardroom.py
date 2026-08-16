@@ -24,6 +24,7 @@ from papervoice.boardroom import (
     _build_summary,
     _file_issue_tool,
     _fire_and_forget,
+    _dismissal_target,
     _load_context,
     _pass_on_reacting,
     _standup_agenda,
@@ -37,6 +38,16 @@ def _auth_error(status_code: int = 401) -> httpx.HTTPStatusError:
     request = httpx.Request("GET", "https://example.invalid")
     response = httpx.Response(status_code, request=request)
     return httpx.HTTPStatusError("unauthorized", request=request, response=response)
+
+
+class ExplicitDismissalTest(unittest.TestCase):
+    def test_requires_a_named_imperative(self):
+        self.assertEqual(_dismissal_target("CEO, please leave.", BOARDROOM_ROSTER), "agent-ceo")
+        self.assertIsNone(_dismissal_target("Should the CEO leave?", BOARDROOM_ROSTER))
+        self.assertIsNone(_dismissal_target("Everyone can leave", BOARDROOM_ROSTER))
+
+    def test_targets_only_the_named_agent(self):
+        self.assertEqual(_dismissal_target("Tell Eng to drop off", BOARDROOM_ROSTER), "agent-eng")
 
 
 class StandupAgendaTest(unittest.TestCase):
