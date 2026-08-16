@@ -528,6 +528,171 @@ function JoinLinkSection({ companyId }) {
     )
   ] });
 }
+var DEFAULT_MODERATOR = `This is a daily standup, and you are the moderator. You open the standup, keep it on time, and close it. Be concise and conversational \u2014 one or two sentences per turn, no lists, no markdown. This is a live multi-party voice call. Report what Paperclip issues on your name you have done recently, what's still pending, what needs decisions from the board, and any blockers. After your update, give the floor to another agent. If you have a genuinely useful reaction \u2014 advice, a question \u2014 give it. If not, call the pass_on_reacting tool and don't say anything else; don't force a comment just to fill air time. If a human starts talking while you're mid-sentence, stop immediately. If you need the board's steering or a decision before you can continue, ask the question out loud and then call the ask_board tool with that same question to wait for their answer \u2014 don't just guess or wait for the human to bring it up on their own.`;
+var DEFAULT_PARTICIPANT = `This is a live multi-party voice call daily standup, and you are a participant. Your role is to update the moderator and board with the latest status of your recent Paperclip issues, and to ask questions if there are blockers or decisions that need to be taken. Be concise and conversational \u2014 one or two sentences per issue, no lists, no markdown. Report what Paperclip issues on your name you have done recently, what's still pending, what needs decisions from the board, and any blockers. After your update, give the floor to another agent. If you have a genuinely useful reaction \u2014 advice, a question \u2014 give it. If not, call the pass_on_reacting tool and don't say anything else; don't force a comment just to fill air time. If a human starts talking while you're mid-sentence, stop immediately. If you need the board's steering or a decision before you can continue, ask the question out loud and then call the ask_board tool with that same question to wait for their answer \u2014 don't just guess or wait for the human to bring it up on their own.`;
+var DEFAULT_AGENDA_OPENING = `Open the standup: greet everyone, introduce this as a Papervoice voice standup, and hand it to {next_speaker} for their update.`;
+function PromptsSection({ companyId }) {
+  const [promptModerator, setPromptModerator] = useState("");
+  const [promptParticipant, setPromptParticipant] = useState("");
+  const [promptAgendaOpening, setPromptAgendaOpening] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState(null);
+  useEffect(() => {
+    fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`).then(async (r) => {
+      if (!r.ok) return;
+      const body = await r.json();
+      const values = body.configJson ?? body;
+      setPromptModerator(values.promptModerator ?? "");
+      setPromptParticipant(values.promptParticipant ?? "");
+      setPromptAgendaOpening(values.promptAgendaOpening ?? "");
+    }).catch(() => {
+    }).finally(() => setLoading(false));
+  }, [companyId]);
+  async function savePrompts() {
+    setMessage(null);
+    const currentResp = await fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`);
+    const currentBody = currentResp.ok ? await currentResp.json().catch(() => ({})) : {};
+    const existing = currentBody.configJson ?? currentBody;
+    const response = await fetch("/api/plugins/papervoice/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        companyId,
+        configJson: {
+          ...existing,
+          promptModerator: promptModerator.trim() || null,
+          promptParticipant: promptParticipant.trim() || null,
+          promptAgendaOpening: promptAgendaOpening.trim() || null
+        }
+      })
+    });
+    const body = await response.json().catch(() => ({}));
+    setMessage(response.ok ? "Prompts saved." : body.error ?? `Save failed (${response.status})`);
+  }
+  const areaStyle = {
+    border: "1px solid #e2e8f0",
+    borderRadius: 6,
+    padding: "8px 10px",
+    fontSize: 12,
+    fontFamily: "monospace",
+    resize: "vertical",
+    minHeight: 100,
+    background: "#f8fafc",
+    color: "#0f172a",
+    width: "100%",
+    boxSizing: "border-box",
+    outline: "none"
+  };
+  const labelStyle = { fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 2, display: "block" };
+  const hintStyle = { fontSize: 11, color: "#94a3b8", marginBottom: 4 };
+  if (loading) return /* @__PURE__ */ jsx(Spinner, {});
+  return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 12 }, children: [
+    /* @__PURE__ */ jsx("h2", { style: { fontSize: 16, fontWeight: 600, color: "#0f172a" }, children: "Prompts" }),
+    /* @__PURE__ */ jsx("p", { style: { fontSize: 12, color: "#64748b", margin: 0 }, children: "Customise the instructions that drive agent behaviour during a standup. Leave a field blank to use the built-in default. Changes take effect at the start of the next call." }),
+    /* @__PURE__ */ jsxs(
+      "div",
+      {
+        style: {
+          background: "#fff",
+          border: "1px solid #e2e8f0",
+          borderRadius: 8,
+          padding: 16,
+          display: "flex",
+          flexDirection: "column",
+          gap: 14
+        },
+        children: [
+          /* @__PURE__ */ jsxs("div", { children: [
+            /* @__PURE__ */ jsx("label", { style: labelStyle, children: "Moderator system prompt" }),
+            /* @__PURE__ */ jsx("p", { style: hintStyle, children: "System-level instructions for the standup moderator agent." }),
+            /* @__PURE__ */ jsx(
+              "textarea",
+              {
+                value: promptModerator,
+                placeholder: DEFAULT_MODERATOR,
+                onChange: (e) => setPromptModerator(e.target.value),
+                style: areaStyle,
+                rows: 6
+              }
+            )
+          ] }),
+          /* @__PURE__ */ jsxs("div", { children: [
+            /* @__PURE__ */ jsx("label", { style: labelStyle, children: "Participant system prompt" }),
+            /* @__PURE__ */ jsx("p", { style: hintStyle, children: "System-level instructions for participant (non-moderator) agents." }),
+            /* @__PURE__ */ jsx(
+              "textarea",
+              {
+                value: promptParticipant,
+                placeholder: DEFAULT_PARTICIPANT,
+                onChange: (e) => setPromptParticipant(e.target.value),
+                style: areaStyle,
+                rows: 6
+              }
+            )
+          ] }),
+          /* @__PURE__ */ jsxs("div", { children: [
+            /* @__PURE__ */ jsx("label", { style: labelStyle, children: "Opening agenda prompt" }),
+            /* @__PURE__ */ jsxs("p", { style: hintStyle, children: [
+              "Instructions for the moderator's opening turn. Use ",
+              /* @__PURE__ */ jsx("code", { children: "{next_speaker}" }),
+              " where the first update speaker's name should appear."
+            ] }),
+            /* @__PURE__ */ jsx(
+              "textarea",
+              {
+                value: promptAgendaOpening,
+                placeholder: DEFAULT_AGENDA_OPENING,
+                onChange: (e) => setPromptAgendaOpening(e.target.value),
+                style: { ...areaStyle, minHeight: 60 },
+                rows: 3
+              }
+            )
+          ] }),
+          /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 10 }, children: [
+            /* @__PURE__ */ jsx(
+              "button",
+              {
+                onClick: savePrompts,
+                style: {
+                  background: "#2563eb",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 6,
+                  padding: "8px 18px",
+                  fontWeight: 600,
+                  fontSize: 13,
+                  cursor: "pointer"
+                },
+                children: "Save Prompts"
+              }
+            ),
+            /* @__PURE__ */ jsx(
+              "button",
+              {
+                onClick: () => {
+                  setPromptModerator("");
+                  setPromptParticipant("");
+                  setPromptAgendaOpening("");
+                },
+                style: {
+                  background: "none",
+                  color: "#64748b",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 6,
+                  padding: "8px 14px",
+                  fontSize: 12,
+                  cursor: "pointer"
+                },
+                children: "Reset to defaults"
+              }
+            )
+          ] }),
+          message && /* @__PURE__ */ jsx("div", { style: { fontSize: 12, color: message === "Prompts saved." ? "#166534" : "#dc2626" }, children: message })
+        ]
+      }
+    )
+  ] });
+}
 function SettingsSection({
   companyId,
   workerRunning,
@@ -562,12 +727,16 @@ function SettingsSection({
   }, [companyId]);
   async function saveLiveKitConfig() {
     setMessage(null);
+    const currentResp = await fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`);
+    const currentBody = currentResp.ok ? await currentResp.json().catch(() => ({})) : {};
+    const existing = currentBody.configJson ?? currentBody;
     const response = await fetch("/api/plugins/papervoice/config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         companyId,
         configJson: {
+          ...existing,
           liveKitUrl: liveKitUrl.trim(),
           liveKitApiKeyRef: { type: "secret_ref", secretId: apiKeySecretId.trim() },
           liveKitApiSecretRef: { type: "secret_ref", secretId: apiSecretSecretId.trim() },
@@ -666,6 +835,7 @@ function PapervoicePage({ context }) {
   const tabs = [
     { id: "agents", label: "Agents" },
     { id: "join", label: "Join Link" },
+    { id: "prompts", label: "Prompts" },
     { id: "settings", label: "Settings" }
   ];
   return /* @__PURE__ */ jsxs(
@@ -726,6 +896,7 @@ function PapervoicePage({ context }) {
           }
         ),
         activeTab === "join" && /* @__PURE__ */ jsx(JoinLinkSection, { companyId }),
+        activeTab === "prompts" && /* @__PURE__ */ jsx(PromptsSection, { companyId }),
         activeTab === "settings" && /* @__PURE__ */ jsx(
           SettingsSection,
           {

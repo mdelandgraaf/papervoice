@@ -39,6 +39,21 @@ var manifest = {
         type: "string",
         title: "Default room",
         default: "papervoice-boardroom"
+      },
+      promptModerator: {
+        type: "string",
+        title: "Moderator system prompt",
+        description: "System-level instructions for the standup moderator agent. Leave blank to use the built-in default."
+      },
+      promptParticipant: {
+        type: "string",
+        title: "Participant system prompt",
+        description: "System-level instructions for participant (non-moderator) agents. Leave blank to use the built-in default."
+      },
+      promptAgendaOpening: {
+        type: "string",
+        title: "Opening agenda prompt",
+        description: "Instructions for the moderator's opening turn. Use {next_speaker} where the first update speaker's name should appear. Leave blank to use the built-in default."
       }
     },
     required: ["liveKitUrl", "liveKitApiKeyRef", "liveKitApiSecretRef"],

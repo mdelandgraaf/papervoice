@@ -44,6 +44,7 @@ from livekit.plugins import anthropic, silero
 
 from papervoice.moderator import AgendaItem, Moderator, SpeakerHandle
 from papervoice.personas import BOARDROOM_ROOM, Persona, load_roster_from_paperclip
+from papervoice.prompts import PromptConfig, load_prompt_config
 from papervoice.vendors import elevenlabs as el_vendor
 from papervoice.vendors import livekit as lk_vendor
 from papervoice.vendors import paperclip as pc_vendor
@@ -94,6 +95,7 @@ def _standup_agenda(
     roster: tuple[Persona, ...],
     context: dict[str, str] | None = None,
     paperclip_offline: bool = False,
+    prompt_cfg: PromptConfig | None = None,
 ) -> list[AgendaItem]:
     """Build the agenda. `context` (Milestone 3) is identity -> a one-line live Paperclip
     briefing from _load_context(); folded into each status-update prompt so agents report
@@ -115,6 +117,7 @@ def _standup_agenda(
     call time this turned out to cost.
     """
     context = context or {}
+    cfg = prompt_cfg or PromptConfig()
     opener, *rest = roster
     offline_notice = (
         " Mention briefly that Paperclip board tools are offline for this call (access"
@@ -122,12 +125,9 @@ def _standup_agenda(
         if paperclip_offline
         else ""
     )
+    opening_prompt = cfg.agenda_opening.format(next_speaker=rest[0].display_name) + offline_notice
     items = [
-        AgendaItem(
-            opener.identity,
-            "Open the standup: greet everyone, say this is the Papervoice milestone-three"
-            f" test call, and hand it to {rest[0].display_name} for their update.{offline_notice}",
-        )
+        AgendaItem(opener.identity, opening_prompt)
     ]
     for i, persona in enumerate(rest):
         if i > 0:
@@ -471,11 +471,13 @@ async def run_standup(
     which falls back to the static BOARDROOM_ROSTER if the API is unreachable).
     Pass an explicit roster in tests or when the caller has already loaded it.
     """
+    prompt_cfg = await asyncio.to_thread(load_prompt_config)
     if roster is None:
-        roster = await asyncio.to_thread(load_roster_from_paperclip)
+        roster = await asyncio.to_thread(load_roster_from_paperclip, prompt_cfg)
     context, paperclip_offline = await _load_context(roster)
     moderator = Moderator(
-        agenda=_standup_agenda(roster, context, paperclip_offline=paperclip_offline), speakers={}
+        agenda=_standup_agenda(roster, context, paperclip_offline=paperclip_offline, prompt_cfg=prompt_cfg),
+        speakers={},
     )
     sessions: list[AgentSession] = []
     rooms: list[rtc.Room] = []

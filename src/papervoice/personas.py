@@ -49,42 +49,13 @@ _COMMON_STYLE = (
     " — don't just guess or wait for the human to bring it up on their own."
 )
 
-# Instructions for the designated moderator agent. Injected verbatim when
-# metadata.papervoice.moderator is True; replaces the auto-generated opener
-# instructions so the moderator's character and responsibilities are explicit.
-MODERATOR_INSTRUCTIONS = (
-    "This is a daily standup, and you are the moderator and CEO."
-    " You open the standup, keep it on time, and close it."
-    " Be concise and conversational — one or two sentences per turn, no lists, no markdown."
-    " This is a live multi-party voice call."
-    " Report what Paperclip issues on your name you have done recently, what's still pending,"
-    " what needs decisions from the board, and any blockers."
-    " After your update, give the floor to another agent."
-    " If you have a genuinely useful reaction — advice, a question — give it."
-    " If not, call the pass_on_reacting tool and don't say anything else;"
-    " don't force a comment just to fill air time."
-    " If a human starts talking while you're mid-sentence, stop immediately."
-    " If you need the board's steering or a decision before you can continue,"
-    " ask the question out loud and then call the ask_board tool with that same question"
-    " to wait for their answer — don't just guess or wait for the human to bring it up on their own."
-)
+# Default instructions for the designated moderator and participant agents.
+# These are used when no override is configured via the Papervoice plugin settings.
+# See prompts.py for the canonical default strings and the load_prompt_config() loader.
+from papervoice.prompts import DEFAULT_MODERATOR_INSTRUCTIONS, DEFAULT_PARTICIPANT_INSTRUCTIONS
 
-PARTICIPANT_INSTRUCTIONS = (
-    "This is a live multi-party voice call daily standup, and you are a participant."
-    " Your role is to update the moderator and board with the latest status of your recent"
-    " Paperclip issues, and to ask questions if there are blockers or decisions that need to be taken."
-    " Be concise and conversational — one or two sentences per issue, no lists, no markdown."
-    " Report what Paperclip issues on your name you have done recently, what's still pending,"
-    " what needs decisions from the board, and any blockers."
-    " After your update, give the floor to another agent."
-    " If you have a genuinely useful reaction — advice, a question — give it."
-    " If not, call the pass_on_reacting tool and don't say anything else;"
-    " don't force a comment just to fill air time."
-    " If a human starts talking while you're mid-sentence, stop immediately."
-    " If you need the board's steering or a decision before you can continue,"
-    " ask the question out loud and then call the ask_board tool with that same question"
-    " to wait for their answer — don't just guess or wait for the human to bring it up on their own."
-)
+MODERATOR_INSTRUCTIONS = DEFAULT_MODERATOR_INSTRUCTIONS
+PARTICIPANT_INSTRUCTIONS = DEFAULT_PARTICIPANT_INSTRUCTIONS
 
 BOARDROOM_ROSTER = (
     Persona(
@@ -117,12 +88,24 @@ def persona_by_identity(identity: str) -> Persona | None:
 _logger = logging.getLogger(__name__)
 
 
-def _build_instructions(config: "PapervoiceAgentConfig", is_opener: bool) -> str:
-    """Construct persona instructions from a Paperclip agent's live profile fields."""
+def _build_instructions(
+    config: "PapervoiceAgentConfig",
+    is_opener: bool,
+    prompt_cfg: "PromptConfig | None" = None,
+) -> str:
+    """Construct persona instructions from a Paperclip agent's live profile fields.
+
+    When `prompt_cfg` is provided, its moderator/participant instruction overrides take
+    precedence over the built-in defaults. Pass None to use defaults.
+    """
+    from papervoice.prompts import PromptConfig
+
+    cfg = prompt_cfg or PromptConfig()
     if is_opener and config.moderator:
-        return MODERATOR_INSTRUCTIONS
+        return cfg.moderator_instructions
     if not is_opener:
-        return PARTICIPANT_INSTRUCTIONS
+        return cfg.participant_instructions
+    # Non-moderator opener: build from agent profile (unusual — falls back to _COMMON_STYLE)
     intro = f"You are {config.name}"
     if config.title:
         intro += f", {config.title}"
@@ -135,22 +118,27 @@ def _build_instructions(config: "PapervoiceAgentConfig", is_opener: bool) -> str
     return f"{intro} {body}" + _COMMON_STYLE
 
 
-def build_persona_from_agent(config: "PapervoiceAgentConfig", is_opener: bool) -> Persona:
+def build_persona_from_agent(
+    config: "PapervoiceAgentConfig",
+    is_opener: bool,
+    prompt_cfg: "PromptConfig | None" = None,
+) -> Persona:
     """Build a Persona from a live Paperclip agent's voice config and profile.
 
     `is_opener` marks the agent as the standup opener/closer — they greet the
     room and run the closing sweep instead of giving a status update.
+    `prompt_cfg` overrides the built-in moderator/participant system prompts.
     """
     return Persona(
         identity=config.livekit_identity,
         display_name=config.display_name,
         voice_id=config.voice_id,
-        instructions=_build_instructions(config, is_opener=is_opener),
+        instructions=_build_instructions(config, is_opener=is_opener, prompt_cfg=prompt_cfg),
         paperclip_agent_id=config.agent_id,
     )
 
 
-def load_roster_from_paperclip() -> tuple[Persona, ...]:
+def load_roster_from_paperclip(prompt_cfg: "PromptConfig | None" = None) -> tuple[Persona, ...]:
     """Build the boardroom roster from Paperclip agents with metadata.papervoice.enabled.
 
     Agents are ordered by their metadata.papervoice.roster_order value; the first
@@ -180,7 +168,7 @@ def load_roster_from_paperclip() -> tuple[Persona, ...]:
         ordered = [moderator_cfg] + [c for c in configs if c is not moderator_cfg]
     else:
         ordered = list(configs)
-    return tuple(build_persona_from_agent(cfg, is_opener=(i == 0)) for i, cfg in enumerate(ordered))
+    return tuple(build_persona_from_agent(cfg, is_opener=(i == 0), prompt_cfg=prompt_cfg) for i, cfg in enumerate(ordered))
 
 
 # Forward-reference type alias (resolved at call time, not import time — avoids a hard
@@ -189,3 +177,4 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from papervoice.vendors.paperclip import PapervoiceAgentConfig
+    from papervoice.prompts import PromptConfig

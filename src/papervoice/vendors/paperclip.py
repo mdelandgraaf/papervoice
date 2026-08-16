@@ -197,6 +197,25 @@ def is_auth_error(exc: Exception) -> bool:
     return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in (401, 403)
 
 
+def get_plugin_config() -> dict:
+    """Fetch the Papervoice plugin configuration from the Paperclip API.
+
+    Returns the raw configJson dict (empty dict on a 404 / unconfigured instance).
+    Raises on any other HTTP error.
+    """
+    resp = httpx.get(
+        f"{_api_base()}/api/plugins/papervoice/config",
+        headers=_headers(),
+        params={"companyId": _company_id()},
+        timeout=_TIMEOUT,
+    )
+    if resp.status_code == 404:
+        return {}
+    resp.raise_for_status()
+    body = resp.json()
+    return body.get("configJson") or {}
+
+
 def list_agent_ids() -> set[str]:
     """All agent ids in the company — used by scripts/healthcheck to catch the persona
     roster's paperclip_agent_id values drifting off the company (agent renamed/removed)."""

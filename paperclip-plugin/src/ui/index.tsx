@@ -553,6 +553,178 @@ function JoinLinkSection({ companyId }: { companyId: string }) {
   );
 }
 
+const DEFAULT_MODERATOR = `This is a daily standup, and you are the moderator. You open the standup, keep it on time, and close it. Be concise and conversational — one or two sentences per turn, no lists, no markdown. This is a live multi-party voice call. Report what Paperclip issues on your name you have done recently, what's still pending, what needs decisions from the board, and any blockers. After your update, give the floor to another agent. If you have a genuinely useful reaction — advice, a question — give it. If not, call the pass_on_reacting tool and don't say anything else; don't force a comment just to fill air time. If a human starts talking while you're mid-sentence, stop immediately. If you need the board's steering or a decision before you can continue, ask the question out loud and then call the ask_board tool with that same question to wait for their answer — don't just guess or wait for the human to bring it up on their own.`;
+
+const DEFAULT_PARTICIPANT = `This is a live multi-party voice call daily standup, and you are a participant. Your role is to update the moderator and board with the latest status of your recent Paperclip issues, and to ask questions if there are blockers or decisions that need to be taken. Be concise and conversational — one or two sentences per issue, no lists, no markdown. Report what Paperclip issues on your name you have done recently, what's still pending, what needs decisions from the board, and any blockers. After your update, give the floor to another agent. If you have a genuinely useful reaction — advice, a question — give it. If not, call the pass_on_reacting tool and don't say anything else; don't force a comment just to fill air time. If a human starts talking while you're mid-sentence, stop immediately. If you need the board's steering or a decision before you can continue, ask the question out loud and then call the ask_board tool with that same question to wait for their answer — don't just guess or wait for the human to bring it up on their own.`;
+
+const DEFAULT_AGENDA_OPENING = `Open the standup: greet everyone, introduce this as a Papervoice voice standup, and hand it to {next_speaker} for their update.`;
+
+function PromptsSection({ companyId }: { companyId: string }) {
+  const [promptModerator, setPromptModerator] = useState("");
+  const [promptParticipant, setPromptParticipant] = useState("");
+  const [promptAgendaOpening, setPromptAgendaOpening] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`)
+      .then(async (r) => {
+        if (!r.ok) return;
+        const body = await r.json();
+        const values = body.configJson ?? body;
+        setPromptModerator(values.promptModerator ?? "");
+        setPromptParticipant(values.promptParticipant ?? "");
+        setPromptAgendaOpening(values.promptAgendaOpening ?? "");
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [companyId]);
+
+  async function savePrompts() {
+    setMessage(null);
+    // Preserve other config fields (LiveKit settings etc.)
+    const currentResp = await fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`);
+    const currentBody = currentResp.ok ? await currentResp.json().catch(() => ({})) : {};
+    const existing = currentBody.configJson ?? currentBody;
+    const response = await fetch("/api/plugins/papervoice/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        companyId,
+        configJson: {
+          ...existing,
+          promptModerator: promptModerator.trim() || null,
+          promptParticipant: promptParticipant.trim() || null,
+          promptAgendaOpening: promptAgendaOpening.trim() || null,
+        },
+      }),
+    });
+    const body = await response.json().catch(() => ({}));
+    setMessage(response.ok ? "Prompts saved." : body.error ?? `Save failed (${response.status})`);
+  }
+
+  const areaStyle: React.CSSProperties = {
+    border: "1px solid #e2e8f0",
+    borderRadius: 6,
+    padding: "8px 10px",
+    fontSize: 12,
+    fontFamily: "monospace",
+    resize: "vertical" as const,
+    minHeight: 100,
+    background: "#f8fafc",
+    color: "#0f172a",
+    width: "100%",
+    boxSizing: "border-box" as const,
+    outline: "none",
+  };
+
+  const labelStyle: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 2, display: "block" };
+  const hintStyle: React.CSSProperties = { fontSize: 11, color: "#94a3b8", marginBottom: 4 };
+
+  if (loading) return <Spinner />;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <h2 style={{ fontSize: 16, fontWeight: 600, color: "#0f172a" }}>Prompts</h2>
+      <p style={{ fontSize: 12, color: "#64748b", margin: 0 }}>
+        Customise the instructions that drive agent behaviour during a standup.
+        Leave a field blank to use the built-in default. Changes take effect at the start of the next call.
+      </p>
+      <div
+        style={{
+          background: "#fff",
+          border: "1px solid #e2e8f0",
+          borderRadius: 8,
+          padding: 16,
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+        }}
+      >
+        <div>
+          <label style={labelStyle}>Moderator system prompt</label>
+          <p style={hintStyle}>System-level instructions for the standup moderator agent.</p>
+          <textarea
+            value={promptModerator}
+            placeholder={DEFAULT_MODERATOR}
+            onChange={(e) => setPromptModerator(e.target.value)}
+            style={areaStyle}
+            rows={6}
+          />
+        </div>
+
+        <div>
+          <label style={labelStyle}>Participant system prompt</label>
+          <p style={hintStyle}>System-level instructions for participant (non-moderator) agents.</p>
+          <textarea
+            value={promptParticipant}
+            placeholder={DEFAULT_PARTICIPANT}
+            onChange={(e) => setPromptParticipant(e.target.value)}
+            style={areaStyle}
+            rows={6}
+          />
+        </div>
+
+        <div>
+          <label style={labelStyle}>Opening agenda prompt</label>
+          <p style={hintStyle}>
+            Instructions for the moderator&apos;s opening turn. Use <code>{"{next_speaker}"}</code> where the
+            first update speaker&apos;s name should appear.
+          </p>
+          <textarea
+            value={promptAgendaOpening}
+            placeholder={DEFAULT_AGENDA_OPENING}
+            onChange={(e) => setPromptAgendaOpening(e.target.value)}
+            style={{ ...areaStyle, minHeight: 60 }}
+            rows={3}
+          />
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button
+            onClick={savePrompts}
+            style={{
+              background: "#2563eb",
+              color: "#fff",
+              border: "none",
+              borderRadius: 6,
+              padding: "8px 18px",
+              fontWeight: 600,
+              fontSize: 13,
+              cursor: "pointer",
+            }}
+          >
+            Save Prompts
+          </button>
+          <button
+            onClick={() => {
+              setPromptModerator("");
+              setPromptParticipant("");
+              setPromptAgendaOpening("");
+            }}
+            style={{
+              background: "none",
+              color: "#64748b",
+              border: "1px solid #e2e8f0",
+              borderRadius: 6,
+              padding: "8px 14px",
+              fontSize: 12,
+              cursor: "pointer",
+            }}
+          >
+            Reset to defaults
+          </button>
+        </div>
+        {message && (
+          <div style={{ fontSize: 12, color: message === "Prompts saved." ? "#166534" : "#dc2626" }}>
+            {message}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SettingsSection({
   companyId,
   workerRunning,
@@ -600,12 +772,17 @@ function SettingsSection({
 
   async function saveLiveKitConfig() {
     setMessage(null);
+    // Fetch current config first so we preserve other fields (e.g. prompt overrides)
+    const currentResp = await fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`);
+    const currentBody = currentResp.ok ? await currentResp.json().catch(() => ({})) : {};
+    const existing = currentBody.configJson ?? currentBody;
     const response = await fetch("/api/plugins/papervoice/config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         companyId,
         configJson: {
+          ...existing,
           liveKitUrl: liveKitUrl.trim(),
           liveKitApiKeyRef: { type: "secret_ref", secretId: apiKeySecretId.trim() },
           liveKitApiSecretRef: { type: "secret_ref", secretId: apiSecretSecretId.trim() },
@@ -691,7 +868,7 @@ function SettingsSection({
 
 export function PapervoicePage({ context }: PluginCompanySettingsPageProps) {
   const companyId = context.companyId ?? "";
-  const [activeTab, setActiveTab] = useState<"agents" | "join" | "settings">("agents");
+  const [activeTab, setActiveTab] = useState<"agents" | "join" | "prompts" | "settings">("agents");
 
   const { data: agents, loading: agentsLoading, error: agentsError, refresh: refreshAgents } = usePluginData<
     VoiceAgent[]
@@ -702,6 +879,7 @@ export function PapervoicePage({ context }: PluginCompanySettingsPageProps) {
   const tabs = [
     { id: "agents" as const, label: "Agents" },
     { id: "join" as const, label: "Join Link" },
+    { id: "prompts" as const, label: "Prompts" },
     { id: "settings" as const, label: "Settings" },
   ];
 
@@ -767,6 +945,9 @@ export function PapervoicePage({ context }: PluginCompanySettingsPageProps) {
 
       {/* Join Link tab */}
       {activeTab === "join" && <JoinLinkSection companyId={companyId} />}
+
+      {/* Prompts tab */}
+      {activeTab === "prompts" && <PromptsSection companyId={companyId} />}
 
       {/* Settings tab */}
       {activeTab === "settings" && (
