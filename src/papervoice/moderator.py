@@ -174,19 +174,25 @@ class Moderator:
         return completed
 
     async def _hold_open_floor(self, responder_identity: str) -> None:
-        """Give a human `open_floor_seconds` to ask something after the
-        scripted agenda ends, instead of tearing every session down the
-        instant the closing line finishes (see PER-75 board feedback:
-        "suddenly they all left the chat"). Arms the same
-        `_awaiting_reply_to`/`_respond_to_barge_in` machinery a mid-agenda
-        barge-in uses, so any human utterance that lands in this window gets
-        a real answer from `responder_identity` before the call actually ends.
+        """Keep the post-agenda discussion open until a full quiet interval.
+
+        Each human utterance resets the ``open_floor_seconds`` inactivity
+        window after the responder finishes answering it. Treating this as a
+        one-question grace period used to tear every session down immediately
+        after the first answer even when the board was still having a
+        discussion (PER-152).
         """
         if responder_identity in self.dropped or responder_identity not in self._speakers:
             return
-        self._awaiting_reply_to = responder_identity
-        self._human_reply_ready.clear()
-        await self._respond_to_barge_in(responder_identity, reply_timeout_seconds=self._open_floor_seconds)
+        while responder_identity not in self.dropped and responder_identity in self._speakers:
+            self._awaiting_reply_to = responder_identity
+            self._human_reply_ready.clear()
+            answered = await self._respond_to_barge_in(
+                responder_identity,
+                reply_timeout_seconds=self._open_floor_seconds,
+            )
+            if not answered:
+                return
 
     async def _ask_and_wait(self, identity: str, question: str, timeout: float | None = None) -> str | None:
         """Agent-initiated steering ask (PER-83): let `identity` pose `question`
@@ -290,7 +296,7 @@ class Moderator:
 
     async def _respond_to_barge_in(
         self, responder_identity: str, *, reply_timeout_seconds: float | None = None
-    ) -> None:
+    ) -> bool:
         """A barge-in just cut ``responder_identity`` off mid-turn (or the
         agenda just ended and the floor is being held open for a final
         question — see `_hold_open_floor`). Wait briefly for the human's
@@ -309,19 +315,19 @@ class Moderator:
                     timeout,
                 )
                 self._awaiting_reply_to = None
-                return
+                return False
 
             question = self._pending_reply_text
             self._awaiting_reply_to = None
             self._human_reply_ready.clear()
             if responder_identity in self.dropped or responder_identity not in self._speakers:
-                return
+                return False
 
             if not await self._speak(
                 responder_identity,
                 f'Someone just asked: "{question}" Answer them directly and briefly, then continue.',
             ):
-                return
+                return False
 
             if self._awaiting_reply_to != responder_identity:
-                return  # answered cleanly, no further barge-in on the answer itself
+                return True  # answered cleanly, no further barge-in on the answer itself

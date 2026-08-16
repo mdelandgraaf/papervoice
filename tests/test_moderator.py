@@ -336,6 +336,44 @@ class ModeratorOpenFloorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn(("ceo", answer_prompt), log)
         self.assertIsNone(moderator.current_speaker)
 
+    async def test_each_exchange_resets_the_open_floor_inactivity_window(self):
+        log = []
+        answered = asyncio.Event()
+        answer_count = 0
+
+        async def speak(prompt):
+            nonlocal answer_count
+            log.append(("ceo", prompt))
+            if prompt.startswith("Someone just asked"):
+                answer_count += 1
+                answered.set()
+
+        async def interrupt():
+            return None
+
+        moderator = Moderator(
+            [AgendaItem("ceo", "close")],
+            {"ceo": SpeakerHandle("ceo", speak, interrupt)},
+            open_floor_seconds=0.1,
+        )
+
+        task = asyncio.create_task(moderator.run_agenda())
+        await asyncio.sleep(0)
+        moderator.record_transcript("board-member", "first question")
+        await asyncio.wait_for(answered.wait(), timeout=1)
+
+        answered.clear()
+        await asyncio.sleep(0)  # let the moderator re-arm after the first answer
+        self.assertFalse(task.done())
+        moderator.record_transcript("board-member", "follow-up question")
+        await asyncio.wait_for(answered.wait(), timeout=1)
+
+        completed = await asyncio.wait_for(task, timeout=1)
+        self.assertEqual(completed, ["ceo"])
+        self.assertEqual(answer_count, 2)
+        self.assertTrue(any(chr(34) + "first question" + chr(34) in prompt for _, prompt in log))
+        self.assertTrue(any(chr(34) + "follow-up question" + chr(34) in prompt for _, prompt in log))
+
     async def test_silence_after_agenda_ends_closes_the_call_without_hanging(self):
         agenda = [AgendaItem("ceo", "close")]
         speakers = {"ceo": make_speaker("ceo", [])}

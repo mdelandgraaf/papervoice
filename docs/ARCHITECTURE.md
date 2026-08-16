@@ -161,8 +161,10 @@ moderator floor control, human tracks preempt):
    `Moderator.run_agenda` now holds the floor open for `open_floor_seconds` (default 20s) after the
    last completed turn, reusing the barge-in-answer machinery (`_respond_to_barge_in`) so a human
    utterance in that window gets a real answer from whoever closed the meeting before the call
-   actually ends. Silence for the full window (or the closer having dropped/never joined) ends the
-   call exactly as before.
+   actually ends. PER-152 extended that grace period into a real discussion window: after every
+   human question and agent answer, the 20-second inactivity timer restarts. The call now ends only
+   after a full quiet interval (or the closer having dropped/never joined), rather than immediately
+   after the first answer while the conversation is still active.
 10. **A failed agent join no longer leaves a ghost participant.** `_connect_agent` calls
     `room.connect()` before `AgentSession.start()`; if `start()` then fails (bad voice id,
     ElevenLabs quota, etc.) the identity was already visibly connected to the room with no session
