@@ -349,6 +349,8 @@ async def _connect_transcriber(room_name: str, moderator: Moderator) -> tuple[Ag
         if ev.new_state == "speaking":
             logger.info("human speech detected, revoking floor from %s", moderator.current_speaker)
             _fire_and_forget(moderator.on_human_speech_started(), name="barge-in")
+        elif ev.new_state == "listening":
+            moderator.on_human_speech_stopped()
 
     session.on("user_input_transcribed", on_transcribed)
     session.on("user_state_changed", on_user_state_changed)

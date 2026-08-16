@@ -164,7 +164,9 @@ moderator floor control, human tracks preempt):
    actually ends. PER-152 extended that grace period into a real discussion window: after every
    human question and agent answer, the 20-second inactivity timer restarts. The call now ends only
    after a full quiet interval (or the closer having dropped/never joined), rather than immediately
-   after the first answer while the conversation is still active.
+   after the first answer while the conversation is still active. PER-162 also made that inactivity
+   window speech-aware: if a human begins a longer request before the deadline, teardown waits for
+   the utterance to finish and for its final transcript instead of expiring mid-sentence.
 10. **A failed agent join no longer leaves a ghost participant.** `_connect_agent` calls
     `room.connect()` before `AgentSession.start()`; if `start()` then fails (bad voice id,
     ElevenLabs quota, etc.) the identity was already visibly connected to the room with no session

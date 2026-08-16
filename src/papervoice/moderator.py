@@ -120,6 +120,9 @@ class Moderator:
         # the two ever being causally ordered by a single await chain.
         self._awaiting_reply_to: str | None = None
         self._human_reply_ready = asyncio.Event()
+        self._human_speech_stopped = asyncio.Event()
+        self._human_speech_stopped.set()
+        self._human_speaking = False
         self._pending_reply_text: str | None = None
 
     def add_speaker(self, identity: str, handle: SpeakerHandle) -> None:
@@ -132,6 +135,9 @@ class Moderator:
     def record_transcript(self, speaker_identity: str, text: str) -> None:
         """Append a line to the shared transcript every agent's next turn sees as context."""
         self.transcript.append((speaker_identity, text))
+        if speaker_identity not in self._speakers and speaker_identity != "moderator":
+            # A final human transcript is also an authoritative utterance boundary.
+            self.on_human_speech_stopped()
         if self._awaiting_reply_to is not None and speaker_identity not in self._speakers and speaker_identity != "moderator":
             # This is the finished utterance from whoever just barged in —
             # wake up _respond_to_barge_in() waiting on it.
@@ -150,6 +156,10 @@ class Moderator:
 
     async def on_human_speech_started(self) -> None:
         """Barge-in: a human started talking. Revoke the floor and cancel agent TTS immediately."""
+        # Keep the post-agenda inactivity deadline from hanging up on a
+        # human who started talking just before it expired (PER-162).
+        self._human_speaking = True
+        self._human_speech_stopped.clear()
         if self.current_speaker is None:
             return
         dropped_speaker = self.current_speaker
@@ -160,6 +170,11 @@ class Moderator:
         if speaker is not None:
             await speaker.interrupt()
         logger.info("barge-in: revoked floor from %s", dropped_speaker)
+
+    def on_human_speech_stopped(self) -> None:
+        """Mark the end of live human speech so quiet-time waits can resume."""
+        self._human_speaking = False
+        self._human_speech_stopped.set()
 
     async def run_agenda(self) -> list[str]:
         """Run the standup agenda in order, then hold the floor open briefly
@@ -310,6 +325,13 @@ class Moderator:
             try:
                 await asyncio.wait_for(self._human_reply_ready.wait(), timeout=timeout)
             except TimeoutError:
+                if reply_timeout_seconds is not None and self._human_speaking:
+                    logger.info("human still speaking at inactivity deadline; keeping floor open")
+                    await self._human_speech_stopped.wait()
+                    continue
+                if reply_timeout_seconds is None:
+                    # Ordinary barge-in waits retain their existing bounded behavior.
+                    self.on_human_speech_stopped()
                 logger.warning(
                     "no finished human utterance within %.0fs; giving up",
                     timeout,

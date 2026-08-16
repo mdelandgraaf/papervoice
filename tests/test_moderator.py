@@ -374,6 +374,28 @@ class ModeratorOpenFloorTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(chr(34) + "first question" + chr(34) in prompt for _, prompt in log))
         self.assertTrue(any(chr(34) + "follow-up question" + chr(34) in prompt for _, prompt in log))
 
+    async def test_speech_started_before_deadline_can_finish_after_deadline(self):
+        """PER-162: do not tear down while a human is still elaborating."""
+        log = []
+        moderator = Moderator(
+            [AgendaItem("ceo", "close")],
+            {"ceo": make_speaker("ceo", log)},
+            open_floor_seconds=0.05,
+        )
+
+        task = asyncio.create_task(moderator.run_agenda())
+        await asyncio.sleep(0.03)
+        await moderator.on_human_speech_started()
+        await asyncio.sleep(0.04)
+        self.assertFalse(task.done())
+
+        moderator.on_human_speech_stopped()
+        moderator.record_transcript("board-member", "a longer request that crossed the deadline")
+        completed = await asyncio.wait_for(task, timeout=1)
+
+        self.assertEqual(completed, ["ceo"])
+        self.assertTrue(any("longer request" in prompt for _, prompt in log))
+
     async def test_silence_after_agenda_ends_closes_the_call_without_hanging(self):
         agenda = [AgendaItem("ceo", "close")]
         speakers = {"ceo": make_speaker("ceo", [])}
