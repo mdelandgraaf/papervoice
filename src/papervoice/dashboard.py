@@ -107,6 +107,11 @@ input[type=number]{width:100%}
 .save-msg{font-size:.78rem;color:#22c55e;opacity:0;transition:opacity .4s}
 .save-msg.show{opacity:1}
 .save-msg.error{color:#dc2626}
+.card-header{cursor:pointer;user-select:none}
+.card-header:hover .agent-name{color:#2563eb}
+.expand-chevron{font-size:.7rem;color:#94a3b8;transition:transform .2s;display:inline-block}
+.voice-config.open ~ * .expand-chevron,.card.expanded .expand-chevron{transform:rotate(180deg)}
+.expand-hint{font-size:.72rem;color:#94a3b8;margin-left:.4rem}
 </style>
 </head>
 <body>
@@ -222,24 +227,25 @@ function agentCard(a) {
   const displayName = escHtml(a.display_name || a.name);
   const lkId = escHtml(a.livekit_identity || '');
   const order = a.roster_order ?? 99;
+  const isOpen = a.enabled;
   return `
 <div class="card" id="card-${id}">
-  <div class="card-header">
+  <div class="card-header" onclick="toggleConfig('${id}')" title="Click to expand / collapse">
     <div>
-      <div class="agent-name">${name}</div>
+      <div class="agent-name">${name} <span class="expand-chevron" id="chevron-${id}">${isOpen ? '▲' : '▼'}</span></div>
       <div class="agent-meta">${meta}</div>
     </div>
     <div>${badge(a.enabled)}</div>
   </div>
   <div class="toggle-row">
-    <label class="toggle" title="Enable for voice">
-      <input type="checkbox" ${a.enabled ? 'checked' : ''} onchange="onToggle('${id}', this)">
+    <label class="toggle" title="Enable for boardroom">
+      <input type="checkbox" ${a.enabled ? 'checked' : ''} onchange="onToggle('${id}', this)" onclick="event.stopPropagation()">
       <div class="toggle-track"></div>
       <div class="toggle-thumb"></div>
     </label>
     <span style="font-size:.82rem;color:#475569">${a.enabled ? 'In boardroom roster' : 'Not in boardroom roster'}</span>
   </div>
-  <div class="voice-config ${a.enabled ? 'open' : ''}" id="config-${id}">
+  <div class="voice-config ${isOpen ? 'open' : ''}" id="config-${id}">
     <div class="form-row">
       <div class="form-group">
         <label>ElevenLabs voice ID</label>
@@ -253,7 +259,7 @@ function agentCard(a) {
     <div class="form-row">
       <div class="form-group">
         <label>LiveKit identity</label>
-        <input id="lk-identity-${id}" value="${lkId}" placeholder="agent-ceo">
+        <input id="lk-identity-${id}" value="${lkId}" placeholder="agent-ceo" oninput="refreshDirectSection('${id}')">
       </div>
       <div class="form-group">
         <label>Roster order (0 = opener)</label>
@@ -264,25 +270,30 @@ function agentCard(a) {
       <button class="btn btn-primary btn-sm" onclick="saveConfig('${id}')">Save changes</button>
       <span class="save-msg" id="save-msg-${id}"></span>
     </div>
-    ${a.enabled && lkId ? `
     <div class="separator"></div>
-    <h2>Direct call link</h2>
-    <p class="notice" style="margin-bottom:.5rem">1:1 call link — only this agent joins, no standup agenda.</p>
+    <div id="direct-section-${id}">
+      ${lkId ? directCallHtml(id, lkId) : '<p class="notice">Set a LiveKit identity above and save to enable direct 1:1 call links.</p>'}
+    </div>
+  </div>
+</div>`;
+}
+
+function directCallHtml(id, lkId) {
+  return `<h2>Direct call link</h2>
+    <p class="notice" style="margin-bottom:.5rem">1:1 call — only this agent joins, no standup agenda.</p>
     <div style="display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap">
       <div class="form-group" style="flex:1;min-width:140px">
         <label>Caller name</label>
         <input id="direct-caller-${id}" value="board-member" placeholder="your-name">
       </div>
-      <button class="btn btn-secondary btn-sm" style="align-self:flex-end" onclick="generateDirectLink('${id}','${lkId}')">Get link</button>
+      <button class="btn btn-secondary btn-sm" style="align-self:flex-end" onclick="generateDirectLink('${id}','${escHtml(lkId)}')">Get link</button>
     </div>
     <div id="direct-result-${id}" style="display:none;margin-top:.5rem">
       <div class="link-box">
         <span id="direct-url-${id}"></span>
         <button class="btn btn-secondary btn-sm" onclick="copyDirectLink('${id}')">Copy</button>
       </div>
-    </div>` : ''}
-  </div>
-</div>`;
+    </div>`;
 }
 
 async function loadAgents() {
@@ -302,11 +313,32 @@ async function loadAgents() {
   }
 }
 
+function toggleConfig(agentId) {
+  const cfg = document.getElementById('config-' + agentId);
+  const chevron = document.getElementById('chevron-' + agentId);
+  const isOpen = cfg.classList.toggle('open');
+  if (chevron) chevron.textContent = isOpen ? '▲' : '▼';
+}
+
+function refreshDirectSection(agentId) {
+  const lkInput = document.getElementById('lk-identity-' + agentId);
+  const section = document.getElementById('direct-section-' + agentId);
+  if (!lkInput || !section) return;
+  const lkId = lkInput.value.trim();
+  section.innerHTML = lkId
+    ? directCallHtml(agentId, lkId)
+    : '<p class="notice">Set a LiveKit identity above and save to enable direct 1:1 call links.</p>';
+}
+
 function onToggle(agentId, checkbox) {
   const cfg = document.getElementById('config-' + agentId);
+  const chevron = document.getElementById('chevron-' + agentId);
   const enabled = checkbox.checked;
-  // Show/hide the config form
-  cfg.classList.toggle('open', enabled);
+  // Ensure card is open when enabling
+  if (enabled) {
+    cfg.classList.add('open');
+    if (chevron) chevron.textContent = '▲';
+  }
   // Update the badge in the card header
   const card = document.getElementById('card-' + agentId);
   card.querySelector('.card-header .badge').outerHTML = badge(enabled);
@@ -347,6 +379,7 @@ async function saveConfig(agentId, enabled) {
     msgEl.textContent = 'Saved ✓';
     msgEl.className = 'save-msg show';
     setTimeout(() => { msgEl.className = 'save-msg'; }, 2500);
+    refreshDirectSection(agentId);
   } catch (e) {
     msgEl.textContent = 'Error: ' + e.message;
     msgEl.className = 'save-msg error show';
