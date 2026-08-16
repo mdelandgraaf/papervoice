@@ -415,7 +415,7 @@ class DynamicRosterTest(unittest.TestCase):
         config = self._make_config(roster_order=1)
         persona = build_persona_from_agent(config, is_opener=False)
         self.assertNotIn("open the standup", persona.instructions)
-        self.assertIn("status update", persona.instructions.lower())
+        self.assertIn("latest status", persona.instructions.lower())
 
     def test_build_persona_no_title_still_works(self):
         config = self._make_config(title=None, capabilities=None)
