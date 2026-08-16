@@ -5,6 +5,14 @@ set -euo pipefail
 # copied into the local boardroom .env without ever printing it, then the
 # boardroom worker is restarted (if no human is in the call) so it picks up the
 # fresh token — load_dotenv() only fires at process startup, not on each call.
+#
+# Exit codes and ROUTINE: summary line (PER-151 filtering):
+#   Exit 0 + "ROUTINE: NOMINAL"       — key refreshed, worker OK, nothing drained
+#   Exit 0 + "ROUTINE: STATE_CHANGE"  — worker restarted and/or pending posts drained
+#   Exit 1 + "ROUTINE: FAILED"        — worker could not start after restart attempt
+#
+# The agent reading this output should only file a follow-up Paperclip issue on
+# FAILED, comment briefly on STATE_CHANGE, and mark done silently on NOMINAL.
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 env_file="${PAPERCLIP_BOARDROOM_ENV_FILE:-$repo_dir/.env}"
 : "${PAPERCLIP_API_KEY:?PAPERCLIP_API_KEY must be injected for wake refresh}"
@@ -20,6 +28,9 @@ printf 'ELEVENLABS_API_KEY=%s\n' "$ELEVENLABS_API_KEY" >>"$tmp_file"
 chmod 600 "$tmp_file"
 mv -f "$tmp_file" "$env_file"
 echo "refreshed Paperclip boardroom token and ElevenLabs API key in $env_file"
+
+# Track whether any notable state change occurred (PER-151 filtering).
+worker_restarted=false
 
 # Restart the worker so it picks up the new token. Skip if humans are in the
 # call — a mid-call restart drops every participant immediately (PER-84).
@@ -71,11 +82,26 @@ if [[ "$need_restart" == "true" ]]; then
   sleep 2
   if kill -0 "$new_pid" 2>/dev/null; then
     echo "boardroom worker restarted (pid $new_pid)"
+    worker_restarted=true
   else
     echo "boardroom worker failed to start — check /var/tmp/papervoice-boardroom/worker.log" >&2
+    echo "ROUTINE: FAILED (worker did not start after restart attempt)"
     exit 1
   fi
 fi
 
 # Drain only after refresh and probe, so queued posts use the current token.
-PYTHONPATH="$repo_dir/src" "$repo_dir/scripts/drain-pending-posts"
+drain_output=$(PYTHONPATH="$repo_dir/src" "$repo_dir/scripts/drain-pending-posts" 2>&1)
+echo "$drain_output"
+drained_count=$(printf '%s\n' "$drain_output" | grep -oE 'drained [0-9]+' | grep -oE '[0-9]+' || echo 0)
+
+# Emit the PER-151 filter summary line so the agent can decide disposition.
+state_parts=()
+[[ "$worker_restarted" == "true" ]] && state_parts+=("worker restarted")
+[[ "${drained_count:-0}" -gt 0 ]] && state_parts+=("drained $drained_count pending post(s)")
+if [[ "${#state_parts[@]}" -gt 0 ]]; then
+  summary=$(IFS=', '; echo "${state_parts[*]}")
+  echo "ROUTINE: STATE_CHANGE ($summary)"
+else
+  echo "ROUTINE: NOMINAL (key refreshed, worker running, nothing drained)"
+fi
