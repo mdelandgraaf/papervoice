@@ -43,7 +43,7 @@ from livekit.agents.voice.events import UserInputTranscribedEvent, UserStateChan
 from livekit.plugins import anthropic, silero
 
 from papervoice.moderator import AgendaItem, Moderator, SpeakerHandle
-from papervoice.personas import BOARDROOM_ROOM, Persona, load_roster_from_paperclip
+from papervoice.personas import BOARDROOM_ROOM, DIRECT_ROOM_PREFIX, Persona, load_roster_from_paperclip, persona_by_identity
 from papervoice.prompts import PromptConfig, load_prompt_config
 from papervoice.vendors import elevenlabs as el_vendor
 from papervoice.vendors import livekit as lk_vendor
@@ -455,6 +455,155 @@ def _speaker_handle(
 
 
 
+def _direct_call_instructions(persona: Persona, briefing: str | None = None) -> str:
+    """Instructions for a 1:1 direct call — natural conversation, not standup script."""
+    context = f"\n\nYour current open Paperclip issues: {briefing}" if briefing else ""
+    return (
+        f"You are {persona.display_name} on a one-on-one voice call with a board member."
+        " Treat this like calling a colleague to discuss work — speak naturally and conversationally."
+        " Keep your responses concise (one to three sentences) and leave space for the other person to reply."
+        " You can discuss your work, answer questions about your issues, and file follow-up Paperclip"
+        " issues with the file_followup_issue tool when something needs tracking."
+        f"{context}"
+    )
+
+
+def _direct_file_issue_tool(persona: Persona, filed_issues: list):
+    """A per-persona LiveKit function tool for 1:1 direct calls (no Moderator dependency)."""
+
+    @function_tool
+    async def file_followup_issue(title: str, description: str = "") -> str:
+        """Create a Paperclip follow-up issue for a concrete action item from this call.
+
+        Args:
+            title: Short issue title.
+            description: Optional extra detail — what was decided and why.
+        """
+        try:
+            issue = await asyncio.to_thread(
+                pc_vendor.create_issue,
+                title=title,
+                description=description,
+                assignee_agent_id=persona.paperclip_agent_id,
+            )
+        except Exception as exc:
+            if pc_vendor.is_auth_error(exc):
+                return "Sorry, I can't file that right now — Paperclip access has expired for this call."
+            logger.exception("failed to file follow-up issue %r from %s (direct call)", title, persona.identity)
+            return "Sorry, I couldn't file that issue — the Paperclip API call failed."
+        identifier = issue.get("identifier") or "unknown"
+        filed_issues.append((identifier, title))
+        return f"Filed {identifier}: {title}"
+
+    return file_followup_issue
+
+
+def _resolve_direct_persona(livekit_identity: str) -> Persona | None:
+    """Find a Persona by livekit_identity for a direct 1:1 call.
+
+    Checks Paperclip live roster first (agents with metadata.papervoice.enabled),
+    then falls back to the static BOARDROOM_ROSTER. The returned Persona's
+    `instructions` field is intentionally empty — run_direct_call builds fresh
+    instructions via _direct_call_instructions so the agent doesn't receive
+    standup-specific language.
+    """
+    try:
+        for cfg in pc_vendor.get_voice_enabled_agents():
+            if cfg.livekit_identity == livekit_identity:
+                return Persona(
+                    identity=cfg.livekit_identity,
+                    display_name=cfg.display_name,
+                    voice_id=cfg.voice_id,
+                    instructions="",
+                    paperclip_agent_id=cfg.agent_id,
+                )
+    except Exception:
+        logger.warning(
+            "failed to load Paperclip roster for direct call %s; trying static fallback",
+            livekit_identity,
+        )
+    return persona_by_identity(livekit_identity)
+
+
+async def run_direct_call(
+    room_name: str,
+    persona: Persona,
+    summary_issue_id: str | None = None,
+) -> None:
+    """Run a 1:1 direct call between one human and one agent persona.
+
+    Unlike the standup, there is no moderator and no agenda: the agent listens
+    directly via STT/VAD and responds naturally, like a colleague taking a call.
+    The file_followup_issue tool is available so actions raised on the call can
+    be filed directly to Paperclip.
+
+    When `summary_issue_id` is given, posts a brief summary (any filed issues)
+    after the human leaves. If no issues were filed the summary is skipped —
+    there is nothing worth recording beyond the conversation itself.
+    """
+    briefing: str | None = None
+    try:
+        briefing = await asyncio.to_thread(pc_vendor.context_briefing, persona.paperclip_agent_id)
+    except Exception:
+        logger.exception("failed to load Paperclip context for direct call with %s", persona.identity)
+
+    instructions = _direct_call_instructions(persona, briefing)
+    filed_issues: list[tuple[str, str]] = []
+
+    token = lk_vendor.mint_join_token(persona.identity, room_name, ttl_hours=1, agent=True)
+    room = rtc.Room()
+    await room.connect(os.environ["LIVEKIT_URL"], token)
+
+    done = asyncio.Event()
+    human_kinds = {rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD, rtc.ParticipantKind.PARTICIPANT_KIND_SIP}
+
+    def on_participant_disconnected(participant: rtc.RemoteParticipant) -> None:
+        if participant.kind not in human_kinds:
+            return
+        humans_remaining = any(p.kind in human_kinds for p in room.remote_participants.values())
+        if not humans_remaining:
+            logger.info("last human left direct call with %s", persona.identity)
+            done.set()
+
+    room.on("participant_disconnected", on_participant_disconnected)
+
+    try:
+        session = AgentSession(
+            stt=el_vendor.plugin_stt(),
+            llm=anthropic.LLM(model=AGENT_LLM_MODEL),
+            tts=el_vendor.plugin_tts(voice_id_override=persona.voice_id),
+            vad=silero.VAD.load(),
+        )
+        await session.start(
+            agent=Agent(
+                instructions=instructions,
+                tools=[_direct_file_issue_tool(persona, filed_issues)],
+            ),
+            room=room,
+            # close_on_disconnect=False: stay alive across human blips; done.set()
+            # handles the explicit "last human left" teardown path instead.
+            room_options=room_io.RoomOptions(close_on_disconnect=False),
+        )
+        await session.generate_reply(
+            instructions=f"Greet the person who just joined and introduce yourself briefly as {persona.display_name}."
+        )
+        await done.wait()
+    finally:
+        await session.aclose()
+        await room.disconnect()
+        if summary_issue_id and filed_issues:
+            lines = [f"## Direct call — {persona.display_name}", "", "Issues filed during the call:"]
+            lines.extend(f"- {identifier}: {title}" for identifier, title in filed_issues)
+            try:
+                await asyncio.to_thread(
+                    pc_vendor.post_comment_or_queue,
+                    summary_issue_id,
+                    "\n".join(lines),
+                )
+            except Exception:
+                logger.exception("failed to post or queue direct call summary to %s", summary_issue_id)
+
+
 async def run_standup(
     room_name: str = BOARDROOM_ROOM,
     summary_issue_id: str | None = None,
@@ -526,20 +675,30 @@ async def request_fnc(job_request) -> None:
 
 async def entrypoint(ctx) -> None:
     await ctx.connect()
-    # Agent playout doesn't complete until a real participant is in the room
-    # to receive it (confirmed live: with an empty room every agent's
-    # wait_for_playout() hangs to the moderator's 45s turn timeout and gets
-    # dropped). Block on a human/SIP participant — never our own agent
-    # participants, DEFAULT_PARTICIPANT_KINDS already excludes those — before
-    # spending any agent turns that nobody is there to hear.
-    logger.info("standup ready, waiting for a human to join room %s", ctx.room.name)
+    # Block on a human/SIP participant before spending any LLM/TTS budget —
+    # agent playout doesn't complete until a real listener is in the room.
+    logger.info("worker ready, waiting for a human to join room %s", ctx.room.name)
     participant = await ctx.wait_for_participant()
-    logger.info("%s joined, starting the standup", participant.identity)
-    # Optional (Milestone 3): where to post the post-call summary. Left unset,
-    # the standup still runs and files issues live — it just doesn't post a
-    # summary comment anywhere afterward.
-    summary_issue_id = os.environ.get("PAPERCLIP_STANDUP_SUMMARY_ISSUE_ID")
-    await run_standup(ctx.room.name, summary_issue_id=summary_issue_id)
+    logger.info("%s joined room %s", participant.identity, ctx.room.name)
+
+    if ctx.room.name.startswith(DIRECT_ROOM_PREFIX):
+        # Direct 1:1 call: room name encodes the target agent identity.
+        livekit_identity = ctx.room.name[len(DIRECT_ROOM_PREFIX):]
+        persona = await asyncio.to_thread(_resolve_direct_persona, livekit_identity)
+        if persona is None:
+            logger.error(
+                "no voice-enabled persona found for direct room %s (identity: %s); closing",
+                ctx.room.name,
+                livekit_identity,
+            )
+            return
+        logger.info("starting direct call with %s in room %s", livekit_identity, ctx.room.name)
+        summary_issue_id = os.environ.get("PAPERCLIP_STANDUP_SUMMARY_ISSUE_ID")
+        await run_direct_call(ctx.room.name, persona, summary_issue_id=summary_issue_id)
+    else:
+        # Full boardroom standup.
+        summary_issue_id = os.environ.get("PAPERCLIP_STANDUP_SUMMARY_ISSUE_ID")
+        await run_standup(ctx.room.name, summary_issue_id=summary_issue_id)
 
 
 if __name__ == "__main__":

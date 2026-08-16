@@ -26,6 +26,7 @@ import logging
 from dataclasses import dataclass
 
 BOARDROOM_ROOM = "papervoice-boardroom"
+DIRECT_ROOM_PREFIX = "papervoice-direct-"
 
 CEO_AGENT_ID = "99228e80-fdb1-4ad2-9cba-f74b891c9b8f"  # Aissistent
 ENG_AGENT_ID = "5685b8be-37ef-4bfe-8c68-7dd21ef48382"  # VoiceEngineer

@@ -29,7 +29,7 @@ load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from papervoice.personas import BOARDROOM_ROOM
+from papervoice.personas import BOARDROOM_ROOM, DIRECT_ROOM_PREFIX
 from papervoice.vendors import livekit as lk_vendor
 from papervoice.vendors import paperclip as pc_vendor
 
@@ -264,6 +264,23 @@ function agentCard(a) {
       <button class="btn btn-primary btn-sm" onclick="saveConfig('${id}')">Save changes</button>
       <span class="save-msg" id="save-msg-${id}"></span>
     </div>
+    ${a.enabled && lkId ? `
+    <div class="separator"></div>
+    <h2>Direct call link</h2>
+    <p class="notice" style="margin-bottom:.5rem">1:1 call link — only this agent joins, no standup agenda.</p>
+    <div style="display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap">
+      <div class="form-group" style="flex:1;min-width:140px">
+        <label>Caller name</label>
+        <input id="direct-caller-${id}" value="board-member" placeholder="your-name">
+      </div>
+      <button class="btn btn-secondary btn-sm" style="align-self:flex-end" onclick="generateDirectLink('${id}','${lkId}')">Get link</button>
+    </div>
+    <div id="direct-result-${id}" style="display:none;margin-top:.5rem">
+      <div class="link-box">
+        <span id="direct-url-${id}"></span>
+        <button class="btn btn-secondary btn-sm" onclick="copyDirectLink('${id}')">Copy</button>
+      </div>
+    </div>` : ''}
   </div>
 </div>`;
 }
@@ -376,6 +393,36 @@ function copyLink() {
   });
 }
 
+// ── Direct (1:1) links ───────────────────────────────────────────────────────
+async function generateDirectLink(agentId, lkIdentity) {
+  const caller = (document.getElementById('direct-caller-' + agentId) || {}).value || 'board-member';
+  const result = document.getElementById('direct-result-' + agentId);
+  try {
+    const r = await fetch('/api/direct-link?' + new URLSearchParams({livekit_identity: lkIdentity, identity: caller, ttl_hours: 48}));
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({detail: r.statusText}));
+      throw new Error(body.detail || r.statusText);
+    }
+    const data = await r.json();
+    document.getElementById('direct-url-' + agentId).textContent = data.url;
+    result.style.display = 'block';
+  } catch (e) {
+    alert('Error generating direct link: ' + e.message);
+  }
+}
+
+function copyDirectLink(agentId) {
+  const url = document.getElementById('direct-url-' + agentId).textContent;
+  navigator.clipboard.writeText(url).catch(() => {
+    const el = document.getElementById('direct-url-' + agentId);
+    const range = document.createRange();
+    range.selectNode(el);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+    document.execCommand('copy');
+  });
+}
+
 // ── Settings ─────────────────────────────────────────────────────────────────
 async function loadSettings() {
   // Worker status
@@ -456,6 +503,25 @@ def api_join_link(
     room: str = BOARDROOM_ROOM,
     ttl_hours: int = 48,
 ) -> JSONResponse:
+    try:
+        token = lk_vendor.mint_join_token(identity, room, ttl_hours=ttl_hours)
+        livekit_url = os.environ.get("LIVEKIT_URL", "")
+        url = "https://meet.livekit.io/custom?" + urllib.parse.urlencode(
+            {"liveKitUrl": livekit_url, "token": token}
+        )
+        return JSONResponse({"url": url, "room": room, "identity": identity, "ttl_hours": ttl_hours})
+    except Exception as exc:
+        raise HTTPException(502, f"LiveKit error: {exc}")
+
+
+@app.get("/api/direct-link")
+def api_direct_link(
+    livekit_identity: str,
+    identity: str = "board-member",
+    ttl_hours: int = 48,
+) -> JSONResponse:
+    """Mint a join link for a 1:1 direct call with one specific agent."""
+    room = f"{DIRECT_ROOM_PREFIX}{livekit_identity}"
     try:
         token = lk_vendor.mint_join_token(identity, room, ttl_hours=ttl_hours)
         livekit_url = os.environ.get("LIVEKIT_URL", "")

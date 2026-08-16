@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""Print a browser join link for a 1:1 direct call with a specific voice agent.
+
+Usage:
+  scripts/direct-link                           # list available agents
+  scripts/direct-link <livekit-identity>        # link as 'board-member'
+  scripts/direct-link <livekit-identity> <name> # link as <name>
+  scripts/direct-link <livekit-identity> <name> <ttl-hours>
+
+The boardroom worker must be running in `start` mode — the same worker that
+handles standup calls also handles direct calls, routed by room name prefix.
+
+Example:
+  scripts/direct-link agent-eng maike
+"""
+
+import os
+import sys
+import urllib.parse
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+from papervoice.personas import BOARDROOM_ROSTER, DIRECT_ROOM_PREFIX
+from papervoice.vendors import livekit as lk
+from papervoice.vendors import paperclip as pc_vendor
+
+DEFAULT_TTL_HOURS = 48
+
+
+def list_agents() -> None:
+    print("Available voice agents (from Paperclip roster):")
+    try:
+        configs = pc_vendor.get_voice_enabled_agents()
+        if not configs:
+            print("  (none configured — no agents have metadata.papervoice.enabled=true)")
+        for cfg in configs:
+            print(f"  {cfg.livekit_identity:30s}  {cfg.display_name}")
+    except Exception as exc:
+        print(f"  (could not reach Paperclip API: {exc})")
+        print("  Falling back to static roster:")
+        for p in BOARDROOM_ROSTER:
+            print(f"  {p.identity:30s}  {p.display_name}")
+
+
+def main() -> int:
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"):
+        print(__doc__)
+        list_agents()
+        return 0
+
+    livekit_identity = sys.argv[1]
+    caller_name = sys.argv[2] if len(sys.argv) > 2 else "board-member"
+    ttl_hours = int(sys.argv[3]) if len(sys.argv) > 3 else DEFAULT_TTL_HOURS
+
+    room = f"{DIRECT_ROOM_PREFIX}{livekit_identity}"
+    token = lk.mint_join_token(caller_name, room, ttl_hours=ttl_hours)
+    url = "https://meet.livekit.io/custom?" + urllib.parse.urlencode(
+        {"liveKitUrl": os.environ["LIVEKIT_URL"], "token": token}
+    )
+    print(f"Room:   {room}")
+    print(f"Agent:  {livekit_identity}")
+    print(f"Join as {caller_name!r} (valid {ttl_hours}h):\n{url}")
+    print("Requires the boardroom worker running in `start` mode.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

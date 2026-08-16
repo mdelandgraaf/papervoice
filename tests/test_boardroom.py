@@ -22,11 +22,14 @@ from papervoice.boardroom import (
     _ask_board_tool,
     _background_tasks,
     _build_summary,
+    _direct_call_instructions,
+    _direct_file_issue_tool,
     _file_issue_tool,
     _fire_and_forget,
     _dismissal_target,
     _load_context,
     _pass_on_reacting,
+    _resolve_direct_persona,
     _standup_agenda,
 )
 from papervoice.moderator import Moderator
@@ -459,6 +462,124 @@ class DynamicRosterTest(unittest.TestCase):
         self.assertEqual(identities, {"agent-ceo", "agent-eng"})
         self.assertEqual(agenda[0].identity, "agent-ceo")
         self.assertEqual(agenda[-1].identity, "agent-ceo")
+
+
+class DirectCallInstructionsTest(unittest.TestCase):
+    """PER-181: 1:1 direct-call instructions are distinct from standup instructions."""
+
+    def test_includes_persona_display_name(self):
+        persona = BOARDROOM_ROSTER[1]  # Eng
+        instructions = _direct_call_instructions(persona)
+        self.assertIn(persona.display_name, instructions)
+
+    def test_no_standup_specific_language(self):
+        persona = BOARDROOM_ROSTER[0]
+        instructions = _direct_call_instructions(persona)
+        self.assertNotIn("standup", instructions.lower())
+        self.assertNotIn("moderator", instructions.lower())
+        self.assertNotIn("agenda", instructions.lower())
+
+    def test_briefing_is_included_when_present(self):
+        persona = BOARDROOM_ROSTER[0]
+        briefing = "PER-42 (in_progress, high): Implement something"
+        instructions = _direct_call_instructions(persona, briefing=briefing)
+        self.assertIn(briefing, instructions)
+
+    def test_no_briefing_omits_the_context_line(self):
+        persona = BOARDROOM_ROSTER[0]
+        instructions = _direct_call_instructions(persona, briefing=None)
+        self.assertNotIn("Paperclip issues:", instructions)
+
+
+class DirectFileIssueToolTest(unittest.IsolatedAsyncioTestCase):
+    """PER-181: the direct-call file_followup_issue tool records to the filed_issues list."""
+
+    async def test_success_appends_to_filed_list_and_returns_identifier(self):
+        persona = BOARDROOM_ROSTER[0]
+        filed: list = []
+        tool = _direct_file_issue_tool(persona, filed)
+
+        with mock.patch.object(pc_vendor, "create_issue", return_value={"identifier": "PER-99", "id": "uuid-99"}):
+            result = await tool(title="Discuss offline", description="from the 1:1 call")
+
+        self.assertEqual(result, "Filed PER-99: Discuss offline")
+        self.assertEqual(filed, [("PER-99", "Discuss offline")])
+
+    async def test_api_failure_does_not_append_to_list(self):
+        persona = BOARDROOM_ROSTER[0]
+        filed: list = []
+        tool = _direct_file_issue_tool(persona, filed)
+
+        with mock.patch.object(pc_vendor, "create_issue", side_effect=RuntimeError("network down")):
+            result = await tool(title="Whatever")
+
+        self.assertIn("couldn't file", result)
+        self.assertEqual(filed, [])
+
+    async def test_auth_failure_gives_specific_apology(self):
+        persona = BOARDROOM_ROSTER[0]
+        filed: list = []
+        tool = _direct_file_issue_tool(persona, filed)
+
+        with mock.patch.object(pc_vendor, "create_issue", side_effect=_auth_error()):
+            result = await tool(title="Whatever")
+
+        self.assertIn("expired", result)
+        self.assertEqual(filed, [])
+
+
+class ResolveDirectPersonaTest(unittest.TestCase):
+    """PER-181: _resolve_direct_persona finds a persona by livekit_identity."""
+
+    def _make_config(self, **kwargs):
+        defaults = dict(
+            agent_id="agent-1",
+            name="TestAgent",
+            role="engineer",
+            title=None,
+            capabilities=None,
+            voice_id="voice-abc",
+            livekit_identity="agent-test",
+            display_name="Test",
+            roster_order=0,
+        )
+        defaults.update(kwargs)
+        return pc_vendor.PapervoiceAgentConfig(**defaults)
+
+    def test_resolves_from_paperclip_roster(self):
+        cfg = self._make_config(livekit_identity="agent-eng", display_name="Eng", agent_id="eng-id", voice_id="v123")
+        with mock.patch.object(pc_vendor, "get_voice_enabled_agents", return_value=[cfg]):
+            persona = _resolve_direct_persona("agent-eng")
+        self.assertIsNotNone(persona)
+        self.assertEqual(persona.identity, "agent-eng")
+        self.assertEqual(persona.display_name, "Eng")
+        self.assertEqual(persona.voice_id, "v123")
+        self.assertEqual(persona.paperclip_agent_id, "eng-id")
+
+    def test_falls_back_to_static_roster_when_api_fails(self):
+        with mock.patch.object(pc_vendor, "get_voice_enabled_agents", side_effect=RuntimeError("net")):
+            persona = _resolve_direct_persona("agent-ceo")
+        # Static fallback has agent-ceo from BOARDROOM_ROSTER
+        self.assertIsNotNone(persona)
+        self.assertEqual(persona.identity, "agent-ceo")
+
+    def test_falls_back_to_static_roster_when_api_returns_nothing(self):
+        with mock.patch.object(pc_vendor, "get_voice_enabled_agents", return_value=[]):
+            persona = _resolve_direct_persona("agent-eng")
+        self.assertIsNotNone(persona)
+        self.assertEqual(persona.identity, "agent-eng")
+
+    def test_returns_none_for_unknown_identity(self):
+        with mock.patch.object(pc_vendor, "get_voice_enabled_agents", return_value=[]):
+            persona = _resolve_direct_persona("agent-nobody")
+        self.assertIsNone(persona)
+
+    def test_paperclip_result_has_empty_instructions(self):
+        """run_direct_call builds its own instructions; the resolved persona should not carry standup text."""
+        cfg = self._make_config(livekit_identity="agent-ceo")
+        with mock.patch.object(pc_vendor, "get_voice_enabled_agents", return_value=[cfg]):
+            persona = _resolve_direct_persona("agent-ceo")
+        self.assertEqual(persona.instructions, "")
 
 
 if __name__ == "__main__":
