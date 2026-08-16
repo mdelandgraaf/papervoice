@@ -79,6 +79,28 @@ class DashboardAgentsApiTest(unittest.TestCase):
         # display_name defaults to agent name when not set
         self.assertEqual(agents["a3"]["display_name"], "Ops")
 
+    def test_agents_accepts_paperclip_camel_case_metadata(self):
+        agents = [{
+            "id": "a1", "name": "CEO", "role": "ceo", "title": None,
+            "metadata": {"papervoice": {"enabled": True, "voiceId": "v1",
+                "displayName": "Chief", "identity": "agent-ceo", "order": 0}},
+        }]
+        with mock.patch.object(pc_vendor, "get_all_agents", return_value=agents):
+            result = client.get("/api/agents").json()[0]
+        self.assertEqual(result["voice_id"], "v1")
+        self.assertEqual(result["display_name"], "Chief")
+        self.assertEqual(result["livekit_identity"], "agent-ceo")
+        self.assertEqual(result["roster_order"], 0)
+
+    def test_static_roster_defaults_make_known_agent_direct_call_ready(self):
+        agent = {"id": dashboard.BOARDROOM_ROSTER[0].paperclip_agent_id,
+                 "name": "Aissistent", "role": "ceo",
+                 "metadata": {"papervoice": {"enabled": True}}}
+        with mock.patch.object(pc_vendor, "get_all_agents", return_value=[agent]):
+            result = client.get("/api/agents").json()[0]
+        self.assertEqual(result["voice_id"], dashboard.BOARDROOM_ROSTER[0].voice_id)
+        self.assertEqual(result["livekit_identity"], dashboard.BOARDROOM_ROSTER[0].identity)
+
     def test_agents_returns_502_on_paperclip_error(self):
         with mock.patch.object(pc_vendor, "get_all_agents", side_effect=RuntimeError("api down")):
             r = client.get("/api/agents")

@@ -29,7 +29,7 @@ load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from papervoice.personas import BOARDROOM_ROOM, DIRECT_ROOM_PREFIX
+from papervoice.personas import BOARDROOM_ROOM, BOARDROOM_ROSTER, DIRECT_ROOM_PREFIX
 from papervoice.vendors import livekit as lk_vendor
 from papervoice.vendors import paperclip as pc_vendor
 
@@ -504,16 +504,17 @@ def api_agents() -> JSONResponse:
     result = []
     for agent in agents:
         pv = (agent.get("metadata") or {}).get("papervoice") or {}
+        fallback = next((p for p in BOARDROOM_ROSTER if p.paperclip_agent_id == agent["id"]), None)
         result.append({
             "id": agent["id"],
             "name": agent.get("name", ""),
             "role": agent.get("role", ""),
             "title": agent.get("title"),
             "enabled": bool(pv.get("enabled")),
-            "voice_id": pv.get("voice_id", ""),
-            "display_name": pv.get("display_name") or agent.get("name", ""),
-            "livekit_identity": pv.get("livekit_identity", ""),
-            "roster_order": int(pv.get("roster_order", 99)),
+            "voice_id": pv.get("voice_id") or pv.get("voiceId") or (fallback.voice_id if fallback else ""),
+            "display_name": pv.get("display_name") or pv.get("displayName") or (fallback.display_name if fallback else agent.get("name", "")),
+            "livekit_identity": pv.get("livekit_identity") or pv.get("livekitIdentity") or pv.get("identity") or (fallback.identity if fallback else ""),
+            "roster_order": int(pv.get("roster_order", pv.get("rosterOrder", pv.get("order", 99)))),
         })
     # Enabled agents first, then alphabetical within each group
     result.sort(key=lambda a: (not a["enabled"], a["roster_order"], a["name"]))

@@ -169,7 +169,16 @@ def load_roster_from_paperclip(prompt_cfg: "PromptConfig | None" = None) -> tupl
         ordered = [moderator_cfg] + [c for c in configs if c is not moderator_cfg]
     else:
         ordered = list(configs)
-    return tuple(build_persona_from_agent(cfg, is_opener=(i == 0), prompt_cfg=prompt_cfg) for i, cfg in enumerate(ordered))
+    dynamic = {cfg.agent_id: cfg for cfg in ordered}
+    static_ids = {p.paperclip_agent_id for p in BOARDROOM_ROSTER}
+    if not static_ids.intersection(dynamic):
+        return tuple(build_persona_from_agent(cfg, is_opener=(i == 0), prompt_cfg=prompt_cfg) for i, cfg in enumerate(ordered))
+    merged: list[Persona] = []
+    for fallback in BOARDROOM_ROSTER:
+        cfg = dynamic.pop(fallback.paperclip_agent_id, None)
+        merged.append(build_persona_from_agent(cfg, is_opener=(len(merged) == 0), prompt_cfg=prompt_cfg) if cfg else fallback)
+    merged.extend(build_persona_from_agent(cfg, is_opener=False, prompt_cfg=prompt_cfg) for cfg in dynamic.values())
+    return tuple(merged)
 
 
 # Forward-reference type alias (resolved at call time, not import time — avoids a hard

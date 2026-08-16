@@ -449,6 +449,16 @@ class DynamicRosterTest(unittest.TestCase):
         self.assertEqual(roster[1].identity, "agent-eng")
         self.assertNotIn("open the standup", roster[1].instructions)
 
+    def test_partial_known_dynamic_roster_keeps_static_peer(self):
+        configs = [self._make_config(
+            agent_id=BOARDROOM_ROSTER[1].paperclip_agent_id,
+            livekit_identity="agent-eng", display_name="Eng", roster_order=1,
+        )]
+        with mock.patch.object(pc_vendor, "get_voice_enabled_agents", return_value=configs):
+            roster = load_roster_from_paperclip()
+        self.assertEqual({p.paperclip_agent_id for p in roster},
+                         {p.paperclip_agent_id for p in BOARDROOM_ROSTER})
+
     def test_dynamic_roster_is_compatible_with_standup_agenda(self):
         """A live-loaded roster (2 agents) must produce a valid agenda with no errors."""
         configs = [

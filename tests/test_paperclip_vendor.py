@@ -234,6 +234,20 @@ class PaperclipAdapterTest(unittest.TestCase):
         self.assertEqual(result[0].agent_id, "a1")
         self.assertEqual(result[1].agent_id, "a2")
 
+    def test_get_voice_enabled_agents_accepts_paperclip_camel_case_metadata(self):
+        self._set_env()
+        agents = [{
+            "id": "a1", "name": "CEO", "role": "ceo", "title": None, "capabilities": None,
+            "metadata": {"papervoice": {"enabled": True, "voiceId": "v1",
+                "identity": "agent-ceo", "displayName": "Chief", "order": 0}},
+        }]
+        with mock.patch("httpx.get", return_value=self._fake_agents_resp(agents)):
+            cfg = pc.get_voice_enabled_agents()[0]
+        self.assertEqual(cfg.voice_id, "v1")
+        self.assertEqual(cfg.livekit_identity, "agent-ceo")
+        self.assertEqual(cfg.display_name, "Chief")
+        self.assertEqual(cfg.roster_order, 0)
+
     def test_get_voice_enabled_agents_skips_missing_voice_id(self):
         self._set_env()
         agents = [

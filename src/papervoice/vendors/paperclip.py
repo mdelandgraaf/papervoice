@@ -301,7 +301,10 @@ def get_voice_enabled_agents() -> list[PapervoiceAgentConfig]:
         pv = (agent.get("metadata") or {}).get("papervoice") or {}
         if not pv.get("enabled"):
             continue
-        voice_id = pv.get("voice_id")
+        # Paperclip's metadata serializer currently exposes nested keys in
+        # camelCase even when callers PATCH snake_case. Accept both forms so
+        # persisted dashboard configuration remains readable.
+        voice_id = pv.get("voice_id") or pv.get("voiceId")
         if not voice_id:
             logger.warning(
                 "agent %s (%s) has papervoice.enabled but no voice_id — skipping",
@@ -310,9 +313,9 @@ def get_voice_enabled_agents() -> list[PapervoiceAgentConfig]:
             )
             continue
         slug = agent["name"].lower().replace(" ", "-")
-        livekit_identity = pv.get("livekit_identity") or f"agent-{slug}"
-        display_name = pv.get("display_name") or agent["name"]
-        roster_order = int(pv.get("roster_order", 99))
+        livekit_identity = pv.get("livekit_identity") or pv.get("livekitIdentity") or pv.get("identity") or f"agent-{slug}"
+        display_name = pv.get("display_name") or pv.get("displayName") or agent["name"]
+        roster_order = int(pv.get("roster_order", pv.get("rosterOrder", pv.get("order", 99))))
         moderator = bool(pv.get("moderator", False))
         result.append(
             PapervoiceAgentConfig(
