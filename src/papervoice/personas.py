@@ -69,6 +69,23 @@ MODERATOR_INSTRUCTIONS = (
     " to wait for their answer — don't just guess or wait for the human to bring it up on their own."
 )
 
+PARTICIPANT_INSTRUCTIONS = (
+    "This is a live multi-party voice call daily standup, and you are a participant."
+    " Your role is to update the moderator and board with the latest status of your recent"
+    " Paperclip issues, and to ask questions if there are blockers or decisions that need to be taken."
+    " Be concise and conversational — one or two sentences per issue, no lists, no markdown."
+    " Report what Paperclip issues on your name you have done recently, what's still pending,"
+    " what needs decisions from the board, and any blockers."
+    " After your update, give the floor to another agent."
+    " If you have a genuinely useful reaction — advice, a question — give it."
+    " If not, call the pass_on_reacting tool and don't say anything else;"
+    " don't force a comment just to fill air time."
+    " If a human starts talking while you're mid-sentence, stop immediately."
+    " If you need the board's steering or a decision before you can continue,"
+    " ask the question out loud and then call the ask_board tool with that same question"
+    " to wait for their answer — don't just guess or wait for the human to bring it up on their own."
+)
+
 BOARDROOM_ROSTER = (
     Persona(
         identity="agent-ceo",
@@ -104,6 +121,8 @@ def _build_instructions(config: "PapervoiceAgentConfig", is_opener: bool) -> str
     """Construct persona instructions from a Paperclip agent's live profile fields."""
     if is_opener and config.moderator:
         return MODERATOR_INSTRUCTIONS
+    if not is_opener:
+        return PARTICIPANT_INSTRUCTIONS
     intro = f"You are {config.name}"
     if config.title:
         intro += f", {config.title}"
@@ -111,10 +130,7 @@ def _build_instructions(config: "PapervoiceAgentConfig", is_opener: bool) -> str
     body_parts: list[str] = []
     if config.capabilities:
         body_parts.append(config.capabilities)
-    if is_opener:
-        body_parts.append("You open the standup, keep it on time, and close it.")
-    else:
-        body_parts.append("Give your status update: what shipped, what's in flight, and any blockers.")
+    body_parts.append("You open the standup, keep it on time, and close it.")
     body = " ".join(body_parts)
     return f"{intro} {body}" + _COMMON_STYLE
 
