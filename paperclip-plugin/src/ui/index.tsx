@@ -18,6 +18,7 @@ interface VoiceAgent {
   displayName: string;
   identity: string;
   order: number;
+  moderator: boolean;
 }
 
 interface WorkerStatusResult {
@@ -60,14 +61,29 @@ function useWorkerStatus(companyId: string) {
   return { running, loading, refresh };
 }
 
+function agentPapervoiceMetadata(a: VoiceAgent) {
+  return {
+    enabled: a.enabled,
+    voiceId: a.voiceId,
+    displayName: a.displayName,
+    identity: a.identity,
+    order: a.order,
+    moderator: a.moderator,
+  };
+}
+
 function AgentRow({
   agent,
   companyId,
+  isModerator,
   onUpdated,
+  onSetModerator,
 }: {
   agent: VoiceAgent;
   companyId: string;
+  isModerator: boolean;
   onUpdated: () => void;
+  onSetModerator: () => void;
 }) {
   const [saving, setSaving] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -86,7 +102,7 @@ function AgentRow({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           metadata: {
-            papervoice: { ...getMetadata(agent), enabled: !agent.enabled },
+            papervoice: { ...agentPapervoiceMetadata(agent), enabled: !agent.enabled },
           },
         }),
       });
@@ -94,16 +110,6 @@ function AgentRow({
     } finally {
       setSaving(false);
     }
-  }
-
-  function getMetadata(a: VoiceAgent) {
-    return {
-      enabled: a.enabled,
-      voiceId: a.voiceId,
-      displayName: a.displayName,
-      identity: a.identity,
-      order: a.order,
-    };
   }
 
   async function saveConfig() {
@@ -120,6 +126,7 @@ function AgentRow({
               displayName: fields.displayName,
               identity: fields.identity,
               order: parseInt(fields.order, 10) || 99,
+              moderator: agent.moderator,
             },
           },
         }),
@@ -144,11 +151,31 @@ function AgentRow({
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 12, justifyContent: "space-between" }}>
-        <div>
-          <div style={{ fontWeight: 600, fontSize: 14 }}>{agent.displayName || agent.name}</div>
-          <div style={{ fontSize: 12, color: "#64748b" }}>{agent.role}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <label
+            title="Set as moderator"
+            style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none" }}
+          >
+            <input
+              type="radio"
+              name="moderator-selection"
+              checked={isModerator}
+              onChange={onSetModerator}
+              style={{ accentColor: "#7c3aed", width: 15, height: 15, cursor: "pointer" }}
+            />
+            <span style={{ fontSize: 11, color: isModerator ? "#7c3aed" : "#94a3b8", fontWeight: isModerator ? 600 : 400 }}>
+              MOD
+            </span>
+          </label>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>{agent.displayName || agent.name}</div>
+            <div style={{ fontSize: 12, color: "#64748b" }}>{agent.role}</div>
+          </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {isModerator && (
+            <StatusBadge variant="info">Moderator</StatusBadge>
+          )}
           <StatusBadge variant={agent.enabled ? "success" : "neutral"}>
             {agent.enabled ? "Enabled" : "Disabled"}
           </StatusBadge>
@@ -287,6 +314,101 @@ function AgentRow({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function AgentsSection({
+  agents,
+  agentsLoading,
+  agentsError,
+  companyId,
+  onRefresh,
+}: {
+  agents: VoiceAgent[];
+  agentsLoading: boolean;
+  agentsError: Error | null;
+  companyId: string;
+  onRefresh: () => void;
+}) {
+  const [settingModerator, setSettingModerator] = useState(false);
+
+  async function setModerator(newModeratorId: string) {
+    setSettingModerator(true);
+    try {
+      const prev = agents.find((a) => a.moderator && a.id !== newModeratorId);
+      if (prev) {
+        await fetch(`/api/agents/${prev.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            metadata: { papervoice: { ...agentPapervoiceMetadata(prev), moderator: false } },
+          }),
+        });
+      }
+      const next = agents.find((a) => a.id === newModeratorId);
+      if (next) {
+        await fetch(`/api/agents/${newModeratorId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            metadata: { papervoice: { ...agentPapervoiceMetadata(next), moderator: true } },
+          }),
+        });
+      }
+      onRefresh();
+    } finally {
+      setSettingModerator(false);
+    }
+  }
+
+  const sorted = [...agents].sort((a, b) => a.order - b.order);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between" }}>
+        <h2 style={{ fontSize: 16, fontWeight: 600, color: "#0f172a" }}>Voice Agents</h2>
+        <button
+          onClick={onRefresh}
+          style={{
+            background: "#f1f5f9",
+            border: "1px solid #e2e8f0",
+            borderRadius: 6,
+            padding: "4px 12px",
+            fontSize: 12,
+            cursor: "pointer",
+            color: "#334155",
+            fontWeight: 500,
+          }}
+        >
+          Refresh
+        </button>
+      </div>
+
+      <p style={{ fontSize: 12, color: "#64748b", margin: 0 }}>
+        Use the <strong>MOD</strong> radio to designate one agent as moderator — they open the standup, keep it on time, and close it.
+      </p>
+
+      {agentsLoading && <Spinner />}
+      {settingModerator && <Spinner />}
+      {agentsError && (
+        <div style={{ color: "#dc2626", fontSize: 13 }}>Failed to load agents: {agentsError.message}</div>
+      )}
+      {agents.length === 0 && !agentsLoading && (
+        <div style={{ color: "#94a3b8", fontSize: 14, textAlign: "center", padding: 20 }}>
+          No agents found. Agents with <code>metadata.papervoice</code> set will appear here.
+        </div>
+      )}
+      {sorted.map((agent) => (
+        <AgentRow
+          key={agent.id}
+          agent={agent}
+          companyId={companyId}
+          isModerator={agent.moderator}
+          onUpdated={onRefresh}
+          onSetModerator={() => setModerator(agent.id)}
+        />
+      ))}
     </div>
   );
 }
@@ -634,42 +756,13 @@ export function PapervoicePage({ context }: PluginCompanySettingsPageProps) {
 
       {/* Agents tab */}
       {activeTab === "agents" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between" }}>
-            <h2 style={{ fontSize: 16, fontWeight: 600, color: "#0f172a" }}>Voice Agents</h2>
-            <button
-              onClick={refreshAgents}
-              style={{
-                background: "#f1f5f9",
-                border: "1px solid #e2e8f0",
-                borderRadius: 6,
-                padding: "4px 12px",
-                fontSize: 12,
-                cursor: "pointer",
-                color: "#334155",
-                fontWeight: 500,
-              }}
-            >
-              Refresh
-            </button>
-          </div>
-
-          {agentsLoading && <Spinner />}
-          {agentsError && (
-            <div style={{ color: "#dc2626", fontSize: 13 }}>Failed to load agents: {agentsError.message}</div>
-          )}
-          {agents && agents.length === 0 && (
-            <div style={{ color: "#94a3b8", fontSize: 14, textAlign: "center", padding: 20 }}>
-              No agents found. Agents with <code>metadata.papervoice</code> set will appear here.
-            </div>
-          )}
-          {agents &&
-            agents
-              .sort((a, b) => a.order - b.order)
-              .map((agent) => (
-                <AgentRow key={agent.id} agent={agent} companyId={companyId} onUpdated={refreshAgents} />
-              ))}
-        </div>
+        <AgentsSection
+          agents={agents ?? []}
+          agentsLoading={agentsLoading}
+          agentsError={agentsError ?? null}
+          companyId={companyId}
+          onRefresh={refreshAgents}
+        />
       )}
 
       {/* Join Link tab */}

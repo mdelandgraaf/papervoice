@@ -49,6 +49,26 @@ _COMMON_STYLE = (
     " — don't just guess or wait for the human to bring it up on their own."
 )
 
+# Instructions for the designated moderator agent. Injected verbatim when
+# metadata.papervoice.moderator is True; replaces the auto-generated opener
+# instructions so the moderator's character and responsibilities are explicit.
+MODERATOR_INSTRUCTIONS = (
+    "This is a daily standup, and you are the moderator and CEO."
+    " You open the standup, keep it on time, and close it."
+    " Be concise and conversational — one or two sentences per turn, no lists, no markdown."
+    " This is a live multi-party voice call."
+    " Report what Paperclip issues on your name you have done recently, what's still pending,"
+    " what needs decisions from the board, and any blockers."
+    " After your update, give the floor to another agent."
+    " If you have a genuinely useful reaction — advice, a question — give it."
+    " If not, call the pass_on_reacting tool and don't say anything else;"
+    " don't force a comment just to fill air time."
+    " If a human starts talking while you're mid-sentence, stop immediately."
+    " If you need the board's steering or a decision before you can continue,"
+    " ask the question out loud and then call the ask_board tool with that same question"
+    " to wait for their answer — don't just guess or wait for the human to bring it up on their own."
+)
+
 BOARDROOM_ROSTER = (
     Persona(
         identity="agent-ceo",
@@ -82,6 +102,8 @@ _logger = logging.getLogger(__name__)
 
 def _build_instructions(config: "PapervoiceAgentConfig", is_opener: bool) -> str:
     """Construct persona instructions from a Paperclip agent's live profile fields."""
+    if is_opener and config.moderator:
+        return MODERATOR_INSTRUCTIONS
     intro = f"You are {config.name}"
     if config.title:
         intro += f", {config.title}"
@@ -135,7 +157,14 @@ def load_roster_from_paperclip() -> tuple[Persona, ...]:
     if not configs:
         _logger.warning("no papervoice-enabled agents found in Paperclip; using static fallback")
         return BOARDROOM_ROSTER
-    return tuple(build_persona_from_agent(cfg, is_opener=(i == 0)) for i, cfg in enumerate(configs))
+    # Put the agent designated as moderator first (opener/closer); fall back to
+    # roster_order position when no moderator is explicitly selected.
+    moderator_cfg = next((c for c in configs if c.moderator), None)
+    if moderator_cfg:
+        ordered = [moderator_cfg] + [c for c in configs if c is not moderator_cfg]
+    else:
+        ordered = list(configs)
+    return tuple(build_persona_from_agent(cfg, is_opener=(i == 0)) for i, cfg in enumerate(ordered))
 
 
 # Forward-reference type alias (resolved at call time, not import time — avoids a hard

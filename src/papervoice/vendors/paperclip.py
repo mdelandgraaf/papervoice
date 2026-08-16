@@ -246,7 +246,7 @@ class PapervoiceAgentConfig:
     Built by get_voice_enabled_agents() and consumed by personas.build_persona_from_agent().
     Fields come from two places: the agent record itself (agent_id, name, role, title,
     capabilities) and the agent's metadata.papervoice object (voice_id, livekit_identity,
-    display_name, roster_order).
+    display_name, roster_order, moderator).
     """
 
     agent_id: str
@@ -258,6 +258,7 @@ class PapervoiceAgentConfig:
     livekit_identity: str
     display_name: str
     roster_order: int
+    moderator: bool = False
 
 
 def get_voice_enabled_agents() -> list[PapervoiceAgentConfig]:
@@ -293,6 +294,7 @@ def get_voice_enabled_agents() -> list[PapervoiceAgentConfig]:
         livekit_identity = pv.get("livekit_identity") or f"agent-{slug}"
         display_name = pv.get("display_name") or agent["name"]
         roster_order = int(pv.get("roster_order", 99))
+        moderator = bool(pv.get("moderator", False))
         result.append(
             PapervoiceAgentConfig(
                 agent_id=agent["id"],
@@ -304,6 +306,7 @@ def get_voice_enabled_agents() -> list[PapervoiceAgentConfig]:
                 livekit_identity=livekit_identity,
                 display_name=display_name,
                 roster_order=roster_order,
+                moderator=moderator,
             )
         )
     result.sort(key=lambda a: (a.roster_order, a.name))

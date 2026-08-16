@@ -12937,7 +12937,8 @@ var plugin = definePlugin({
           voiceId: a.metadata?.papervoice?.voiceId ?? "",
           displayName: a.metadata?.papervoice?.displayName ?? a.name ?? "",
           identity: a.metadata?.papervoice?.identity ?? "",
-          order: a.metadata?.papervoice?.order ?? 99
+          order: a.metadata?.papervoice?.order ?? 99,
+          moderator: a.metadata?.papervoice?.moderator ?? false
         }));
       }
     );

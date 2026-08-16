@@ -29,10 +29,22 @@ function useWorkerStatus(companyId) {
   }, [refresh]);
   return { running, loading, refresh };
 }
+function agentPapervoiceMetadata(a) {
+  return {
+    enabled: a.enabled,
+    voiceId: a.voiceId,
+    displayName: a.displayName,
+    identity: a.identity,
+    order: a.order,
+    moderator: a.moderator
+  };
+}
 function AgentRow({
   agent,
   companyId,
-  onUpdated
+  isModerator,
+  onUpdated,
+  onSetModerator
 }) {
   const [saving, setSaving] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -50,7 +62,7 @@ function AgentRow({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           metadata: {
-            papervoice: { ...getMetadata(agent), enabled: !agent.enabled }
+            papervoice: { ...agentPapervoiceMetadata(agent), enabled: !agent.enabled }
           }
         })
       });
@@ -58,15 +70,6 @@ function AgentRow({
     } finally {
       setSaving(false);
     }
-  }
-  function getMetadata(a) {
-    return {
-      enabled: a.enabled,
-      voiceId: a.voiceId,
-      displayName: a.displayName,
-      identity: a.identity,
-      order: a.order
-    };
   }
   async function saveConfig() {
     setSaving(true);
@@ -81,7 +84,8 @@ function AgentRow({
               voiceId: fields.voiceId,
               displayName: fields.displayName,
               identity: fields.identity,
-              order: parseInt(fields.order, 10) || 99
+              order: parseInt(fields.order, 10) || 99,
+              moderator: agent.moderator
             }
           }
         })
@@ -106,11 +110,34 @@ function AgentRow({
       },
       children: [
         /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 12, justifyContent: "space-between" }, children: [
-          /* @__PURE__ */ jsxs("div", { children: [
-            /* @__PURE__ */ jsx("div", { style: { fontWeight: 600, fontSize: 14 }, children: agent.displayName || agent.name }),
-            /* @__PURE__ */ jsx("div", { style: { fontSize: 12, color: "#64748b" }, children: agent.role })
+          /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 10 }, children: [
+            /* @__PURE__ */ jsxs(
+              "label",
+              {
+                title: "Set as moderator",
+                style: { display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none" },
+                children: [
+                  /* @__PURE__ */ jsx(
+                    "input",
+                    {
+                      type: "radio",
+                      name: "moderator-selection",
+                      checked: isModerator,
+                      onChange: onSetModerator,
+                      style: { accentColor: "#7c3aed", width: 15, height: 15, cursor: "pointer" }
+                    }
+                  ),
+                  /* @__PURE__ */ jsx("span", { style: { fontSize: 11, color: isModerator ? "#7c3aed" : "#94a3b8", fontWeight: isModerator ? 600 : 400 }, children: "MOD" })
+                ]
+              }
+            ),
+            /* @__PURE__ */ jsxs("div", { children: [
+              /* @__PURE__ */ jsx("div", { style: { fontWeight: 600, fontSize: 14 }, children: agent.displayName || agent.name }),
+              /* @__PURE__ */ jsx("div", { style: { fontSize: 12, color: "#64748b" }, children: agent.role })
+            ] })
           ] }),
           /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 8 }, children: [
+            isModerator && /* @__PURE__ */ jsx(StatusBadge, { variant: "info", children: "Moderator" }),
             /* @__PURE__ */ jsx(StatusBadge, { variant: agent.enabled ? "success" : "neutral", children: agent.enabled ? "Enabled" : "Disabled" }),
             /* @__PURE__ */ jsxs(
               "label",
@@ -275,6 +302,93 @@ function AgentRow({
       ]
     }
   );
+}
+function AgentsSection({
+  agents,
+  agentsLoading,
+  agentsError,
+  companyId,
+  onRefresh
+}) {
+  const [settingModerator, setSettingModerator] = useState(false);
+  async function setModerator(newModeratorId) {
+    setSettingModerator(true);
+    try {
+      const prev = agents.find((a) => a.moderator && a.id !== newModeratorId);
+      if (prev) {
+        await fetch(`/api/agents/${prev.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            metadata: { papervoice: { ...agentPapervoiceMetadata(prev), moderator: false } }
+          })
+        });
+      }
+      const next = agents.find((a) => a.id === newModeratorId);
+      if (next) {
+        await fetch(`/api/agents/${newModeratorId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            metadata: { papervoice: { ...agentPapervoiceMetadata(next), moderator: true } }
+          })
+        });
+      }
+      onRefresh();
+    } finally {
+      setSettingModerator(false);
+    }
+  }
+  const sorted = [...agents].sort((a, b) => a.order - b.order);
+  return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 12 }, children: [
+    /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between" }, children: [
+      /* @__PURE__ */ jsx("h2", { style: { fontSize: 16, fontWeight: 600, color: "#0f172a" }, children: "Voice Agents" }),
+      /* @__PURE__ */ jsx(
+        "button",
+        {
+          onClick: onRefresh,
+          style: {
+            background: "#f1f5f9",
+            border: "1px solid #e2e8f0",
+            borderRadius: 6,
+            padding: "4px 12px",
+            fontSize: 12,
+            cursor: "pointer",
+            color: "#334155",
+            fontWeight: 500
+          },
+          children: "Refresh"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ jsxs("p", { style: { fontSize: 12, color: "#64748b", margin: 0 }, children: [
+      "Use the ",
+      /* @__PURE__ */ jsx("strong", { children: "MOD" }),
+      " radio to designate one agent as moderator \u2014 they open the standup, keep it on time, and close it."
+    ] }),
+    agentsLoading && /* @__PURE__ */ jsx(Spinner, {}),
+    settingModerator && /* @__PURE__ */ jsx(Spinner, {}),
+    agentsError && /* @__PURE__ */ jsxs("div", { style: { color: "#dc2626", fontSize: 13 }, children: [
+      "Failed to load agents: ",
+      agentsError.message
+    ] }),
+    agents.length === 0 && !agentsLoading && /* @__PURE__ */ jsxs("div", { style: { color: "#94a3b8", fontSize: 14, textAlign: "center", padding: 20 }, children: [
+      "No agents found. Agents with ",
+      /* @__PURE__ */ jsx("code", { children: "metadata.papervoice" }),
+      " set will appear here."
+    ] }),
+    sorted.map((agent) => /* @__PURE__ */ jsx(
+      AgentRow,
+      {
+        agent,
+        companyId,
+        isModerator: agent.moderator,
+        onUpdated: onRefresh,
+        onSetModerator: () => setModerator(agent.id)
+      },
+      agent.id
+    ))
+  ] });
 }
 function JoinLinkSection({ companyId }) {
   const mintJoinLink = usePluginAction("mint-join-link");
@@ -601,39 +715,16 @@ function PapervoicePage({ context }) {
             ))
           }
         ),
-        activeTab === "agents" && /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 12 }, children: [
-          /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between" }, children: [
-            /* @__PURE__ */ jsx("h2", { style: { fontSize: 16, fontWeight: 600, color: "#0f172a" }, children: "Voice Agents" }),
-            /* @__PURE__ */ jsx(
-              "button",
-              {
-                onClick: refreshAgents,
-                style: {
-                  background: "#f1f5f9",
-                  border: "1px solid #e2e8f0",
-                  borderRadius: 6,
-                  padding: "4px 12px",
-                  fontSize: 12,
-                  cursor: "pointer",
-                  color: "#334155",
-                  fontWeight: 500
-                },
-                children: "Refresh"
-              }
-            )
-          ] }),
-          agentsLoading && /* @__PURE__ */ jsx(Spinner, {}),
-          agentsError && /* @__PURE__ */ jsxs("div", { style: { color: "#dc2626", fontSize: 13 }, children: [
-            "Failed to load agents: ",
-            agentsError.message
-          ] }),
-          agents && agents.length === 0 && /* @__PURE__ */ jsxs("div", { style: { color: "#94a3b8", fontSize: 14, textAlign: "center", padding: 20 }, children: [
-            "No agents found. Agents with ",
-            /* @__PURE__ */ jsx("code", { children: "metadata.papervoice" }),
-            " set will appear here."
-          ] }),
-          agents && agents.sort((a, b) => a.order - b.order).map((agent) => /* @__PURE__ */ jsx(AgentRow, { agent, companyId, onUpdated: refreshAgents }, agent.id))
-        ] }),
+        activeTab === "agents" && /* @__PURE__ */ jsx(
+          AgentsSection,
+          {
+            agents: agents ?? [],
+            agentsLoading,
+            agentsError: agentsError ?? null,
+            companyId,
+            onRefresh: refreshAgents
+          }
+        ),
         activeTab === "join" && /* @__PURE__ */ jsx(JoinLinkSection, { companyId }),
         activeTab === "settings" && /* @__PURE__ */ jsx(
           SettingsSection,

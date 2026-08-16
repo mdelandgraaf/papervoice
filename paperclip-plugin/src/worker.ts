@@ -64,6 +64,7 @@ const plugin = definePlugin({
           displayName: (a.metadata as any)?.papervoice?.displayName ?? a.name ?? "",
           identity: (a.metadata as any)?.papervoice?.identity ?? "",
           order: (a.metadata as any)?.papervoice?.order ?? 99,
+          moderator: (a.metadata as any)?.papervoice?.moderator ?? false,
         }));
       },
     );
