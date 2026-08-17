@@ -68,6 +68,16 @@ fi
 WORKER_HEALTH_PORT=8081
 port_free() { ! ss -ltn 2>/dev/null | grep -q ":${WORKER_HEALTH_PORT}\b"; }
 
+# worker.log is unbounded debug output. A subprocess-spawn spin-loop (the PER-84
+# forkserver flood, now fixed by the durable TMPDIR below) once wrote ~194k
+# identical tracebacks and left 3.7 GB on disk. The durable TMPDIR stops that
+# root cause, but nothing bounded the file itself, so we cap it: on each restart
+# — after the old worker is dead, so no fd holds the file — roll the log aside if
+# it exceeds this size, keeping one prior copy for forensics and starting fresh.
+WORKER_DIR=/var/tmp/papervoice-boardroom
+WORKER_LOG="$WORKER_DIR/worker.log"
+WORKER_LOG_MAX_BYTES=$((200 * 1024 * 1024))  # 200 MiB
+
 if [[ "$need_restart" == "true" ]]; then
   if [[ -n "$worker_pid" ]]; then
     # SIGTERM makes the LiveKit worker DRAIN (finish jobs, deregister) rather
@@ -89,8 +99,18 @@ if [[ "$need_restart" == "true" ]]; then
       exit 1
     fi
   fi
-  # Run from /var/tmp/papervoice-boardroom (durable TMPDIR, see memory note PER-84)
-  mkdir -p /var/tmp/papervoice-boardroom
+  # Run from the durable TMPDIR (see memory note PER-84) so the forkserver
+  # socket survives run cleanup and the worker can spawn job subprocesses.
+  mkdir -p "$WORKER_DIR"
+  # Bound the debug log (see WORKER_LOG note): the old worker is dead here, so no
+  # fd holds the file — roll it aside if oversized before starting fresh.
+  if [[ -f "$WORKER_LOG" ]]; then
+    log_bytes=$(stat -c %s "$WORKER_LOG" 2>/dev/null || echo 0)
+    if (( log_bytes > WORKER_LOG_MAX_BYTES )); then
+      mv -f "$WORKER_LOG" "$WORKER_LOG.1"
+      echo "rolled oversized worker.log ($log_bytes bytes > ${WORKER_LOG_MAX_BYTES}B cap) to worker.log.1"
+    fi
+  fi
   # Export vars from .env then launch; use env file directly via dotenv inside
   # the worker rather than xargs-expanding secrets onto the command line
   set -a
@@ -98,9 +118,9 @@ if [[ "$need_restart" == "true" ]]; then
   source "$env_file"
   set +a
   nohup \
-    env PYTHONPATH="$repo_dir/src" TMPDIR=/var/tmp/papervoice-boardroom \
+    env PYTHONPATH="$repo_dir/src" TMPDIR="$WORKER_DIR" \
     "$repo_dir/.venv/bin/python" -m papervoice.boardroom start \
-    >> /var/tmp/papervoice-boardroom/worker.log 2>&1 &
+    >> "$WORKER_LOG" 2>&1 &
   new_pid=$!
   # Deep liveness check: a bare `kill -0` passes even while the worker is still
   # dying from a bind failure (PER-174), so wait until the new pid is alive AND
@@ -111,7 +131,7 @@ if [[ "$need_restart" == "true" ]]; then
     sleep 1
     kill -0 "$new_pid" 2>/dev/null || break
     port_free && continue
-    if tail -n 60 /var/tmp/papervoice-boardroom/worker.log 2>/dev/null \
+    if tail -n 60 "$WORKER_LOG" 2>/dev/null \
          | grep -q '"registered worker"'; then
       worker_ok=true
       break
@@ -121,7 +141,7 @@ if [[ "$need_restart" == "true" ]]; then
     echo "boardroom worker restarted (pid $new_pid), bound port ${WORKER_HEALTH_PORT} and registered"
     worker_restarted=true
   else
-    echo "boardroom worker failed to start/register — check /var/tmp/papervoice-boardroom/worker.log" >&2
+    echo "boardroom worker failed to start/register — check $WORKER_LOG" >&2
     echo "ROUTINE: FAILED (worker did not start after restart attempt)"
     exit 1
   fi
