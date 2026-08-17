@@ -5,9 +5,11 @@ No live Paperclip API calls, no credentials.
 Run: PYTHONPATH=src python -m unittest discover -s tests -v
 """
 
+import multiprocessing as mp
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -23,6 +25,25 @@ def _status_error(status_code: int) -> httpx.HTTPStatusError:
     request = httpx.Request("GET", "https://example.invalid")
     response = httpx.Response(status_code, request=request)
     return httpx.HTTPStatusError("error", request=request, response=response)
+
+
+def _concurrent_drain_worker(pending_dir: str, counter, lock, latency_s: float) -> None:
+    """Drain the shared queue from a separate process, counting each post.
+
+    The latency stub keeps the process inside drain_pending_comments' post
+    window (between claiming a file and unlinking it) so overlapping drainers
+    actually race — an instant stub would hide the double-post bug.
+    """
+    os.environ["PAPERCLIP_PENDING_POSTS_DIR"] = pending_dir
+
+    def counting_post(issue_id, body):
+        time.sleep(latency_s)
+        with lock:
+            counter.value += 1
+        return {"id": "x"}
+
+    pc.post_comment = counting_post
+    pc.drain_pending_comments()
 
 
 class PaperclipAdapterTest(unittest.TestCase):
@@ -186,6 +207,35 @@ class PaperclipAdapterTest(unittest.TestCase):
             with mock.patch.object(pc, "post_comment", side_effect=RuntimeError("still expired")):
                 self.assertEqual(pc.drain_pending_comments(), 0)
             self.assertEqual(len(list(os.scandir(pending))), 1)
+
+    def test_concurrent_drain_posts_each_comment_exactly_once(self):
+        # PER-257 regression (load-test scenario B2, fast variant): overlapping
+        # wakes call drain_pending_comments concurrently and must never double-
+        # post a queued comment. The atomic os.rename claim in the drainer hands
+        # each file to exactly one process; before that fix this posted queued
+        # comments several times over. Kept small so it runs in the unit suite.
+        self._set_env()
+        ctx = mp.get_context("fork")
+        with tempfile.TemporaryDirectory() as pending:
+            os.environ["PAPERCLIP_PENDING_POSTS_DIR"] = pending
+            queued = 24
+            for i in range(queued):
+                pc.queue_comment(f"issue-{i}", f"body {i}")
+
+            counter = ctx.Value("i", 0)
+            lock = ctx.Lock()
+            procs = [
+                ctx.Process(target=_concurrent_drain_worker, args=(pending, counter, lock, 0.01))
+                for _ in range(4)
+            ]
+            for p in procs:
+                p.start()
+            for p in procs:
+                p.join()
+
+            # exactly-once: every queued comment posted exactly once, none left behind
+            self.assertEqual(counter.value, queued)
+            self.assertEqual(list(os.scandir(pending)), [])
 
     def test_list_agent_ids_returns_id_set(self):
         self._set_env()
