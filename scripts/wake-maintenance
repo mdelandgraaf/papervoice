@@ -61,10 +61,33 @@ sys.stdout.write('true' if result else 'false')
   fi
 fi
 
+# The LiveKit agents worker binds a health/metrics HTTP server on this port; a
+# replacement that starts before the old worker releases it dies with
+# "address already in use" (PER-174). Kept in a var so the free/verify checks
+# below reference the same port the worker actually binds.
+WORKER_HEALTH_PORT=8081
+port_free() { ! ss -ltn 2>/dev/null | grep -q ":${WORKER_HEALTH_PORT}\b"; }
+
 if [[ "$need_restart" == "true" ]]; then
   if [[ -n "$worker_pid" ]]; then
-    pkill -f 'python(3)? -m papervoice\.boardroom start' 2>/dev/null || true
-    sleep 2
+    # SIGTERM makes the LiveKit worker DRAIN (finish jobs, deregister) rather
+    # than exit — during the drain (timeout 1800s) it keeps WORKER_HEALTH_PORT
+    # bound, so a replacement launched too early fails to bind and silently
+    # dies (PER-174). We already confirmed the room is empty above, so there's
+    # nothing to drain gracefully: SIGTERM, then wait for the port to actually
+    # free, escalating to SIGKILL if the drain won't release it in time.
+    pkill -TERM -f 'python(3)? -m papervoice\.boardroom start' 2>/dev/null || true
+    for _ in $(seq 1 8); do port_free && break; sleep 1; done
+    if ! port_free; then
+      echo "port ${WORKER_HEALTH_PORT} still held after SIGTERM — escalating to SIGKILL" >&2
+      pkill -KILL -f 'python(3)? -m papervoice\.boardroom start' 2>/dev/null || true
+      for _ in $(seq 1 8); do port_free && break; sleep 1; done
+    fi
+    if ! port_free; then
+      echo "port ${WORKER_HEALTH_PORT} could not be freed — refusing to launch replacement" >&2
+      echo "ROUTINE: FAILED (old worker would not release port ${WORKER_HEALTH_PORT})"
+      exit 1
+    fi
   fi
   # Run from /var/tmp/papervoice-boardroom (durable TMPDIR, see memory note PER-84)
   mkdir -p /var/tmp/papervoice-boardroom
@@ -79,12 +102,26 @@ if [[ "$need_restart" == "true" ]]; then
     "$repo_dir/.venv/bin/python" -m papervoice.boardroom start \
     >> /var/tmp/papervoice-boardroom/worker.log 2>&1 &
   new_pid=$!
-  sleep 2
-  if kill -0 "$new_pid" 2>/dev/null; then
-    echo "boardroom worker restarted (pid $new_pid)"
+  # Deep liveness check: a bare `kill -0` passes even while the worker is still
+  # dying from a bind failure (PER-174), so wait until the new pid is alive AND
+  # it has bound WORKER_HEALTH_PORT AND LiveKit has confirmed "registered
+  # worker" in the log — only that proves it will actually accept board calls.
+  worker_ok=false
+  for _ in $(seq 1 20); do
+    sleep 1
+    kill -0 "$new_pid" 2>/dev/null || break
+    port_free && continue
+    if tail -n 60 /var/tmp/papervoice-boardroom/worker.log 2>/dev/null \
+         | grep -q '"registered worker"'; then
+      worker_ok=true
+      break
+    fi
+  done
+  if [[ "$worker_ok" == "true" ]]; then
+    echo "boardroom worker restarted (pid $new_pid), bound port ${WORKER_HEALTH_PORT} and registered"
     worker_restarted=true
   else
-    echo "boardroom worker failed to start — check /var/tmp/papervoice-boardroom/worker.log" >&2
+    echo "boardroom worker failed to start/register — check /var/tmp/papervoice-boardroom/worker.log" >&2
     echo "ROUTINE: FAILED (worker did not start after restart attempt)"
     exit 1
   fi
