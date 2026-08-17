@@ -17,6 +17,10 @@ Surfaces under test:
        B1 concurrent enqueue integrity (os.replace atomicity, no partial JSON).
        B2 concurrent-drain exactly-once — detects the double-post race where two
           wakes drain the same queue and post a queued comment twice.
+       D drain crash durability (PER-259) — a drainer SIGKILLed mid-claim (in
+          the window between the atomic claim and the unlink/requeue) orphans a
+          `*.draining-<pid>` file; a later wake must reclaim it so ZERO queued
+          comments are lost. Duplicates on crash are the accepted trade.
   C. Failure mode — a writer crash (SIGKILL) mid token-refresh must leave `.env`
      as either the whole old file or the whole new file, never truncated.
 
@@ -255,6 +259,86 @@ def scenario_b2(queued: int = 200, drainers: int = 8, post_latency_s: float = 0.
 
 
 # ---------------------------------------------------------------------------
+# Scenario D: drainer SIGKILLed mid-claim loses zero queued comments (PER-259)
+# ---------------------------------------------------------------------------
+def _killable_drain_worker(pending_dir: str, posted, lock, latency_s: float) -> None:
+    pc = _load_paperclip(pending_dir)
+
+    def counting_post(issue_id, body):
+        # Latency keeps the process inside the claim->unlink window so a SIGKILL
+        # lands while it holds a *.draining-<pid> claim — exactly the orphan case.
+        time.sleep(latency_s)
+        with lock:
+            posted.append(f"{issue_id}|{body}")
+        return {"id": "x"}
+
+    pc.post_comment = counting_post
+    pc.drain_pending_comments()
+
+
+def scenario_d(queued: int = 200, drainers: int = 8,
+               kill_after_s: float = 0.05, post_latency_s: float = 0.02) -> dict:
+    root = Path(tempfile.mkdtemp(prefix="per259-D-"))
+    pending = root / "pending-posts"
+    pc = _load_paperclip(str(pending))
+    expected = set()
+    for i in range(queued):
+        pc.queue_comment(f"issue-{i}", f"body {i}")
+        expected.add(f"issue-{i}|body {i}")
+
+    mgr = mp.Manager()
+    posted = mgr.list()
+    lock = mgr.Lock()
+    procs = [mp.Process(target=_killable_drain_worker,
+                        args=(str(pending), posted, lock, post_latency_s))
+             for _ in range(drainers)]
+    for p in procs:
+        p.start()
+    time.sleep(kill_after_s)
+    # hard-kill every drainer mid-drain: some die holding a *.draining-<pid> claim
+    for p in procs:
+        if p.is_alive():
+            os.kill(p.pid, signal.SIGKILL)
+    for p in procs:
+        p.join()
+
+    orphaned_at_kill = len(list(pending.glob("*.draining-*")))
+
+    # a fresh wake: reclaim orphans + drain the rest to completion
+    pc2 = _load_paperclip(str(pending))
+
+    def final_post(issue_id, body):
+        with lock:
+            posted.append(f"{issue_id}|{body}")
+        return {"id": "x"}
+
+    pc2.post_comment = final_post
+    pc2.drain_pending_comments()
+
+    posted_set = set(posted)
+    lost = expected - posted_set
+    dupes = len(posted) - len(posted_set)
+    remaining = len(list(pending.glob("*.json")))
+    orphans_left = len(list(pending.glob("*.draining-*")))
+    shutil.rmtree(root, ignore_errors=True)
+    # durability == every queued comment posted at least once, queue fully drained
+    ok = not lost and remaining == 0 and orphans_left == 0
+    return {
+        "name": "D: SIGKILL mid-claim loses zero comments",
+        "pass": ok, "queued": queued, "drainers": drainers,
+        "post_latency_ms": int(post_latency_s * 1000),
+        "orphaned_claims_at_kill": orphaned_at_kill,
+        "posted_unique": len(posted_set), "lost": len(lost),
+        "duplicates_on_crash": dupes,
+        "left_in_queue": remaining, "orphans_left": orphans_left,
+        "note": ("clean — every queued comment survived a mid-claim crash"
+                 if ok else
+                 f"LOST {len(lost)} comment(s): a mid-claim crash orphaned a "
+                 "*.draining-<pid> file that no later wake reclaimed"),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Scenario C: crash mid-write leaves .env whole (never truncated)
 # ---------------------------------------------------------------------------
 def scenario_c(trials: int = 40) -> dict:
@@ -304,7 +388,7 @@ mv -f "$tmp_file" "$env_file"
 def main() -> int:
     mp.set_start_method("fork", force=True)
     print("PER-86 token-handling load test (issue 061b21b4)\n" + "=" * 60)
-    results = [scenario_a(), scenario_b1(), scenario_b2(), scenario_c()]
+    results = [scenario_a(), scenario_b1(), scenario_b2(), scenario_d(), scenario_c()]
     print()
     all_ok = True
     for r in results:

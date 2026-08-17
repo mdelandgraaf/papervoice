@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +24,12 @@ import httpx
 _OPEN_STATUSES = "todo,in_progress,in_review,blocked"
 _TIMEOUT = 15.0
 _DEFAULT_PENDING_POSTS_DIR = "/var/tmp/papervoice-boardroom/pending-posts"
+# A drain claim (`*.draining-<pid>`) held longer than this by a still-running pid
+# is treated as stale, guarding against pid reuse handing a crashed drainer's pid
+# to an unrelated live process. Set well above _TIMEOUT so a healthy in-flight
+# post — which cannot outlast the HTTP timeout — is never reclaimed out from under
+# a live drainer. Override with PAPERCLIP_CLAIM_STALE_SECONDS.
+_CLAIM_STALE_SECONDS = 15 * 60
 logger = logging.getLogger(__name__)
 
 
@@ -167,6 +174,72 @@ def post_comment_or_queue(issue_id: str, body: str) -> dict | None:
         return None
 
 
+def _claim_stale_seconds() -> float:
+    raw = os.environ.get("PAPERCLIP_CLAIM_STALE_SECONDS")
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return _CLAIM_STALE_SECONDS
+
+
+def _pid_alive(pid: int) -> bool:
+    """True if a process with `pid` currently exists (regardless of its owner)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists but owned by another user — still alive
+    return True
+
+
+def _reclaim_orphaned_claims(directory: Path) -> int:
+    """Requeue drain claims abandoned by a drainer that crashed mid-post.
+
+    drain_pending_comments claims a queued file with an atomic rename to
+    `<name>.draining-<pid>` before posting it. A hard crash (SIGKILL) in the
+    narrow window between that claim and the unlink/requeue orphans the file: it
+    no longer matches the `*.json` glob, so no later wake would ever retry it and
+    the queued board comment (a transcript, never a secret) would be silently
+    lost. At the top of every drain we rename such orphans back to `*.json` so
+    the normal loop picks them up again — trading that silent loss for an
+    at-most-once-more repost (a duplicate) if the crash landed after the post
+    itself succeeded. A claim counts as orphaned when its owning pid is gone, or
+    — guarding against pid reuse — when it has sat untouched far longer than any
+    healthy post could take. Live, recently-touched claims are left alone. See
+    PER-259; load-tested in tests/load/test_token_handling_load.py scenario D.
+    """
+    stale_seconds = _claim_stale_seconds()
+    reclaimed = 0
+    for claim in directory.glob("*.draining-*"):
+        original, sep, pid_text = claim.name.rpartition(".draining-")
+        if not sep:
+            continue
+        try:
+            pid = int(pid_text)
+        except ValueError:
+            continue  # unrecognized suffix — leave it untouched
+        if _pid_alive(pid):
+            try:
+                age = time.time() - claim.stat().st_mtime
+            except FileNotFoundError:
+                continue  # already reclaimed/unlinked by a concurrent drainer
+            if age < stale_seconds:
+                continue  # a live drainer is still posting this one
+        try:
+            os.rename(claim, directory / original)  # atomic; concurrent-reclaim loser gets ENOENT
+        except FileNotFoundError:
+            continue  # another drainer reclaimed it first
+        except OSError:
+            logger.exception("failed to reclaim orphaned drain claim %s", claim.name)
+            continue
+        reclaimed += 1
+        logger.warning("reclaimed orphaned drain claim %s (owner pid %s gone/stale)", claim.name, pid)
+    return reclaimed
+
+
 def drain_pending_comments() -> int:
     """Retry every queued comment; leave failures queued and return successes.
 
@@ -178,10 +251,15 @@ def drain_pending_comments() -> int:
     both read a *.json in the window before either unlinks it and post it twice —
     load testing measured ~7x duplicate posts with 8 drainers at 20 ms API
     latency. On post failure the claim is renamed back to *.json for a later retry.
+
+    Before the loop we reclaim claims orphaned by a drainer that was hard-killed
+    mid-post (PER-259), so a crash in that window costs an at-most-once repost
+    instead of silently dropping the queued comment.
     """
     directory = _pending_posts_dir()
     if not directory.exists():
         return 0
+    _reclaim_orphaned_claims(directory)
     posted = 0
     for path in sorted(directory.glob("*.json")):
         # Claim name must NOT end in .json — queued files are dotfiles and

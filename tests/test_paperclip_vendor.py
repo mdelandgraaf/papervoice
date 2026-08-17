@@ -7,6 +7,7 @@ Run: PYTHONPATH=src python -m unittest discover -s tests -v
 
 import multiprocessing as mp
 import os
+import signal
 import sys
 import tempfile
 import time
@@ -43,6 +44,23 @@ def _concurrent_drain_worker(pending_dir: str, counter, lock, latency_s: float) 
         return {"id": "x"}
 
     pc.post_comment = counting_post
+    pc.drain_pending_comments()
+
+
+def _hang_after_claim_worker(pending_dir: str) -> None:
+    """Drain the queue but block forever inside the post, holding the claim.
+
+    Simulates a drainer hard-killed in the window between claiming a queued
+    comment (atomic rename to *.draining-<pid>) and unlinking/requeueing it. The
+    parent SIGKILLs this process while it sleeps, orphaning the claim.
+    """
+    os.environ["PAPERCLIP_PENDING_POSTS_DIR"] = pending_dir
+
+    def hanging_post(issue_id, body):
+        time.sleep(3600)  # block inside the claim->unlink window until SIGKILLed
+        return {"id": "x"}
+
+    pc.post_comment = hanging_post
     pc.drain_pending_comments()
 
 
@@ -236,6 +254,76 @@ class PaperclipAdapterTest(unittest.TestCase):
             # exactly-once: every queued comment posted exactly once, none left behind
             self.assertEqual(counter.value, queued)
             self.assertEqual(list(os.scandir(pending)), [])
+
+    def test_orphaned_claim_is_reclaimed_after_drainer_crash(self):
+        # PER-259 regression (load-test scenario D, fast variant): a drainer
+        # hard-killed between claiming a queued comment and unlinking it orphans
+        # the *.draining-<pid> file. That name no longer matches the *.json glob,
+        # so pre-fix no later wake ever retried it and the comment (a transcript,
+        # never a secret) was silently lost. The reclaim step must requeue it so
+        # a later drain still posts it — zero lost comments.
+        self._set_env()
+        ctx = mp.get_context("fork")
+        with tempfile.TemporaryDirectory() as pending:
+            os.environ["PAPERCLIP_PENDING_POSTS_DIR"] = pending
+            pc.queue_comment("issue-1", "summary text")
+
+            proc = ctx.Process(target=_hang_after_claim_worker, args=(pending,))
+            proc.start()
+            # wait until it has claimed the file (renamed *.json -> *.draining-<pid>)
+            deadline = time.time() + 5
+            claimed = False
+            while time.time() < deadline:
+                if list(Path(pending).glob("*.draining-*")):
+                    claimed = True
+                    break
+                time.sleep(0.01)
+            self.assertTrue(claimed, "drainer never claimed the queued comment")
+
+            os.kill(proc.pid, signal.SIGKILL)  # hard-kill mid-claim -> orphan the claim
+            proc.join()
+
+            # the orphan no longer matches *.json, so a naive re-drain would lose it
+            self.assertEqual(list(Path(pending).glob("*.json")), [])
+            self.assertTrue(list(Path(pending).glob("*.draining-*")))
+
+            # a later wake reclaims the orphan and posts it — zero lost comments
+            with mock.patch.object(pc, "post_comment", return_value={"id": "c1"}) as post:
+                self.assertEqual(pc.drain_pending_comments(), 1)
+            post.assert_called_once_with("issue-1", "summary text")
+            self.assertEqual(list(os.scandir(pending)), [])
+
+    def test_reclaim_leaves_live_drainer_claim_untouched(self):
+        # A claim owned by a still-running pid and touched recently is in-flight,
+        # not orphaned; reclaim must not yank it back and let another drainer
+        # double-post it. Use the current (alive) pid with a fresh mtime.
+        self._set_env()
+        with tempfile.TemporaryDirectory() as pending:
+            os.environ["PAPERCLIP_PENDING_POSTS_DIR"] = pending
+            directory = Path(pending)
+            live_claim = directory / f".pending-live.json.draining-{os.getpid()}"
+            live_claim.write_text('{"issue_id": "issue-1", "body": "in flight"}')
+            self.assertEqual(pc._reclaim_orphaned_claims(directory), 0)
+            self.assertTrue(live_claim.exists())
+
+    def test_reclaim_requeues_stale_claim_from_live_pid(self):
+        # pid-reuse guard: a claim whose pid is alive but that has sat far longer
+        # than any healthy post is stale and must be reclaimed. Force the age
+        # threshold to 0 so the current pid's claim counts as stale.
+        self._set_env()
+        with tempfile.TemporaryDirectory() as pending:
+            os.environ["PAPERCLIP_PENDING_POSTS_DIR"] = pending
+            os.environ["PAPERCLIP_CLAIM_STALE_SECONDS"] = "0"
+            try:
+                directory = Path(pending)
+                original = ".pending-stale.json"
+                claim = directory / f"{original}.draining-{os.getpid()}"
+                claim.write_text('{"issue_id": "issue-1", "body": "stale"}')
+                self.assertEqual(pc._reclaim_orphaned_claims(directory), 1)
+                self.assertTrue((directory / original).exists())
+                self.assertEqual(list(directory.glob("*.draining-*")), [])
+            finally:
+                os.environ.pop("PAPERCLIP_CLAIM_STALE_SECONDS", None)
 
     def test_list_agent_ids_returns_id_set(self):
         self._set_env()
