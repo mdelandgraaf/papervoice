@@ -168,20 +168,42 @@ def post_comment_or_queue(issue_id: str, body: str) -> dict | None:
 
 
 def drain_pending_comments() -> int:
-    """Retry every queued comment; leave failures queued and return successes."""
+    """Retry every queued comment; leave failures queued and return successes.
+
+    Safe under concurrent drains (overlapping wakes call this on every wake — see
+    PER-86 load test tests/load/test_token_handling_load.py, scenario B2). Each
+    file is *claimed* by an atomic rename to a drainer-private name before the
+    network post: os.rename can hand the source to exactly one caller, so the
+    loser gets FileNotFoundError and skips it. Without this claim, two drainers
+    both read a *.json in the window before either unlinks it and post it twice —
+    load testing measured ~7x duplicate posts with 8 drainers at 20 ms API
+    latency. On post failure the claim is renamed back to *.json for a later retry.
+    """
     directory = _pending_posts_dir()
     if not directory.exists():
         return 0
     posted = 0
     for path in sorted(directory.glob("*.json")):
+        # Claim name must NOT end in .json — queued files are dotfiles and
+        # pathlib's "*.json" glob matches them, so a .json claim would be
+        # re-claimed by a concurrent drainer. Suffix keeps it out of the glob.
+        claim = directory / f"{path.name}.draining-{os.getpid()}"
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            os.rename(path, claim)  # atomic claim; loser of the race gets ENOENT
+        except FileNotFoundError:
+            continue  # another drainer already claimed this comment
+        try:
+            payload = json.loads(claim.read_text(encoding="utf-8"))
             post_comment(payload["issue_id"], payload["body"])
-            path.unlink()
+            claim.unlink()
             posted += 1
             logger.info("posted queued Paperclip comment %s", path.name)
         except Exception:
-            logger.exception("failed to drain queued Paperclip comment %s; retaining it", path)
+            logger.exception("failed to drain queued Paperclip comment %s; retaining it", path.name)
+            try:
+                os.replace(claim, path)  # un-claim so a later wake retries it
+            except OSError:
+                logger.exception("failed to requeue claimed comment %s", claim.name)
     return posted
 
 

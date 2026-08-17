@@ -349,3 +349,7 @@ name. The dynamic roster is built at call start from `personas.load_roster_from_
    `PAPERCLIP_PENDING_POSTS_DIR`). A failed post-call summary is written as an atomic JSON payload
    by `vendors.paperclip.post_comment_or_queue`; it is removed only after a successful retry. This
    bounds token gaps at the wake cadence and prevents a transient 401/404 from losing the transcript.
+   Load-tested for security sign-off (issue 061b21b4, `tests/load/test_token_handling_load.py`): the
+   atomic `.env` refresh is race-safe under 50 concurrent writers and crash-safe under SIGKILL. The
+   drainer claims each file with an atomic rename before posting, so overlapping wakes cannot double-
+   post a queued comment (the pre-fix race posted queued comments ~7x under 8 concurrent drainers).
