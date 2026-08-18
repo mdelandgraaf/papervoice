@@ -24,17 +24,6 @@ interface WorkerStatusResult {
   running: boolean;
 }
 
-interface ActiveRoom {
-  name: string;
-  numParticipants: number;
-  numPublishers: number;
-}
-
-interface ActiveRoomsResult {
-  configured: boolean;
-  rooms: ActiveRoom[];
-}
-
 interface RoomPreset {
   id: string;
   name: string;
@@ -262,158 +251,82 @@ function LinkButton({ companyId, room, label }: { companyId: string; room: strin
   );
 }
 
-// ─── LiveBadge ────────────────────────────────────────────────────────────────
-
-function LiveBadge({ count }: { count: number }) {
-  if (count === 0) return null;
-  return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 4,
-        background: "#dcfce7",
-        color: "#166534",
-        borderRadius: 9999,
-        padding: "2px 7px",
-        fontSize: 11,
-        fontWeight: 600,
-        whiteSpace: "nowrap",
-      }}
-    >
-      <span
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: "50%",
-          background: "#16a34a",
-          display: "inline-block",
-          flexShrink: 0,
-        }}
-      />
-      {count} in call
-    </span>
-  );
-}
-
 // ─── Dashboard widget ─────────────────────────────────────────────────────────
 
 export function PapervoiceLinksWidget({ context }: PluginWidgetProps) {
   const companyId = context.companyId ?? "";
   const { data: agents, loading: agentsLoading, error: agentsError } = usePluginData<VoiceAgent[]>("agents", { companyId });
-  const { data: activeRoomsData, loading: roomsLoading, error: roomsError, refresh: refreshRooms } = usePluginData<ActiveRoomsResult>("active-rooms", { companyId });
+  const { data: presets, loading: presetsLoading } = usePluginData<RoomPreset[]>("room-presets", { companyId });
 
   const linkedAgents = [...(agents ?? [])]
     .filter((agent) => agent.identity.trim())
     .sort((a, b) => a.order - b.order);
-
-  const roomParticipants = new Map<string, number>(
-    (activeRoomsData?.rooms ?? []).map((r) => [r.name, r.numParticipants])
-  );
-
-  useEffect(() => {
-    const id = setInterval(refreshRooms, 30_000);
-    return () => clearInterval(id);
-  }, [refreshRooms]);
-
-  const loading = agentsLoading || roomsLoading;
-  const error = agentsError || roomsError;
+  const configuredPresets = presets ?? [];
+  const loading = agentsLoading || presetsLoading;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {/* Header row with refresh */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: C.textLabel }}>Papervoice rooms</div>
-        {!loading && (
-          <button
-            onClick={refreshRooms}
-            style={{ background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 11, color: C.textMuted }}
-            title="Refresh room status"
-          >
-            ↺
-          </button>
-        )}
-        {loading && <Spinner size="sm" />}
-      </div>
+      {loading && <Spinner size="sm" />}
+      {agentsError && <div style={{ color: C.red, fontSize: 12 }}>Failed to load agents: {agentsError.message}</div>}
 
-      {error && <div style={{ color: C.red, fontSize: 12 }}>Failed to load: {error.message}</div>}
-
-      {/* Boardroom */}
+      {/* Boardroom — always present */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
         <div style={{ minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontWeight: 600, color: C.textPrimary }}>Boardroom</span>
-            <LiveBadge count={roomParticipants.get("papervoice-boardroom") ?? 0} />
-          </div>
+          <div style={{ fontWeight: 600, color: C.textPrimary }}>Boardroom</div>
           <code style={{ fontSize: 11, color: C.textMuted }}>papervoice-boardroom</code>
         </div>
         <LinkButton companyId={companyId} room="papervoice-boardroom" label="Join room" />
       </div>
 
-      {/* Agent direct-call rooms */}
-      {linkedAgents.map((agent) => {
-        const roomName = `papervoice-direct-${agent.identity}`;
-        const participants = roomParticipants.get(roomName) ?? 0;
-        return (
-          <div
-            key={agent.id}
-            style={{
-              borderTop: `1px solid ${C.border}`,
-              paddingTop: 8,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 12,
-            }}
-          >
-            <div style={{ minWidth: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 13, fontWeight: 500, color: C.textSecondary }}>{agent.displayName || agent.name}</span>
-                <LiveBadge count={participants} />
-              </div>
-              <code style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: C.textFaint }}>
-                {roomName}
-              </code>
-            </div>
-            <LinkButton companyId={companyId} room={roomName} label="Call agent" />
+      {/* Preset rooms from plugin settings */}
+      {configuredPresets.map((preset) => (
+        <div
+          key={preset.id}
+          style={{
+            borderTop: `1px solid ${C.border}`,
+            paddingTop: 8,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 500, color: C.textSecondary }}>{preset.name}</div>
+            <code style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: C.textFaint }}>
+              papervoice-preset-{preset.id}
+            </code>
           </div>
-        );
-      })}
+          <LinkButton companyId={companyId} room={`papervoice-preset-${preset.id}`} label="Join room" />
+        </div>
+      ))}
 
-      {!agentsLoading && !agentsError && linkedAgents.length === 0 && (
-        <div style={{ color: C.textFaint, fontSize: 12 }}>No agents have a LiveKit identity configured.</div>
+      {/* Per-agent direct-call rooms */}
+      {linkedAgents.map((agent) => (
+        <div
+          key={agent.id}
+          style={{
+            borderTop: `1px solid ${C.border}`,
+            paddingTop: 8,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 500, color: C.textSecondary }}>{agent.displayName || agent.name}</div>
+            <code style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: C.textFaint }}>
+              papervoice-direct-{agent.identity}
+            </code>
+          </div>
+          <LinkButton companyId={companyId} room={`papervoice-direct-${agent.identity}`} label="Call agent" />
+        </div>
+      ))}
+
+      {!loading && !agentsError && linkedAgents.length === 0 && configuredPresets.length === 0 && (
+        <div style={{ color: C.textFaint, fontSize: 12 }}>No rooms or agents configured in Papervoice settings.</div>
       )}
-
-      {/* Any other active papervoice rooms not covered above */}
-      {(activeRoomsData?.rooms ?? [])
-        .filter((r) => {
-          if (r.numParticipants === 0) return false;
-          if (r.name === "papervoice-boardroom") return false;
-          if (linkedAgents.some((a) => `papervoice-direct-${a.identity}` === r.name)) return false;
-          if (!r.name.startsWith("papervoice-")) return false;
-          return true;
-        })
-        .map((r) => (
-          <div
-            key={r.name}
-            style={{
-              borderTop: `1px solid ${C.border}`,
-              paddingTop: 8,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 12,
-            }}
-          >
-            <div style={{ minWidth: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ fontSize: 13, fontWeight: 500, color: C.textSecondary }}>{r.name}</span>
-                <LiveBadge count={r.numParticipants} />
-              </div>
-            </div>
-            <LinkButton companyId={companyId} room={r.name} label="Join room" />
-          </div>
-        ))}
     </div>
   );
 }
