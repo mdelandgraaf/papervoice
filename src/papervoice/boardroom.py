@@ -62,7 +62,18 @@ from papervoice.vendors import paperclip as pc_vendor
 
 logger = logging.getLogger("papervoice.boardroom")
 
-TRANSCRIBER_IDENTITY = "papervoice-moderator"
+# The shared STT session's LiveKit participant. It is the room's silent "ears"
+# (transcribes humans, drives barge-in), never a voice and never a
+# decision-maker — so it must NOT be named "moderator". A caller reading the
+# participant list would otherwise see a "papervoice-moderator" bot alongside
+# the CEO persona and reasonably assume a second, redundant chair (PER-357).
+# The turn-taking moderator is server-side code (moderator.py), not a
+# participant; the CEO persona (roster_order 0) is the spoken chair.
+TRANSCRIBER_IDENTITY = "papervoice-transcriber"
+# LiveKit job-dispatch control connection (see request_fnc/entrypoint). Silent
+# plumbing: it accepts the dispatch job and hosts the room, hosts no persona
+# session, and never speaks or listens. Named so the participant list is
+# self-explanatory rather than showing a bare "agent-<job.id>" (PER-85).
 DISPATCH_IDENTITY = "papervoice-dispatch"
 AGENT_LLM_MODEL = "claude-haiku-4-5"
 

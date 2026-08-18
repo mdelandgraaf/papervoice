@@ -219,6 +219,28 @@ moderator floor control, human tracks preempt):
     call, while a clear sentence-level imperative naming a roster agent (for example, "Eng, please
     leave") closes only that agent session. Questions and unnamed group phrases do not dismiss anyone.
 
+14a. **Who is actually in the room, and why it isn't "a moderator plus a dispatch" (PER-357).**
+    A caller's participant list shows more names than there are executives, and two of them look
+    like redundant chairs. They are not — only the persona participants (`agent-ceo`, `agent-eng`, …)
+    have a voice, an LLM, and a turn. The two non-persona participants are silent infrastructure:
+    - **`papervoice-transcriber`** — the single shared STT session (`_connect_transcriber`). It is the
+      room's only ears: it transcribes humans, drives barge-in, and detects the last human leaving. It
+      never speaks and makes no decisions. It was previously named `papervoice-moderator`, which is
+      exactly what made it read as a second chair sitting next to the CEO — renamed for that reason.
+    - **`papervoice-dispatch`** — the LiveKit job-dispatch control connection (`request_fnc`/`entrypoint`).
+      It accepts the dispatch job and hosts the room; it hosts no persona session and never speaks or
+      listens. Without an explicit identity LiveKit would show it as a bare `agent-<job.id>` (PER-85).
+
+    The **moderator** in this design is not a participant at all — it is the server-side turn-taking
+    engine (`moderator.py`, note 1 above): floor control, barge-in, graceful degradation, agenda order.
+    It deliberately has no voice and no LiveKit identity because floor control must be deterministic
+    code, not an LLM persona that might not enforce it. The **CEO** persona (`roster_order 0`) is the
+    human-facing chair — it opens, closes, and sweeps decisions into tickets — but "chairing the
+    meeting" (a spoken role) and "holding the speaker token" (the moderator engine) are two different
+    things, which is why the CEO does not replace the moderator. So: both non-persona names are needed
+    (STT and LiveKit job plumbing), neither is a redundant AI brain, and the CEO already *is* the
+    moderator in the only sense that has a voice.
+
 14. **A question that names an agent is answered by that agent (PER-293).** Both the barge-in answer
     (note 8) and the open-floor discussion (note 9) used to hand the reply to whoever held the floor
     — the interrupted agent, or the meeting closer — so "Eng, what's blocking you?" got answered by
