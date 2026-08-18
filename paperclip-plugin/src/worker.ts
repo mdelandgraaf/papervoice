@@ -66,6 +66,64 @@ function normalizePresetInput(params: any, existing: RoomPreset[] = []): RoomPre
   return { id, name, agentIds };
 }
 
+/**
+ * Pre-create a LiveKit room (if not already existing) and stamp its metadata.
+ * The boardroom Python worker cannot access the plugin-config endpoint with its
+ * agent token, so we embed the preset's agentIds in the LiveKit room metadata
+ * when the human mints their join link. The worker reads ctx.room.metadata instead.
+ *
+ * Steps:
+ *  1. CreateRoom — idempotent; creates the room if absent, returns existing if present
+ *     but does NOT update metadata on an existing room.
+ *  2. UpdateRoomMetadata — sets metadata regardless of whether the room existed.
+ *
+ * Errors are non-fatal: the join link is still returned and the boardroom falls
+ * back to the (less graceful) plugin-config path.
+ */
+async function stampLiveKitRoomMetadata(
+  liveKitUrl: string,
+  apiKey: string,
+  apiSecret: string,
+  roomName: string,
+  metadata: string,
+): Promise<void> {
+  const httpUrl = liveKitUrl.replace(/^wss:\/\//, "https://").replace(/^ws:\/\//, "http://");
+  const now = Math.floor(Date.now() / 1000);
+  const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
+  // Admin token: roomCreate + roomAdmin with no room restriction = admin for all rooms.
+  const payload = Buffer.from(
+    JSON.stringify({
+      exp: now + 60,
+      iss: apiKey,
+      nbf: now,
+      sub: "admin",
+      video: { roomCreate: true, roomAdmin: true },
+      sha256: createHash("sha256").update("").digest("hex"),
+    }),
+  ).toString("base64url");
+  const sig = createHmac("sha256", apiSecret).update(`${header}.${payload}`).digest("base64url");
+  const adminToken = `${header}.${payload}.${sig}`;
+  const headers = { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` };
+
+  // Step 1: create room (no-op if already exists; metadata is NOT updated here).
+  await fetch(`${httpUrl}/twirp/livekit.RoomService/CreateRoom`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ name: roomName }),
+  });
+
+  // Step 2: stamp metadata (works whether step 1 created a new room or not).
+  const resp = await fetch(`${httpUrl}/twirp/livekit.RoomService/UpdateRoomMetadata`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ room: roomName, metadata }),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`LiveKit UpdateRoomMetadata ${resp.status}: ${text}`);
+  }
+}
+
 function isBoardroomRunning(): boolean {
   try {
     execSync("pgrep -f boardroom.py", { stdio: "ignore" });
@@ -139,6 +197,33 @@ const plugin = definePlugin({
         const room =
           params.room ||
           (typeof config.room === "string" ? config.room : "papervoice-boardroom");
+
+        // For preset rooms, stamp the agent list into the LiveKit room metadata before
+        // returning the token. The boardroom Python worker uses an agent token which
+        // cannot access the plugin-config endpoint (403), so it reads ctx.room.metadata
+        // instead to resolve which agents should join. This is best-effort: if the
+        // Room Service call fails the link is still returned and the boardroom falls back.
+        if (room.startsWith("papervoice-preset-")) {
+          const presetId = room.slice("papervoice-preset-".length);
+          try {
+            const presets = readRoomPresets(config);
+            const preset = presets.find((p) => p.id === presetId);
+            if (preset) {
+              await stampLiveKitRoomMetadata(
+                liveKitUrl,
+                liveKitApiKey,
+                liveKitApiSecret,
+                room,
+                JSON.stringify({ presetId: preset.id, agentIds: preset.agentIds }),
+              );
+            } else {
+              console.warn(`mint-join-link: preset ${presetId} not found in config; skipping metadata stamp`);
+            }
+          } catch (e) {
+            console.error("mint-join-link: failed to stamp LiveKit room metadata for preset:", e);
+          }
+        }
+
         const token = mintLiveKitToken(
           liveKitApiKey,
           liveKitApiSecret,

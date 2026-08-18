@@ -300,7 +300,10 @@ def is_auth_error(exc: Exception) -> bool:
 def get_plugin_config() -> dict:
     """Fetch the Papervoice plugin configuration from the Paperclip API.
 
-    Returns the raw configJson dict (empty dict on a 404 / unconfigured instance).
+    Returns the raw configJson dict on success, or an empty dict on 404
+    (unconfigured) or 403 (caller is an agent token without board access —
+    the boardroom worker authenticates as an agent and cannot reach the
+    plugin-config endpoint, which requires a board session).
     Raises on any other HTTP error.
     """
     resp = httpx.get(
@@ -309,7 +312,7 @@ def get_plugin_config() -> dict:
         params={"companyId": _company_id()},
         timeout=_TIMEOUT,
     )
-    if resp.status_code == 404:
+    if resp.status_code in (404, 403):
         return {}
     resp.raise_for_status()
     body = resp.json()

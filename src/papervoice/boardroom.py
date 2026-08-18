@@ -28,6 +28,7 @@ PER-79.
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -781,12 +782,50 @@ async def entrypoint(ctx) -> None:
         await run_standup(ctx.room.name, summary_issue_id=summary_issue_id, roster=roster)
     elif ctx.room.name.startswith("papervoice-preset-"):
         live_roster = await asyncio.to_thread(load_roster_from_paperclip)
-        try:
-            roster = resolve_named_preset(ctx.room.name, await asyncio.to_thread(pc_vendor.get_plugin_config), live_roster)
-        except ValueError:
-            logger.exception("invalid named preset %s; closing", ctx.room.name); return
+        roster: tuple[Persona, ...] | None = None
+
+        # Primary path: agent IDs are encoded in the LiveKit room metadata, which
+        # the plugin worker sets when minting the human join link (before the human
+        # arrives). The boardroom agent can read room.metadata without board access.
+        raw_meta = getattr(ctx.room, "metadata", None)
+        if raw_meta:
+            try:
+                meta = json.loads(raw_meta)
+                agent_ids = meta.get("agentIds")
+                if isinstance(agent_ids, list) and agent_ids:
+                    wanted = set(agent_ids)
+                    roster = tuple(p for p in live_roster if p.paperclip_agent_id in wanted)
+                    logger.info(
+                        "resolved preset %s from room metadata: %s",
+                        ctx.room.name,
+                        [p.identity for p in roster],
+                    )
+            except Exception:
+                logger.warning("could not parse room metadata for preset %s", ctx.room.name, exc_info=True)
+
+        # Fallback path: read the preset from the plugin config. The plugin-config
+        # endpoint requires board access and returns 403 for agent tokens; after the
+        # get_plugin_config() fix this degrades to an empty dict (no presets) rather
+        # than a crash, so the "no valid agents" guard below handles it cleanly.
         if not roster:
-            logger.error("named preset %s is unknown or has no valid enabled agents; closing", ctx.room.name); return
+            try:
+                roster = resolve_named_preset(
+                    ctx.room.name,
+                    await asyncio.to_thread(pc_vendor.get_plugin_config),
+                    live_roster,
+                )
+            except Exception:
+                logger.exception("preset %s: failed to resolve from plugin config; closing", ctx.room.name)
+                return
+
+        if not roster:
+            logger.error(
+                "preset %s: no valid enabled agents found (room metadata absent or empty; "
+                "plugin config returned no match). Join the room via a freshly minted link "
+                "from the Papervoice settings page to ensure room metadata is populated.",
+                ctx.room.name,
+            )
+            return
         await run_standup(ctx.room.name, summary_issue_id=os.environ.get("PAPERCLIP_STANDUP_SUMMARY_ISSUE_ID"), roster=roster)
     else:
         # Full boardroom standup.

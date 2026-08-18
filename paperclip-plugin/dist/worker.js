@@ -12940,6 +12940,38 @@ function normalizePresetInput(params, existing = []) {
   if (duplicate) throw new Error("A preset with that name already exists");
   return { id, name, agentIds };
 }
+async function stampLiveKitRoomMetadata(liveKitUrl, apiKey, apiSecret, roomName, metadata) {
+  const httpUrl = liveKitUrl.replace(/^wss:\/\//, "https://").replace(/^ws:\/\//, "http://");
+  const now = Math.floor(Date.now() / 1e3);
+  const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
+  const payload = Buffer.from(
+    JSON.stringify({
+      exp: now + 60,
+      iss: apiKey,
+      nbf: now,
+      sub: "admin",
+      video: { roomCreate: true, roomAdmin: true },
+      sha256: createHash("sha256").update("").digest("hex")
+    })
+  ).toString("base64url");
+  const sig = createHmac("sha256", apiSecret).update(`${header}.${payload}`).digest("base64url");
+  const adminToken = `${header}.${payload}.${sig}`;
+  const headers = { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` };
+  await fetch(`${httpUrl}/twirp/livekit.RoomService/CreateRoom`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ name: roomName })
+  });
+  const resp = await fetch(`${httpUrl}/twirp/livekit.RoomService/UpdateRoomMetadata`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ room: roomName, metadata })
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`LiveKit UpdateRoomMetadata ${resp.status}: ${text}`);
+  }
+}
 function isBoardroomRunning() {
   try {
     execSync("pgrep -f boardroom.py", { stdio: "ignore" });
@@ -13002,6 +13034,26 @@ var plugin = definePlugin({
           ctx.secrets.resolve(apiSecretRef, { companyId: params.companyId, configPath: "liveKitApiSecretRef" })
         ]);
         const room = params.room || (typeof config.room === "string" ? config.room : "papervoice-boardroom");
+        if (room.startsWith("papervoice-preset-")) {
+          const presetId = room.slice("papervoice-preset-".length);
+          try {
+            const presets = readRoomPresets(config);
+            const preset = presets.find((p) => p.id === presetId);
+            if (preset) {
+              await stampLiveKitRoomMetadata(
+                liveKitUrl,
+                liveKitApiKey,
+                liveKitApiSecret,
+                room,
+                JSON.stringify({ presetId: preset.id, agentIds: preset.agentIds })
+              );
+            } else {
+              console.warn(`mint-join-link: preset ${presetId} not found in config; skipping metadata stamp`);
+            }
+          } catch (e) {
+            console.error("mint-join-link: failed to stamp LiveKit room metadata for preset:", e);
+          }
+        }
         const token = mintLiveKitToken(
           liveKitApiKey,
           liveKitApiSecret,
