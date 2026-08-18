@@ -12977,6 +12977,14 @@ var plugin = definePlugin({
       const existing = readRoomPresets(config);
       return normalizePresetInput(params, existing);
     });
+    ctx.actions.register("list-room-presets", async (params) => readRoomPresets(await ctx.config.get(params.companyId)));
+    ctx.actions.register("create-room-preset", async (params) => normalizePresetInput(params, readRoomPresets(await ctx.config.get(params.companyId))));
+    ctx.actions.register("update-room-preset", async (params) => normalizePresetInput(params, readRoomPresets(await ctx.config.get(params.companyId))));
+    ctx.actions.register("delete-room-preset", async (params) => {
+      const presets = readRoomPresets(await ctx.config.get(params.companyId));
+      if (!presets.some((p) => p.id === params.id)) throw new Error("Unknown room preset");
+      return { id: params.id, roomPresets: presets.filter((p) => p.id !== params.id) };
+    });
     ctx.actions.register(
       "mint-join-link",
       async (params) => {
