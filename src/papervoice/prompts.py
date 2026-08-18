@@ -1,13 +1,15 @@
 """Papervoice prompt configuration — loads from Paperclip plugin config at call start.
 
-Three configurable prompt levels:
+Four configurable prompt levels:
   1. promptModerator  — system-level instructions for the standup moderator agent.
   2. promptParticipant — system-level instructions for participant (non-moderator) agents.
   3. promptAgendaOpening — the moderator's opening turn instructions (replaces the
      instance-specific "say this is the milestone-X test call" text). Use {next_speaker}
      where the first update speaker's name should appear.
+  4. promptDirectCall — system-level instructions for an agent on a 1:1 direct call.
+     Use {agent_name} where the agent's display name should appear.
 
-All three fall back to built-in defaults when not configured.
+All four fall back to built-in defaults when not configured.
 """
 
 import logging
@@ -61,12 +63,23 @@ DEFAULT_AGENDA_OPENING = (
     " and hand it to {next_speaker} for their update."
 )
 
+# Use {agent_name} where the agent's display name should appear.
+# The agent's current open Paperclip issues are appended automatically when available.
+DEFAULT_DIRECT_CALL_INSTRUCTIONS = (
+    "You are {agent_name} on a one-on-one voice call with a board member."
+    " Treat this like calling a colleague to discuss work — speak naturally and conversationally."
+    " Keep your responses concise (one to three sentences) and leave space for the other person to reply."
+    " You can discuss your work, answer questions about your issues, and file follow-up Paperclip"
+    " issues with the file_followup_issue tool when something needs tracking."
+)
+
 
 @dataclass
 class PromptConfig:
     moderator_instructions: str = field(default=DEFAULT_MODERATOR_INSTRUCTIONS)
     participant_instructions: str = field(default=DEFAULT_PARTICIPANT_INSTRUCTIONS)
     agenda_opening: str = field(default=DEFAULT_AGENDA_OPENING)
+    direct_call_instructions: str = field(default=DEFAULT_DIRECT_CALL_INSTRUCTIONS)
 
 
 def load_prompt_config() -> PromptConfig:
@@ -83,6 +96,7 @@ def load_prompt_config() -> PromptConfig:
             moderator_instructions=config.get("promptModerator") or DEFAULT_MODERATOR_INSTRUCTIONS,
             participant_instructions=config.get("promptParticipant") or DEFAULT_PARTICIPANT_INSTRUCTIONS,
             agenda_opening=config.get("promptAgendaOpening") or DEFAULT_AGENDA_OPENING,
+            direct_call_instructions=config.get("promptDirectCall") or DEFAULT_DIRECT_CALL_INSTRUCTIONS,
         )
     except Exception:
         logger.warning("failed to load prompt config from Paperclip plugin config; using defaults")

@@ -821,10 +821,12 @@ function JoinLinkSection({ companyId }) {
 var DEFAULT_MODERATOR = `This is a daily standup, and you are the moderator. You open the standup, keep it on time, and close it. Be concise and conversational \u2014 one or two sentences per turn, no lists, no markdown. This is a live multi-party voice call. Report what Paperclip issues on your name you have done recently, what's still pending, what needs decisions from the board, and any blockers. After your update, give the floor to another agent. If you have a genuinely useful reaction \u2014 advice, a question \u2014 give it. If not, call the pass_on_reacting tool and don't say anything else; don't force a comment just to fill air time. If a human starts talking while you're mid-sentence, stop immediately. If you need the board's steering or a decision before you can continue, ask the question out loud and then call the ask_board tool with that same question to wait for their answer \u2014 don't just guess or wait for the human to bring it up on their own.`;
 var DEFAULT_PARTICIPANT = `This is a live multi-party voice call daily standup, and you are a participant. Your role is to update the moderator and board with the latest status of your recent Paperclip issues, and to ask questions if there are blockers or decisions that need to be taken. Be concise and conversational \u2014 one or two sentences per issue, no lists, no markdown. Report what Paperclip issues on your name you have done recently, what's still pending, what needs decisions from the board, and any blockers. After your update, give the floor to another agent. If you have a genuinely useful reaction \u2014 advice, a question \u2014 give it. If not, call the pass_on_reacting tool and don't say anything else; don't force a comment just to fill air time. If a human starts talking while you're mid-sentence, stop immediately. If you need the board's steering or a decision before you can continue, ask the question out loud and then call the ask_board tool with that same question to wait for their answer \u2014 don't just guess or wait for the human to bring it up on their own.`;
 var DEFAULT_AGENDA_OPENING = `Open the standup: greet everyone, introduce this as a Papervoice voice standup, and hand it to {next_speaker} for their update.`;
+var DEFAULT_DIRECT_CALL = `You are {agent_name} on a one-on-one voice call with a board member. Treat this like calling a colleague to discuss work \u2014 speak naturally and conversationally. Keep your responses concise (one to three sentences) and leave space for the other person to reply. You can discuss your work, answer questions about your issues, and file follow-up Paperclip issues with the file_followup_issue tool when something needs tracking.`;
 function PromptsSection({ companyId }) {
   const [promptModerator, setPromptModerator] = useState(DEFAULT_MODERATOR);
   const [promptParticipant, setPromptParticipant] = useState(DEFAULT_PARTICIPANT);
   const [promptAgendaOpening, setPromptAgendaOpening] = useState(DEFAULT_AGENDA_OPENING);
+  const [promptDirectCall, setPromptDirectCall] = useState(DEFAULT_DIRECT_CALL);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(null);
   useEffect(() => {
@@ -835,6 +837,7 @@ function PromptsSection({ companyId }) {
       setPromptModerator(values.promptModerator ?? DEFAULT_MODERATOR);
       setPromptParticipant(values.promptParticipant ?? DEFAULT_PARTICIPANT);
       setPromptAgendaOpening(values.promptAgendaOpening ?? DEFAULT_AGENDA_OPENING);
+      setPromptDirectCall(values.promptDirectCall ?? DEFAULT_DIRECT_CALL);
     }).catch(() => {
     }).finally(() => setLoading(false));
   }, [companyId]);
@@ -852,7 +855,8 @@ function PromptsSection({ companyId }) {
           ...existing,
           promptModerator: promptModerator.trim() || null,
           promptParticipant: promptParticipant.trim() || null,
-          promptAgendaOpening: promptAgendaOpening.trim() || null
+          promptAgendaOpening: promptAgendaOpening.trim() || null,
+          promptDirectCall: promptDirectCall.trim() || null
         }
       })
     });
@@ -935,6 +939,23 @@ function PromptsSection({ companyId }) {
               }
             )
           ] }),
+          /* @__PURE__ */ jsxs("div", { children: [
+            /* @__PURE__ */ jsx("label", { style: labelStyle, children: "One-on-one call prompt" }),
+            /* @__PURE__ */ jsxs("p", { style: hintStyle, children: [
+              "System-level instructions for an agent on a 1:1 direct call with a board member. Use ",
+              /* @__PURE__ */ jsx("code", { children: "{agent_name}" }),
+              " where the agent's display name should appear. The agent's current open issues are appended automatically when available."
+            ] }),
+            /* @__PURE__ */ jsx(
+              "textarea",
+              {
+                value: promptDirectCall,
+                onChange: (e) => setPromptDirectCall(e.target.value),
+                style: areaStyle,
+                rows: 5
+              }
+            )
+          ] }),
           /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 10 }, children: [
             /* @__PURE__ */ jsx(
               "button",
@@ -960,6 +981,7 @@ function PromptsSection({ companyId }) {
                   setPromptModerator(DEFAULT_MODERATOR);
                   setPromptParticipant(DEFAULT_PARTICIPANT);
                   setPromptAgendaOpening(DEFAULT_AGENDA_OPENING);
+                  setPromptDirectCall(DEFAULT_DIRECT_CALL);
                 },
                 style: {
                   background: "none",

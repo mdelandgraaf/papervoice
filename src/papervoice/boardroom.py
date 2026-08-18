@@ -525,17 +525,16 @@ def _speaker_handle(
 
 
 
-def _direct_call_instructions(persona: Persona, briefing: str | None = None) -> str:
+def _direct_call_instructions(
+    persona: Persona,
+    briefing: str | None = None,
+    prompt_cfg: PromptConfig | None = None,
+) -> str:
     """Instructions for a 1:1 direct call — natural conversation, not standup script."""
+    cfg = prompt_cfg or PromptConfig()
     context = f"\n\nYour current open Paperclip issues: {briefing}" if briefing else ""
-    return (
-        f"You are {persona.display_name} on a one-on-one voice call with a board member."
-        " Treat this like calling a colleague to discuss work — speak naturally and conversationally."
-        " Keep your responses concise (one to three sentences) and leave space for the other person to reply."
-        " You can discuss your work, answer questions about your issues, and file follow-up Paperclip"
-        " issues with the file_followup_issue tool when something needs tracking."
-        f"{context}"
-    )
+    base = cfg.direct_call_instructions.replace("{agent_name}", persona.display_name)
+    return f"{base}{context}"
 
 
 def _direct_file_issue_tool(persona: Persona, filed_issues: list):
@@ -611,13 +610,14 @@ async def run_direct_call(
     after the human leaves. If no issues were filed the summary is skipped —
     there is nothing worth recording beyond the conversation itself.
     """
+    prompt_cfg = await asyncio.to_thread(load_prompt_config)
     briefing: str | None = None
     try:
         briefing = await asyncio.to_thread(pc_vendor.context_briefing, persona.paperclip_agent_id)
     except Exception:
         logger.exception("failed to load Paperclip context for direct call with %s", persona.identity)
 
-    instructions = _direct_call_instructions(persona, briefing)
+    instructions = _direct_call_instructions(persona, briefing, prompt_cfg)
     filed_issues: list[tuple[str, str]] = []
 
     token = lk_vendor.mint_join_token(persona.identity, room_name, ttl_hours=1, agent=True)

@@ -762,10 +762,13 @@ const DEFAULT_PARTICIPANT = `This is a live multi-party voice call daily standup
 
 const DEFAULT_AGENDA_OPENING = `Open the standup: greet everyone, introduce this as a Papervoice voice standup, and hand it to {next_speaker} for their update.`;
 
+const DEFAULT_DIRECT_CALL = `You are {agent_name} on a one-on-one voice call with a board member. Treat this like calling a colleague to discuss work — speak naturally and conversationally. Keep your responses concise (one to three sentences) and leave space for the other person to reply. You can discuss your work, answer questions about your issues, and file follow-up Paperclip issues with the file_followup_issue tool when something needs tracking.`;
+
 function PromptsSection({ companyId }: { companyId: string }) {
   const [promptModerator, setPromptModerator] = useState(DEFAULT_MODERATOR);
   const [promptParticipant, setPromptParticipant] = useState(DEFAULT_PARTICIPANT);
   const [promptAgendaOpening, setPromptAgendaOpening] = useState(DEFAULT_AGENDA_OPENING);
+  const [promptDirectCall, setPromptDirectCall] = useState(DEFAULT_DIRECT_CALL);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -778,6 +781,7 @@ function PromptsSection({ companyId }: { companyId: string }) {
         setPromptModerator(values.promptModerator ?? DEFAULT_MODERATOR);
         setPromptParticipant(values.promptParticipant ?? DEFAULT_PARTICIPANT);
         setPromptAgendaOpening(values.promptAgendaOpening ?? DEFAULT_AGENDA_OPENING);
+        setPromptDirectCall(values.promptDirectCall ?? DEFAULT_DIRECT_CALL);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -799,6 +803,7 @@ function PromptsSection({ companyId }: { companyId: string }) {
           promptModerator: promptModerator.trim() || null,
           promptParticipant: promptParticipant.trim() || null,
           promptAgendaOpening: promptAgendaOpening.trim() || null,
+          promptDirectCall: promptDirectCall.trim() || null,
         },
       }),
     });
@@ -880,6 +885,21 @@ function PromptsSection({ companyId }: { companyId: string }) {
           />
         </div>
 
+        <div>
+          <label style={labelStyle}>One-on-one call prompt</label>
+          <p style={hintStyle}>
+            System-level instructions for an agent on a 1:1 direct call with a board member.
+            Use <code>{"{agent_name}"}</code> where the agent&apos;s display name should appear.
+            The agent&apos;s current open issues are appended automatically when available.
+          </p>
+          <textarea
+            value={promptDirectCall}
+            onChange={(e) => setPromptDirectCall(e.target.value)}
+            style={areaStyle}
+            rows={5}
+          />
+        </div>
+
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button
             onClick={savePrompts}
@@ -901,6 +921,7 @@ function PromptsSection({ companyId }: { companyId: string }) {
               setPromptModerator(DEFAULT_MODERATOR);
               setPromptParticipant(DEFAULT_PARTICIPANT);
               setPromptAgendaOpening(DEFAULT_AGENDA_OPENING);
+              setPromptDirectCall(DEFAULT_DIRECT_CALL);
             }}
             style={{
               background: "none",
