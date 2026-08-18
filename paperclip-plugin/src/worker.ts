@@ -158,6 +158,52 @@ const plugin = definePlugin({
       },
     );
 
+    ctx.data.register("active-rooms", async (params: { companyId: string }) => {
+      const config = await ctx.config.get(params.companyId);
+      const liveKitUrl = config.liveKitUrl;
+      const apiKeyRef = config.liveKitApiKeyRef;
+      const apiSecretRef = config.liveKitApiSecretRef;
+      if (typeof liveKitUrl !== "string" || !isSecretRef(apiKeyRef) || !isSecretRef(apiSecretRef)) {
+        return { configured: false, rooms: [] };
+      }
+      const [liveKitApiKey, liveKitApiSecret] = await Promise.all([
+        ctx.secrets.resolve(apiKeyRef, { companyId: params.companyId, configPath: "liveKitApiKeyRef" }),
+        ctx.secrets.resolve(apiSecretRef, { companyId: params.companyId, configPath: "liveKitApiSecretRef" }),
+      ]);
+      const httpUrl = liveKitUrl.replace(/^wss:\/\//, "https://").replace(/^ws:\/\//, "http://");
+      const now = Math.floor(Date.now() / 1000);
+      const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
+      const payload = Buffer.from(
+        JSON.stringify({
+          exp: now + 60,
+          iss: liveKitApiKey,
+          nbf: now,
+          sub: liveKitApiKey,
+          video: { roomList: true },
+        }),
+      ).toString("base64url");
+      const sig = createHmac("sha256", liveKitApiSecret).update(`${header}.${payload}`).digest("base64url");
+      const adminToken = `${header}.${payload}.${sig}`;
+      const resp = await fetch(`${httpUrl}/twirp/livekit.RoomService/ListRooms`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify({}),
+      });
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => "");
+        throw new Error(`ListRooms failed (${resp.status}): ${text}`);
+      }
+      const data = (await resp.json()) as { rooms?: any[] };
+      return {
+        configured: true,
+        rooms: (data.rooms ?? []).map((r: any) => ({
+          name: String(r.name ?? ""),
+          numParticipants: Number(r.numParticipants ?? 0),
+          numPublishers: Number(r.numPublishers ?? 0),
+        })),
+      };
+    });
+
     ctx.data.register("room-presets", async (params: { companyId: string }) => {
       const config = await ctx.config.get(params.companyId);
       return readRoomPresets(config);

@@ -63,6 +63,17 @@ var btnSecondary = {
   cursor: "pointer",
   whiteSpace: "nowrap"
 };
+var btnCall = (disabled = false) => ({
+  background: disabled ? "#bbf7d0" : "#16a34a",
+  border: "none",
+  borderRadius: 6,
+  padding: "5px 12px",
+  fontSize: 12,
+  fontWeight: 600,
+  color: "#fff",
+  cursor: disabled ? "not-allowed" : "pointer",
+  whiteSpace: "nowrap"
+});
 var btnGhost = {
   background: "none",
   border: `1px solid ${C.border}`,
@@ -166,24 +177,121 @@ function LinkButton({ companyId, room, label }) {
     error && /* @__PURE__ */ jsx("span", { style: { color: C.red, fontSize: 11, maxWidth: 180, textAlign: "right" }, children: error })
   ] });
 }
+function LiveBadge({ count }) {
+  if (count === 0) return null;
+  return /* @__PURE__ */ jsxs(
+    "span",
+    {
+      style: {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        background: "#dcfce7",
+        color: "#166534",
+        borderRadius: 9999,
+        padding: "2px 7px",
+        fontSize: 11,
+        fontWeight: 600,
+        whiteSpace: "nowrap"
+      },
+      children: [
+        /* @__PURE__ */ jsx(
+          "span",
+          {
+            style: {
+              width: 6,
+              height: 6,
+              borderRadius: "50%",
+              background: "#16a34a",
+              display: "inline-block",
+              flexShrink: 0
+            }
+          }
+        ),
+        count,
+        " in call"
+      ]
+    }
+  );
+}
 function PapervoiceLinksWidget({ context }) {
   const companyId = context.companyId ?? "";
-  const { data: agents, loading, error } = usePluginData("agents", { companyId });
+  const { data: agents, loading: agentsLoading, error: agentsError } = usePluginData("agents", { companyId });
+  const { data: activeRoomsData, loading: roomsLoading, error: roomsError, refresh: refreshRooms } = usePluginData("active-rooms", { companyId });
   const linkedAgents = [...agents ?? []].filter((agent) => agent.identity.trim()).sort((a, b) => a.order - b.order);
+  const roomParticipants = new Map(
+    (activeRoomsData?.rooms ?? []).map((r) => [r.name, r.numParticipants])
+  );
+  useEffect(() => {
+    const id = setInterval(refreshRooms, 3e4);
+    return () => clearInterval(id);
+  }, [refreshRooms]);
+  const loading = agentsLoading || roomsLoading;
+  const error = agentsError || roomsError;
   return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 10 }, children: [
+    /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" }, children: [
+      /* @__PURE__ */ jsx("div", { style: { fontSize: 12, fontWeight: 600, color: C.textLabel }, children: "Papervoice rooms" }),
+      !loading && /* @__PURE__ */ jsx(
+        "button",
+        {
+          onClick: refreshRooms,
+          style: { background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 11, color: C.textMuted },
+          title: "Refresh room status",
+          children: "\u21BA"
+        }
+      ),
+      loading && /* @__PURE__ */ jsx(Spinner, { size: "sm" })
+    ] }),
+    error && /* @__PURE__ */ jsxs("div", { style: { color: C.red, fontSize: 12 }, children: [
+      "Failed to load: ",
+      error.message
+    ] }),
     /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }, children: [
-      /* @__PURE__ */ jsxs("div", { children: [
-        /* @__PURE__ */ jsx("div", { style: { fontWeight: 600, color: C.textPrimary }, children: "Boardroom" }),
+      /* @__PURE__ */ jsxs("div", { style: { minWidth: 0 }, children: [
+        /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 6 }, children: [
+          /* @__PURE__ */ jsx("span", { style: { fontWeight: 600, color: C.textPrimary }, children: "Boardroom" }),
+          /* @__PURE__ */ jsx(LiveBadge, { count: roomParticipants.get("papervoice-boardroom") ?? 0 })
+        ] }),
         /* @__PURE__ */ jsx("code", { style: { fontSize: 11, color: C.textMuted }, children: "papervoice-boardroom" })
       ] }),
       /* @__PURE__ */ jsx(LinkButton, { companyId, room: "papervoice-boardroom", label: "Join room" })
     ] }),
-    loading && /* @__PURE__ */ jsx(Spinner, {}),
-    error && /* @__PURE__ */ jsxs("div", { style: { color: C.red, fontSize: 12 }, children: [
-      "Failed to load agents: ",
-      error.message
-    ] }),
-    linkedAgents.map((agent) => /* @__PURE__ */ jsxs(
+    linkedAgents.map((agent) => {
+      const roomName = `papervoice-direct-${agent.identity}`;
+      const participants = roomParticipants.get(roomName) ?? 0;
+      return /* @__PURE__ */ jsxs(
+        "div",
+        {
+          style: {
+            borderTop: `1px solid ${C.border}`,
+            paddingTop: 8,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12
+          },
+          children: [
+            /* @__PURE__ */ jsxs("div", { style: { minWidth: 0 }, children: [
+              /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }, children: [
+                /* @__PURE__ */ jsx("span", { style: { fontSize: 13, fontWeight: 500, color: C.textSecondary }, children: agent.displayName || agent.name }),
+                /* @__PURE__ */ jsx(LiveBadge, { count: participants })
+              ] }),
+              /* @__PURE__ */ jsx("code", { style: { display: "block", overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: C.textFaint }, children: roomName })
+            ] }),
+            /* @__PURE__ */ jsx(LinkButton, { companyId, room: roomName, label: "Call agent" })
+          ]
+        },
+        agent.id
+      );
+    }),
+    !agentsLoading && !agentsError && linkedAgents.length === 0 && /* @__PURE__ */ jsx("div", { style: { color: C.textFaint, fontSize: 12 }, children: "No agents have a LiveKit identity configured." }),
+    (activeRoomsData?.rooms ?? []).filter((r) => {
+      if (r.numParticipants === 0) return false;
+      if (r.name === "papervoice-boardroom") return false;
+      if (linkedAgents.some((a) => `papervoice-direct-${a.identity}` === r.name)) return false;
+      if (!r.name.startsWith("papervoice-")) return false;
+      return true;
+    }).map((r) => /* @__PURE__ */ jsxs(
       "div",
       {
         style: {
@@ -195,19 +303,15 @@ function PapervoiceLinksWidget({ context }) {
           gap: 12
         },
         children: [
-          /* @__PURE__ */ jsxs("div", { style: { minWidth: 0 }, children: [
-            /* @__PURE__ */ jsx("div", { style: { fontSize: 13, fontWeight: 500, color: C.textSecondary }, children: agent.displayName || agent.name }),
-            /* @__PURE__ */ jsxs("code", { style: { display: "block", overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: C.textFaint }, children: [
-              "papervoice-direct-",
-              agent.identity
-            ] })
-          ] }),
-          /* @__PURE__ */ jsx(LinkButton, { companyId, room: `papervoice-direct-${agent.identity}`, label: "Call agent" })
+          /* @__PURE__ */ jsx("div", { style: { minWidth: 0 }, children: /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 6 }, children: [
+            /* @__PURE__ */ jsx("span", { style: { fontSize: 13, fontWeight: 500, color: C.textSecondary }, children: r.name }),
+            /* @__PURE__ */ jsx(LiveBadge, { count: r.numParticipants })
+          ] }) }),
+          /* @__PURE__ */ jsx(LinkButton, { companyId, room: r.name, label: "Join room" })
         ]
       },
-      agent.id
-    )),
-    !loading && !error && linkedAgents.length === 0 && /* @__PURE__ */ jsx("div", { style: { color: C.textFaint, fontSize: 12 }, children: "No agents have a LiveKit identity configured." })
+      r.name
+    ))
   ] });
 }
 function CustomRoomSection({ companyId, agents }) {
@@ -449,6 +553,29 @@ function AgentRow({
   const [directBusy, setDirectBusy] = useState(false);
   const [directError, setDirectError] = useState(null);
   const [directCopied, setDirectCopied] = useState(false);
+  const [callBusy, setCallBusy] = useState(false);
+  const [callError, setCallError] = useState(null);
+  async function startDirectCall() {
+    setCallBusy(true);
+    setCallError(null);
+    try {
+      const identity = fields.identity.trim();
+      if (!identity) {
+        throw new Error("Set a LiveKit Identity and save before starting a call.");
+      }
+      const result = await mintDirectLink({
+        companyId,
+        identity: "human-guest",
+        room: `papervoice-direct-${identity}`,
+        ttlHours: 48
+      });
+      window.open(result.joinUrl, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setCallError(err?.message ?? "Failed to start call");
+    } finally {
+      setCallBusy(false);
+    }
+  }
   async function generateDirectLink() {
     setDirectBusy(true);
     setDirectError(null);
@@ -505,6 +632,19 @@ function AgentRow({
         /* @__PURE__ */ jsxs("div", { children: [
           /* @__PURE__ */ jsx("div", { style: { fontWeight: 600, fontSize: 14, color: C.textPrimary }, children: agent.displayName || agent.name }),
           /* @__PURE__ */ jsx("div", { style: { fontSize: 12, color: C.textMuted }, children: agent.role })
+        ] }),
+        /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 3 }, children: [
+          /* @__PURE__ */ jsx(
+            "button",
+            {
+              onClick: startDirectCall,
+              disabled: callBusy || !fields.identity.trim(),
+              title: fields.identity.trim() ? `Start a 1:1 call with ${agent.displayName || agent.name}` : "Set a LiveKit Identity and save before calling",
+              style: btnCall(callBusy || !fields.identity.trim()),
+              children: callBusy ? "Calling\u2026" : "\u{1F4DE} Call"
+            }
+          ),
+          callError && /* @__PURE__ */ jsx("span", { style: { color: C.red, fontSize: 11, maxWidth: 200 }, children: callError })
         ] })
       ] }),
       /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 8 }, children: [
