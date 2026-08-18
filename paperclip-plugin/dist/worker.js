@@ -12949,9 +12949,8 @@ async function stampLiveKitRoomMetadata(liveKitUrl, apiKey, apiSecret, roomName,
       exp: now + 60,
       iss: apiKey,
       nbf: now,
-      sub: "admin",
-      video: { roomCreate: true, roomAdmin: true },
-      sha256: createHash("sha256").update("").digest("hex")
+      sub: apiKey,
+      video: { roomCreate: true, roomAdmin: true }
     })
   ).toString("base64url");
   const sig = createHmac("sha256", apiSecret).update(`${header}.${payload}`).digest("base64url");
