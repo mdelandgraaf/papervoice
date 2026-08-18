@@ -95,6 +95,52 @@ class ElevenLabsAdapterTest(unittest.TestCase):
                 el.stt_roundtrip(b"fake-audio-bytes")
 
 
+class ResolveVoiceIdTest(unittest.TestCase):
+    """PER-306: a voice_id that has drifted off the account must fall back to a
+    voice the account actually lists, so an agent is never left silent."""
+
+    def setUp(self):
+        self._env = mock.patch.dict(os.environ, {}, clear=False)
+        self._env.start()
+        os.environ.pop("ELEVENLABS_VOICE_ID", None)  # voice_id() -> DEFAULT_VOICE_ID
+        el._account_voice_ids.cache_clear()
+
+    def tearDown(self):
+        el._account_voice_ids.cache_clear()
+        self._env.stop()
+
+    def test_valid_voice_passes_through(self):
+        with mock.patch.object(el, "list_voice_ids", return_value={"good-1", "good-2"}):
+            self.assertEqual(el.resolve_voice_id("good-1"), "good-1")
+
+    def test_invalid_voice_falls_back_to_default_when_present(self):
+        available = {el.DEFAULT_VOICE_ID, "other"}
+        with mock.patch.object(el, "list_voice_ids", return_value=available):
+            self.assertEqual(el.resolve_voice_id("P4DhdyNCB4Nl6MA0sL45"), el.DEFAULT_VOICE_ID)
+
+    def test_invalid_voice_falls_back_to_candidate_when_default_absent(self):
+        # PER-306's actual account: DEFAULT_VOICE_ID absent, but Sarah present.
+        available = {"EXAVITQu4vr4xnSDxMaL", "JBFqnCBsd6RMkjVDRZzb"}
+        with mock.patch.object(el, "list_voice_ids", return_value=available):
+            self.assertEqual(el.resolve_voice_id("P4DhdyNCB4Nl6MA0sL45"), "EXAVITQu4vr4xnSDxMaL")
+
+    def test_invalid_voice_falls_back_to_any_available_as_last_resort(self):
+        available = {"zzz-only-voice"}
+        with mock.patch.object(el, "list_voice_ids", return_value=available):
+            self.assertEqual(el.resolve_voice_id("nope"), "zzz-only-voice")
+
+    def test_empty_request_uses_env_default_then_validates(self):
+        os.environ.pop("ELEVENLABS_VOICE_ID", None)  # -> DEFAULT_VOICE_ID
+        available = {"EXAVITQu4vr4xnSDxMaL"}  # DEFAULT_VOICE_ID absent
+        with mock.patch.object(el, "list_voice_ids", return_value=available):
+            self.assertEqual(el.resolve_voice_id(""), "EXAVITQu4vr4xnSDxMaL")
+            self.assertEqual(el.resolve_voice_id(None), "EXAVITQu4vr4xnSDxMaL")
+
+    def test_unreachable_account_trusts_caller(self):
+        with mock.patch.object(el, "list_voice_ids", side_effect=RuntimeError("api down")):
+            self.assertEqual(el.resolve_voice_id("whatever"), "whatever")
+
+
 class LiveKitAdapterTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self._env = mock.patch.dict(os.environ, {}, clear=False)

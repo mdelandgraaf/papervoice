@@ -6,14 +6,27 @@ Surfaces:
   healthcheck exercises the underlying API even if the plugin's class shapes change.
 """
 
+import functools
+import logging
 import os
 
 import httpx
 
+logger = logging.getLogger(__name__)
+
 API_BASE = "https://api.elevenlabs.io/v1"
-DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"  # premade "Rachel", present on every account
+DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"  # premade "Rachel" — usually present, but not on every account
 DEFAULT_TTS_MODEL = "eleven_turbo_v2_5"
 DEFAULT_STT_MODEL = "scribe_v1"
+
+# Premade voices to reach for when a persona's configured voice_id has drifted off
+# the account (PER-306). Tried in order after the env default and DEFAULT_VOICE_ID;
+# the final fallback is any voice the account actually lists, so an agent is never
+# left mute by a stale/invalid voice_id.
+_FALLBACK_VOICE_CANDIDATES = (
+    "EXAVITQu4vr4xnSDxMaL",  # Sarah
+    "JBFqnCBsd6RMkjVDRZzb",  # George
+)
 
 
 def _api_key() -> str:
@@ -27,11 +40,69 @@ def voice_id() -> str:
     return os.environ.get("ELEVENLABS_VOICE_ID") or DEFAULT_VOICE_ID
 
 
+@functools.lru_cache(maxsize=1)
+def _account_voice_ids() -> frozenset[str]:
+    """Account voice ids, fetched once per process. Cached because it gates every
+    TTS construction (plugin_tts) and the set only changes when someone edits the
+    ElevenLabs account — and the worker is restarted often enough (token refresh)
+    that staleness never outlives a real config change. lru_cache never caches the
+    exception, so a transient API blip is retried on the next call."""
+    return frozenset(list_voice_ids())
+
+
+def resolve_voice_id(requested: str | None) -> str:
+    """Return a voice_id guaranteed to be on the account when we can verify it.
+
+    A persona's configured voice_id can drift off the account (renamed/deleted
+    voice, a stale placeholder, or an env default that this account simply
+    doesn't have) — and ElevenLabs then rejects every synthesis with
+    ``voice_id_does_not_exist``, leaving the agent permanently silent for the
+    whole call (PER-306). Fall back to a voice the account actually lists so the
+    agent can always speak; a wrong-but-audible voice beats a dead call
+    (docs/ARCHITECTURE.md "graceful degradation"). If the account list can't be
+    fetched, trust the caller rather than forcing a fallback that might be just
+    as wrong.
+
+    Caveat: list_voice_ids() is the account *library*. The REST synth path is lenient
+    and will speak an unlisted id, but the streaming WebSocket path live calls use only
+    accepts library voices (it rejected PER-306's unlisted P4Dhdy…), so library
+    membership is the right signal here. Worst case this swaps a rarely-used unlisted
+    premade for a listed one — a benign, logged voice change that still speaks; it never
+    leaves the agent silent, which is the failure this guards against.
+    """
+    candidate = (requested or "").strip() or voice_id()
+    try:
+        available = _account_voice_ids()
+    except Exception:
+        logger.warning("could not list account voices to validate %r; using it as-is", candidate)
+        return candidate
+    if candidate in available:
+        return candidate
+    for fallback in (voice_id(), DEFAULT_VOICE_ID, *_FALLBACK_VOICE_CANDIDATES):
+        if fallback in available:
+            logger.warning(
+                "voice_id %r is not on the ElevenLabs account; falling back to %s",
+                candidate,
+                fallback,
+            )
+            return fallback
+    if available:
+        chosen = sorted(available)[0]
+        logger.warning(
+            "voice_id %r not on account and no preferred fallback present; using %s",
+            candidate,
+            chosen,
+        )
+        return chosen
+    logger.error("account lists no voices at all; using %r as-is (synthesis will likely fail)", candidate)
+    return candidate
+
+
 def plugin_tts(voice_id_override: str | None = None):
     from livekit.plugins import elevenlabs
 
     return elevenlabs.TTS(
-        voice_id=voice_id_override or voice_id(), model=DEFAULT_TTS_MODEL, api_key=_api_key()
+        voice_id=resolve_voice_id(voice_id_override), model=DEFAULT_TTS_MODEL, api_key=_api_key()
     )
 
 
@@ -49,7 +120,13 @@ def list_voice_ids() -> set[str]:
 
 
 def tts_roundtrip(text: str = "Papervoice healthcheck.") -> bytes:
-    """Synthesize `text` and return the audio bytes. Raises on any failure."""
+    """Synthesize `text` and return the audio bytes. Raises on any failure.
+
+    Note: the REST /text-to-speech path is lenient about voice_id — it will happily
+    return audio for a voice_id the streaming WebSocket path (what live calls use)
+    rejects with ``voice_id_does_not_exist`` (observed for PER-306's P4Dhdy…). So this
+    roundtrip is not a voice-validity check; list_voice_ids() membership is the signal
+    that tracks what streaming will accept (see check_live_roster_voices)."""
     resp = httpx.post(
         f"{API_BASE}/text-to-speech/{voice_id()}",
         params={"output_format": "mp3_22050_32"},

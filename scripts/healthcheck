@@ -11,10 +11,13 @@ the system depends on:
   5. LiveKit SIP trunk status: confirm the SIP API is reachable. Telephony is optional
      and not yet provisioned (see docs/ARCHITECTURE.md), so 0 configured trunks is healthy;
      this only catches the SIP API itself going unreachable or the SDK surface breaking.
-  6. Boardroom voice roster: every M2 persona's voice_id still exists on the account.
-  7. Paperclip API reachability: a real authenticated call (Milestone 3), so a bad/expired
+  6. Boardroom voice roster: every static-fallback persona's voice_id still exists on the account.
+  7. Live roster voices: every LIVE Paperclip-configured persona voice_id (metadata.papervoice.voice_id)
+     still exists on the account — the voices real calls actually use (PER-306). Catches a
+     configured voice drifting off the account, which otherwise leaves the agent silent on a call.
+  8. Paperclip API reachability: a real authenticated call (Milestone 3), so a bad/expired
      PAPERCLIP_API_KEY or URL drift is caught here instead of during a call.
-  8. Paperclip persona roster: every persona's bound paperclip_agent_id (personas.py)
+  9. Paperclip persona roster: every persona's bound paperclip_agent_id (personas.py)
      still exists in the company — catches an agent being renamed/removed/re-hired.
 
 Exit code 0 = all green. Costs: two short TTS/STT calls (< $0.01), no LiveKit charges
@@ -92,6 +95,36 @@ def check_boardroom_voices() -> str:
     return f"{len(BOARDROOM_ROSTER)} persona voices present ({', '.join(p.display_name for p in BOARDROOM_ROSTER)})"
 
 
+def check_live_roster_voices() -> str:
+    """Every LIVE Paperclip-configured persona voice_id still exists on the account.
+
+    check_boardroom_voices above only covers the static BOARDROOM_ROSTER fallback;
+    real calls use the live roster built from each agent's metadata.papervoice.voice_id
+    (personas.load_roster_from_paperclip / _resolve_direct_persona). A voice_id that
+    drifted off the account there makes the agent silent on a real call while the
+    static check stays green — exactly PER-306. Catch it here, in the check, not in a
+    failed board meeting.
+    """
+    try:
+        configs = pc.get_voice_enabled_agents()
+    except Exception as exc:  # noqa: BLE001
+        return f"skipped — Paperclip roster unreachable ({type(exc).__name__})"
+    if not configs:
+        return "no voice-enabled agents configured in Paperclip (nothing to check)"
+    # Check against list_voice_ids() (the account voice *library*). This is the signal
+    # that tracks the streaming WebSocket TTS live calls use: it rejected PER-306's
+    # unlisted P4Dhdy… placeholder, while the lenient REST synth path did not — so a
+    # REST roundtrip is NOT a valid check here, library membership is.
+    available = el.list_voice_ids()
+    bad = [(c.display_name, c.voice_id) for c in configs if c.voice_id not in available]
+    if bad:
+        raise RuntimeError(
+            "live roster voice_id not in ElevenLabs library (streaming TTS will reject) for: "
+            + ", ".join(f"{name} ({vid})" for name, vid in bad)
+        )
+    return f"{len(configs)} live persona voice(s) in library ({', '.join(c.display_name for c in configs)})"
+
+
 def check_paperclip_api() -> str:
     t0 = time.monotonic()
     issues = pc.company_snapshot(limit=1)
@@ -118,6 +151,7 @@ def main() -> int:
         ("LiveKit room join", check_livekit_room_join),
         ("LiveKit SIP trunk status", check_sip_trunk),
         ("Boardroom voice roster", check_boardroom_voices),
+        ("Live roster voices", check_live_roster_voices),
         ("Paperclip API reachability", check_paperclip_api),
         ("Paperclip persona roster", check_paperclip_persona_roster),
     )
