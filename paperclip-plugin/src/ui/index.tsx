@@ -138,6 +138,44 @@ function AgentRow({
     }
   }
 
+  const mintDirectLink = usePluginAction("mint-join-link");
+  const [directLink, setDirectLink] = useState<string | null>(null);
+  const [directBusy, setDirectBusy] = useState(false);
+  const [directError, setDirectError] = useState<string | null>(null);
+  const [directCopied, setDirectCopied] = useState(false);
+
+  async function generateDirectLink() {
+    setDirectBusy(true);
+    setDirectError(null);
+    setDirectLink(null);
+    try {
+      const identity = fields.identity.trim();
+      if (!identity) {
+        throw new Error("Set a LiveKit Identity and save before generating a direct link.");
+      }
+      const result = (await mintDirectLink({
+        companyId,
+        identity: "human-guest",
+        room: `papervoice-direct-${identity}`,
+        ttlHours: 48,
+      })) as { joinUrl: string };
+      setDirectLink(result.joinUrl);
+    } catch (err: any) {
+      setDirectError(err?.message ?? "Failed to generate direct link");
+    } finally {
+      setDirectBusy(false);
+    }
+  }
+
+  function copyDirectLink() {
+    if (directLink) {
+      navigator.clipboard.writeText(directLink).then(() => {
+        setDirectCopied(true);
+        setTimeout(() => setDirectCopied(false), 2000);
+      });
+    }
+  }
+
   return (
     <div
       style={{
@@ -311,6 +349,81 @@ function AgentRow({
             >
               {saving ? "Saving…" : "Save"}
             </button>
+          </div>
+
+          <div
+            style={{
+              gridColumn: "1 / -1",
+              borderTop: "1px solid #f1f5f9",
+              paddingTop: 10,
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#475569" }}>Direct call link</div>
+                <div style={{ fontSize: 11, color: "#94a3b8" }}>
+                  1:1 voice call with this agent (room <code>papervoice-direct-{fields.identity || "…"}</code>).
+                </div>
+              </div>
+              <button
+                onClick={generateDirectLink}
+                disabled={directBusy}
+                style={{
+                  background: "#f1f5f9",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 6,
+                  padding: "6px 12px",
+                  fontSize: 12,
+                  cursor: directBusy ? "not-allowed" : "pointer",
+                  fontWeight: 600,
+                  color: "#334155",
+                  whiteSpace: "nowrap",
+                  opacity: directBusy ? 0.6 : 1,
+                }}
+              >
+                {directBusy ? "Generating…" : "Direct link"}
+              </button>
+            </div>
+            {directError && <div style={{ color: "#dc2626", fontSize: 12 }}>{directError}</div>}
+            {directLink && (
+              <div
+                style={{
+                  background: "#f1f5f9",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 6,
+                  padding: "8px 10px",
+                  fontFamily: "monospace",
+                  fontSize: 12,
+                  wordBreak: "break-all",
+                  color: "#1e293b",
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 8,
+                }}
+              >
+                <span style={{ flex: 1 }}>{directLink}</span>
+                <button
+                  onClick={copyDirectLink}
+                  style={{
+                    background: directCopied ? "#dcfce7" : "#e2e8f0",
+                    border: "none",
+                    borderRadius: 4,
+                    padding: "4px 10px",
+                    fontSize: 12,
+                    cursor: "pointer",
+                    color: directCopied ? "#166534" : "#334155",
+                    fontWeight: 600,
+                    whiteSpace: "nowrap",
+                    flexShrink: 0,
+                  }}
+                >
+                  {directCopied ? "Copied!" : "Copy"}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

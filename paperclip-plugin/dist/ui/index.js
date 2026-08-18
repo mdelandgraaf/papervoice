@@ -96,6 +96,41 @@ function AgentRow({
       setSaving(false);
     }
   }
+  const mintDirectLink = usePluginAction("mint-join-link");
+  const [directLink, setDirectLink] = useState(null);
+  const [directBusy, setDirectBusy] = useState(false);
+  const [directError, setDirectError] = useState(null);
+  const [directCopied, setDirectCopied] = useState(false);
+  async function generateDirectLink() {
+    setDirectBusy(true);
+    setDirectError(null);
+    setDirectLink(null);
+    try {
+      const identity = fields.identity.trim();
+      if (!identity) {
+        throw new Error("Set a LiveKit Identity and save before generating a direct link.");
+      }
+      const result = await mintDirectLink({
+        companyId,
+        identity: "human-guest",
+        room: `papervoice-direct-${identity}`,
+        ttlHours: 48
+      });
+      setDirectLink(result.joinUrl);
+    } catch (err) {
+      setDirectError(err?.message ?? "Failed to generate direct link");
+    } finally {
+      setDirectBusy(false);
+    }
+  }
+  function copyDirectLink() {
+    if (directLink) {
+      navigator.clipboard.writeText(directLink).then(() => {
+        setDirectCopied(true);
+        setTimeout(() => setDirectCopied(false), 2e3);
+      });
+    }
+  }
   return /* @__PURE__ */ jsxs(
     "div",
     {
@@ -291,6 +326,95 @@ function AgentRow({
                           opacity: saving ? 0.6 : 1
                         },
                         children: saving ? "Saving\u2026" : "Save"
+                      }
+                    )
+                  ]
+                }
+              ),
+              /* @__PURE__ */ jsxs(
+                "div",
+                {
+                  style: {
+                    gridColumn: "1 / -1",
+                    borderTop: "1px solid #f1f5f9",
+                    paddingTop: 10,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8
+                  },
+                  children: [
+                    /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }, children: [
+                      /* @__PURE__ */ jsxs("div", { children: [
+                        /* @__PURE__ */ jsx("div", { style: { fontSize: 12, fontWeight: 600, color: "#475569" }, children: "Direct call link" }),
+                        /* @__PURE__ */ jsxs("div", { style: { fontSize: 11, color: "#94a3b8" }, children: [
+                          "1:1 voice call with this agent (room ",
+                          /* @__PURE__ */ jsxs("code", { children: [
+                            "papervoice-direct-",
+                            fields.identity || "\u2026"
+                          ] }),
+                          ")."
+                        ] })
+                      ] }),
+                      /* @__PURE__ */ jsx(
+                        "button",
+                        {
+                          onClick: generateDirectLink,
+                          disabled: directBusy,
+                          style: {
+                            background: "#f1f5f9",
+                            border: "1px solid #e2e8f0",
+                            borderRadius: 6,
+                            padding: "6px 12px",
+                            fontSize: 12,
+                            cursor: directBusy ? "not-allowed" : "pointer",
+                            fontWeight: 600,
+                            color: "#334155",
+                            whiteSpace: "nowrap",
+                            opacity: directBusy ? 0.6 : 1
+                          },
+                          children: directBusy ? "Generating\u2026" : "Direct link"
+                        }
+                      )
+                    ] }),
+                    directError && /* @__PURE__ */ jsx("div", { style: { color: "#dc2626", fontSize: 12 }, children: directError }),
+                    directLink && /* @__PURE__ */ jsxs(
+                      "div",
+                      {
+                        style: {
+                          background: "#f1f5f9",
+                          border: "1px solid #e2e8f0",
+                          borderRadius: 6,
+                          padding: "8px 10px",
+                          fontFamily: "monospace",
+                          fontSize: 12,
+                          wordBreak: "break-all",
+                          color: "#1e293b",
+                          display: "flex",
+                          alignItems: "flex-start",
+                          gap: 8
+                        },
+                        children: [
+                          /* @__PURE__ */ jsx("span", { style: { flex: 1 }, children: directLink }),
+                          /* @__PURE__ */ jsx(
+                            "button",
+                            {
+                              onClick: copyDirectLink,
+                              style: {
+                                background: directCopied ? "#dcfce7" : "#e2e8f0",
+                                border: "none",
+                                borderRadius: 4,
+                                padding: "4px 10px",
+                                fontSize: 12,
+                                cursor: "pointer",
+                                color: directCopied ? "#166534" : "#334155",
+                                fontWeight: 600,
+                                whiteSpace: "nowrap",
+                                flexShrink: 0
+                              },
+                              children: directCopied ? "Copied!" : "Copy"
+                            }
+                          )
+                        ]
                       }
                     )
                   ]
