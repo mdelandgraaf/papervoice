@@ -852,6 +852,67 @@ class DirectCallRoomReadinessTest(unittest.IsolatedAsyncioTestCase):
 
         mock_session.generate_reply.assert_not_called()
 
+    async def test_restart_uses_recovery_message(self):
+        """PER-349: on worker restart the human is already in the room — greeting must
+        not re-introduce the agent; it should acknowledge the interruption instead."""
+        persona = Persona("agent-eng", "Eng", "voice-eng", "You are Eng.")
+        mock_session, mock_room, registered = self._make_fixtures()
+
+        # Pre-populate participants to simulate a restart into an existing room.
+        fake_human = mock.MagicMock()
+        fake_human.kind = _boardroom_module.rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+        mock_room.remote_participants = {"human-1": fake_human}
+
+        with mock.patch.dict(os.environ, self._ENV), \
+             mock.patch.object(_boardroom_module, "AgentSession", return_value=mock_session), \
+             mock.patch.object(_boardroom_module.rtc, "Room", return_value=mock_room), \
+             mock.patch.object(_boardroom_module.lk_vendor, "mint_join_token", return_value="tok"), \
+             mock.patch.object(_boardroom_module.el_vendor, "plugin_stt", return_value=mock.MagicMock()), \
+             mock.patch.object(_boardroom_module.el_vendor, "plugin_tts", return_value=mock.MagicMock()), \
+             mock.patch.object(_boardroom_module.silero.VAD, "load", return_value=mock.MagicMock()), \
+             mock.patch.object(_boardroom_module.anthropic, "LLM", return_value=mock.MagicMock()), \
+             mock.patch.object(_boardroom_module, "load_prompt_config", return_value=PromptConfig()), \
+             mock.patch.object(_boardroom_module.pc_vendor, "context_briefing", return_value=None):
+            await asyncio.gather(
+                _boardroom_module.run_direct_call("papervoice-direct-agent-eng", persona),
+                self._trigger_disconnect(registered, mock_room),
+            )
+
+        mock_session.generate_reply.assert_called_once()
+        instructions = mock_session.generate_reply.call_args.kwargs["instructions"]
+        self.assertIn("back", instructions.lower(),
+                      "recovery greeting must acknowledge the agent is back")
+        self.assertNotIn("Greet", instructions,
+                         "recovery greeting must not use the fresh-call 'Greet' opener")
+
+    async def test_fresh_call_uses_introduction_greeting(self):
+        """PER-349: on a fresh call (no human present at join time) the agent introduces itself."""
+        persona = Persona("agent-eng", "Eng", "voice-eng", "You are Eng.")
+        mock_session, mock_room, registered = self._make_fixtures()
+        # remote_participants is empty by default — no human was present when we joined.
+
+        with mock.patch.dict(os.environ, self._ENV), \
+             mock.patch.object(_boardroom_module, "AgentSession", return_value=mock_session), \
+             mock.patch.object(_boardroom_module.rtc, "Room", return_value=mock_room), \
+             mock.patch.object(_boardroom_module.lk_vendor, "mint_join_token", return_value="tok"), \
+             mock.patch.object(_boardroom_module.el_vendor, "plugin_stt", return_value=mock.MagicMock()), \
+             mock.patch.object(_boardroom_module.el_vendor, "plugin_tts", return_value=mock.MagicMock()), \
+             mock.patch.object(_boardroom_module.silero.VAD, "load", return_value=mock.MagicMock()), \
+             mock.patch.object(_boardroom_module.anthropic, "LLM", return_value=mock.MagicMock()), \
+             mock.patch.object(_boardroom_module, "load_prompt_config", return_value=PromptConfig()), \
+             mock.patch.object(_boardroom_module.pc_vendor, "context_briefing", return_value=None):
+            await asyncio.gather(
+                _boardroom_module.run_direct_call("papervoice-direct-agent-eng", persona),
+                self._trigger_disconnect(registered, mock_room),
+            )
+
+        mock_session.generate_reply.assert_called_once()
+        instructions = mock_session.generate_reply.call_args.kwargs["instructions"]
+        self.assertIn("Greet", instructions,
+                      "fresh-call greeting must welcome the joining participant")
+        self.assertIn("introduce yourself", instructions.lower(),
+                      "fresh-call greeting must introduce the agent by name")
+
 
 if __name__ == "__main__":
     unittest.main()

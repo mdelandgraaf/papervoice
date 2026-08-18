@@ -615,6 +615,10 @@ async def run_direct_call(
 
     done = asyncio.Event()
     human_kinds = {rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD, rtc.ParticipantKind.PARTICIPANT_KIND_SIP}
+    # Detect worker restart: human was already in the room before we joined.
+    # On a fresh call the human joins after the agent starts; on a restart
+    # the human has been there continuously. The greeting differs.
+    human_already_present = any(p.kind in human_kinds for p in room.remote_participants.values())
 
     def on_participant_disconnected(participant: rtc.RemoteParticipant) -> None:
         if participant.kind not in human_kinds:
@@ -659,10 +663,38 @@ async def run_direct_call(
                 persona.identity,
             )
         else:
-            await session.generate_reply(
-                instructions=f"Greet the person who just joined and introduce yourself briefly as {persona.display_name}."
+            # Also wait for the browser to actually subscribe to the agent's audio
+            # output track before greeting. wait_for_ready() resolves when the track
+            # is published to the SFU; WebRTC subscription from the browser follows
+            # ~0.5–5s later. Audio sent before that window closes is silently dropped.
+            # asyncio.wait() is used (not wait_for) so the SDK-owned future is never
+            # cancelled on timeout. (PER-349)
+            subscribed = session.room_io.subscribed_fut
+            if subscribed is not None and not subscribed.done():
+                done_futs, _ = await asyncio.wait({subscribed}, timeout=10.0)
+                if not done_futs:
+                    logger.warning(
+                        "direct call: no audio track subscriber within 10s for %s; "
+                        "proceeding with greeting anyway",
+                        persona.identity,
+                    )
+            if human_already_present:
+                greeting_instructions = (
+                    "Briefly acknowledge that you had a brief connection interruption "
+                    "and that you're back. One sentence; do not re-introduce yourself."
+                )
+            else:
+                greeting_instructions = (
+                    f"Greet the person who just joined and introduce yourself briefly as {persona.display_name}."
+                )
+            await session.generate_reply(instructions=greeting_instructions)
+        try:
+            await asyncio.wait_for(done.wait(), timeout=3600.0)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "direct call with %s idle for 1 hour; closing session",
+                persona.identity,
             )
-        await done.wait()
     finally:
         await session.aclose()
         await room.disconnect()
