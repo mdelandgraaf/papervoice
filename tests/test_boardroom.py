@@ -67,16 +67,32 @@ class AddressedTargetTest(unittest.TestCase):
     def test_handoff_cue_resolves_the_named_agent(self):
         self.assertEqual(_addressed_target("over to Eng", BOARDROOM_ROSTER), "agent-eng")
         self.assertEqual(_addressed_target("what about Eng on the deploy", BOARDROOM_ROSTER), "agent-eng")
+        # "from"/"for" cues — "let's get an update from Eng", "this one's for Eng".
+        self.assertEqual(_addressed_target("let's get an update from Eng on that", BOARDROOM_ROSTER), "agent-eng")
+        self.assertEqual(_addressed_target("this one's for Eng", BOARDROOM_ROSTER), "agent-eng")
 
     def test_trailing_vocative_question_resolves_the_named_agent(self):
         self.assertEqual(_addressed_target("what do you think, Eng?", BOARDROOM_ROSTER), "agent-eng")
 
+    def test_trailing_vocative_without_question_mark_resolves(self):
+        # PER-293 recall gap: STT drops the comma and the "?", and the name
+        # lands last — these all used to miss and fall back to the floor-holder.
+        self.assertEqual(_addressed_target("go ahead Eng", BOARDROOM_ROSTER), "agent-eng")
+        self.assertEqual(_addressed_target("can you tell us more Eng", BOARDROOM_ROSTER), "agent-eng")
+        self.assertEqual(_addressed_target("why don't you take this one Eng", BOARDROOM_ROSTER), "agent-eng")
+
     def test_no_name_returns_none(self):
         self.assertIsNone(_addressed_target("what's our runway?", BOARDROOM_ROSTER))
+
+    def test_talking_about_an_agent_is_not_addressing_them(self):
+        # A name buried mid-sentence in a question *about* the agent is not a
+        # vocative and must not hijack routing to them.
+        self.assertIsNone(_addressed_target("what's Eng been working on", BOARDROOM_ROSTER))
 
     def test_substring_of_another_word_does_not_match(self):
         # "engineering" must not be mistaken for the "Eng" agent.
         self.assertIsNone(_addressed_target("how's the engineering roadmap looking", BOARDROOM_ROSTER))
+        self.assertIsNone(_addressed_target("the whole engineering team is heads down", BOARDROOM_ROSTER))
 
 
 class StandupAgendaTest(unittest.TestCase):

@@ -320,7 +320,11 @@ class ModeratorAddressingTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(who == "eng" and "one more thing" in p for who, p in log))
         self.assertFalse(any(who == "ceo" and p.startswith("Someone just asked") for who, p in log))
 
-    async def test_unnamed_follow_up_stays_with_the_agent_just_addressed(self):
+    async def test_unnamed_open_floor_question_returns_to_the_moderator(self):
+        # PER-293 regression fix: naming Eng once must NOT hand the whole rest
+        # of the open floor to Eng. The named question goes to Eng; the next
+        # *unnamed* question falls back to the moderator/closer (ceo), so the
+        # moderator never goes permanently silent after one addressed question.
         log = []
         answered = asyncio.Event()
         speakers = {
@@ -340,15 +344,17 @@ class ModeratorAddressingTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(answered.wait(), timeout=1)
 
         answered.clear()
-        await asyncio.sleep(0.02)  # let the open floor re-arm with eng as responder
+        await asyncio.sleep(0.02)  # let the open floor re-arm with ceo (the default) as responder
         moderator.record_transcript("board-member", "and anything else")  # no name
         await asyncio.wait_for(answered.wait(), timeout=1)
 
         completed = await asyncio.wait_for(task, timeout=1)
         self.assertEqual(completed, ["ceo"])
         eng_answers = [p for who, p in log if who == "eng" and p.startswith("Someone just asked")]
-        self.assertEqual(len(eng_answers), 2)  # both the named question and the unnamed follow-up
-        self.assertFalse(any(who == "ceo" and p.startswith("Someone just asked") for who, p in log))
+        ceo_answers = [p for who, p in log if who == "ceo" and p.startswith("Someone just asked")]
+        self.assertEqual(len(eng_answers), 1)  # only the question that named Eng
+        self.assertEqual(len(ceo_answers), 1)  # the unnamed follow-up returns to the moderator
+        self.assertIn("and anything else", ceo_answers[0])
 
     async def test_naming_an_unavailable_agent_falls_back_to_the_default_responder(self):
         log = []

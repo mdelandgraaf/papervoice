@@ -222,14 +222,23 @@ moderator floor control, human tracks preempt):
     falling back to the default responder when no one is named or the named agent is
     dropped/dismissed/absent (a question is never dropped for want of the named agent). Name matching
     lives in `boardroom._addressed_target` (display name or bare `agent-eng` → `eng`, whole-word so
-    "engineering" never matches, in a leading vocative / handoff-cue / trailing-question position, all
-    tolerant of STT's missing commas) and is injected into the `Moderator` as an `addressee_resolver`
-    so the moderator itself stays roster-agnostic — mirroring how `_dismissal_target` (note 13) feeds
-    dismissals. During the open-floor discussion the responder then sticks to the last agent who
-    answered, so an unnamed follow-up ("and anything else?") continues the back-and-forth with them
-    rather than bouncing back to the opener. Scripted agenda handoffs are unaffected: an agent's own
-    "over to you, Eng" is spoken text recorded under that agent's identity, never a human utterance,
-    so it never triggers routing — turn order stays agenda-driven.
+    "engineering" never matches, in a leading vocative / handoff-cue / trailing-vocative position — the
+    trailing case keys on the name being the *last word*, not on a "?", since STT routinely drops both
+    the comma and the question mark, so "go ahead Eng" resolves) and is injected into the `Moderator`
+    as an `addressee_resolver` so the moderator itself stays roster-agnostic — mirroring how
+    `_dismissal_target` (note 13) feeds dismissals. Each named question is redirected per-utterance;
+    the open-floor **default responder stays the moderator/closer** and is deliberately *not* pinned to
+    whoever last answered. An earlier revision made the responder sticky (follow the last-addressed
+    agent), but that silently handed the entire remaining open floor to that agent the first time a
+    human named them — so the moderator went permanently silent for every later unnamed question
+    ("the ceo stayed silent after referring to the other agent"). Now a named question goes to the
+    named agent for that answer; the next unnamed question returns to the moderator. Scripted agenda
+    handoffs are unaffected: an agent's own "over to you, Eng" is spoken text recorded under that
+    agent's identity, never a human utterance, so it never triggers routing — turn order stays
+    agenda-driven. Every final human utterance and every barge-in routing decision (`text -> responder,
+    addressed-by-name | default`) is logged, and the full transcript is dumped to the worker log at
+    call end regardless of whether a summary issue is configured, so a "naming didn't route" report is
+    debuggable from the log after the fact.
 
 ## M3b implementation notes (PER-89) — Paperclip agents as voice personas
 

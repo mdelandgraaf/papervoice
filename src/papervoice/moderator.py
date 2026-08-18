@@ -262,11 +262,15 @@ class Moderator:
             )
             if not answered and self._open_floor_seconds is not None:
                 return
-            if isinstance(answered, str):
-                # A named question may have been fielded by a different agent
-                # than the current floor-holder; keep the follow-up with them
-                # so a back-and-forth doesn't bounce back to the opener.
-                responder_identity = answered
+            # Deliberately do NOT pin `responder_identity` to whoever just
+            # answered. A *named* question is already redirected to that agent
+            # for its own answer, per-utterance, inside _respond_to_barge_in.
+            # The open-floor default must stay the moderator/closer so an
+            # unnamed question ("what's next?") keeps going to them — otherwise
+            # naming another agent once silently hands the whole rest of the
+            # open floor to that agent and the moderator never speaks again
+            # (PER-293 regression: "the ceo stayed silent after referring to
+            # the other agent").
 
     async def _ask_and_wait(self, identity: str, question: str, timeout: float | None = None) -> str | None:
         """Agent-initiated steering ask (PER-83): let `identity` pose `question`
@@ -424,7 +428,14 @@ class Moderator:
                 return False
             # Route to the agent the human named, if any is present; otherwise
             # the default responder (interrupted agent / floor-holder) answers.
-            responder_identity = self._addressed_available_agent(question) or responder_identity
+            named = self._addressed_available_agent(question)
+            responder_identity = named or responder_identity
+            logger.info(
+                "barge-in reply routing: text=%r -> %s (%s)",
+                question,
+                responder_identity,
+                "addressed by name" if named else "default responder",
+            )
             if responder_identity in self.dropped or responder_identity not in self._speakers:
                 return False
 

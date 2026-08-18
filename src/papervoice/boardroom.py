@@ -96,9 +96,10 @@ def _dismissal_target(text: str, roster: tuple[Persona, ...]) -> str | None:
 # matches at the start of the utterance.
 _ADDRESS_LEAD = r"(?:hey |hi |ok |okay |so |and |alright |right |um |uh |well )*"
 # Explicit handoff / question cues that name the agent being addressed
-# somewhere other than the very start ("over to Eng", "what about Eng?").
+# somewhere other than the very start ("over to Eng", "what about Eng?",
+# "an update from Eng", "this one's for Eng").
 _ADDRESS_CUE = (
-    r"(?:ask|tell|over to|hand(?: it| this| it over)? to|hand off to|hear from|"
+    r"(?:ask|tell|over to|hand(?: it| this| it over)? to|hand off to|hear from|from|for|"
     r"what about|how about|what does|what do|question for|back to|to you)"
 )
 
@@ -112,10 +113,14 @@ def _addressed_target(text: str, roster: tuple[Persona, ...]) -> str | None:
     agent's display name or bare identity (``agent-eng`` -> ``eng``) as a whole
     word (``\\bEng\\b`` never fires on "engineering") in one of three positions:
     a leading vocative ("Eng, ..." / "hey Eng ..."), after an explicit handoff
-    or question cue ("over to Eng", "what about Eng"), or as a trailing vocative
-    on a question ("what do you think, Eng?"). Punctuation is optional since STT
-    transcripts are often uncommaed. Returns None when no agent is named — the
-    caller then keeps its default responder.
+    or question cue ("over to Eng", "what about Eng", "an update from Eng"), or
+    as a trailing vocative — the name is the last word of the utterance ("what
+    do you think, Eng?", "go ahead Eng", "why don't you take this one Eng").
+    Punctuation is optional since STT transcripts are often uncommaed and drop
+    the trailing "?", which is exactly why the trailing case keys on final-word
+    position rather than a question mark (PER-293: "go ahead Eng" used to miss).
+    Returns None when no agent is named — the caller then keeps its default
+    responder.
     """
     normalized = " ".join(text.lower().split())
     for persona in roster:
@@ -124,7 +129,10 @@ def _addressed_target(text: str, roster: tuple[Persona, ...]) -> str | None:
             n = re.escape(name)
             leading = rf"\A{_ADDRESS_LEAD}{n}\b"
             cued = rf"\b{_ADDRESS_CUE} {n}\b"
-            trailing = rf"\b{n}\s*[?!]+\Z"
+            # Trailing vocative: the name is the final word (any trailing
+            # punctuation/whitespace only), so a comma-less, question-mark-less
+            # STT line like "go ahead eng" still resolves.
+            trailing = rf"\b{n}[\s?!.,]*\Z"
             if re.search(leading, normalized) or re.search(cued, normalized) or re.search(trailing, normalized):
                 return persona.identity
     return None
@@ -400,6 +408,10 @@ async def _connect_transcriber(
     def on_transcribed(ev: UserInputTranscribedEvent) -> None:
         if ev.is_final and ev.transcript.strip():
             text = ev.transcript.strip()
+            # Log every final human utterance: without this the worker log has
+            # no record of what was actually said, so a "naming didn't route"
+            # report can't be debugged after the fact (PER-293).
+            logger.info("human utterance (final): %r", text)
             target = _dismissal_target(text, roster)
             if target is not None:
                 logger.info("explicit request for %s to leave", target)
@@ -688,10 +700,20 @@ async def run_standup(
             sessions.append(session)
             rooms.append(room)
             moderator.add_speaker(persona.identity, _speaker_handle(persona.identity, session, room, moderator))
+            logger.info("agent %s joined the standup as %r", persona.identity, persona.display_name)
 
         completed = await moderator.run_agenda()
         return completed
     finally:
+        # Always dump the full transcript to the worker log, even when no
+        # summary issue is configured — otherwise a call's conversation is
+        # unrecoverable once the process exits and "debug the last call" is
+        # impossible (PER-293).
+        logger.info(
+            "standup ended; completed=%s; full transcript:\n%s",
+            completed,
+            moderator.full_transcript_text() or "(no transcript recorded)",
+        )
         for session in sessions:
             await session.aclose()
         for room in rooms:
