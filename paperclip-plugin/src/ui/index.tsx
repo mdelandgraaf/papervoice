@@ -96,6 +96,18 @@ const btnSecondary: React.CSSProperties = {
   whiteSpace: "nowrap",
 };
 
+const btnCall = (disabled = false): React.CSSProperties => ({
+  background: disabled ? "#bbf7d0" : "#16a34a",
+  border: "none",
+  borderRadius: 6,
+  padding: "5px 12px",
+  fontSize: 12,
+  fontWeight: 600,
+  color: "#fff",
+  cursor: disabled ? "not-allowed" : "pointer",
+  whiteSpace: "nowrap",
+});
+
 const btnGhost: React.CSSProperties = {
   background: "none",
   border: `1px solid ${C.border}`,
@@ -588,6 +600,32 @@ function AgentRow({
   const [directBusy, setDirectBusy] = useState(false);
   const [directError, setDirectError] = useState<string | null>(null);
   const [directCopied, setDirectCopied] = useState(false);
+  const [callBusy, setCallBusy] = useState(false);
+  const [callError, setCallError] = useState<string | null>(null);
+
+  // Mint a 1:1 direct-call link and open it immediately — no need to expand
+  // the config panel first (see PER-353).
+  async function startDirectCall() {
+    setCallBusy(true);
+    setCallError(null);
+    try {
+      const identity = fields.identity.trim();
+      if (!identity) {
+        throw new Error("Set a LiveKit Identity and save before starting a call.");
+      }
+      const result = (await mintDirectLink({
+        companyId,
+        identity: "human-guest",
+        room: `papervoice-direct-${identity}`,
+        ttlHours: 48,
+      })) as { joinUrl: string };
+      window.open(result.joinUrl, "_blank", "noopener,noreferrer");
+    } catch (err: any) {
+      setCallError(err?.message ?? "Failed to start call");
+    } finally {
+      setCallBusy(false);
+    }
+  }
 
   async function generateDirectLink() {
     setDirectBusy(true);
@@ -644,6 +682,23 @@ function AgentRow({
           <div>
             <div style={{ fontWeight: 600, fontSize: 14, color: C.textPrimary }}>{agent.displayName || agent.name}</div>
             <div style={{ fontSize: 12, color: C.textMuted }}>{agent.role}</div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 3 }}>
+            <button
+              onClick={startDirectCall}
+              disabled={callBusy || !fields.identity.trim()}
+              title={
+                fields.identity.trim()
+                  ? `Start a 1:1 call with ${agent.displayName || agent.name}`
+                  : "Set a LiveKit Identity and save before calling"
+              }
+              style={btnCall(callBusy || !fields.identity.trim())}
+            >
+              {callBusy ? "Calling…" : "📞 Call"}
+            </button>
+            {callError && (
+              <span style={{ color: C.red, fontSize: 11, maxWidth: 200 }}>{callError}</span>
+            )}
           </div>
         </div>
 
