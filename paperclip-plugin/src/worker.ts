@@ -90,16 +90,18 @@ async function stampLiveKitRoomMetadata(
   const httpUrl = liveKitUrl.replace(/^wss:\/\//, "https://").replace(/^ws:\/\//, "http://");
   const now = Math.floor(Date.now() / 1000);
   const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
-  // Admin token: roomCreate + roomAdmin with no room restriction = admin for all rooms.
-  // Do NOT include sha256 — that field is for participant tokens (metadata integrity) and
-  // LiveKit Room Service validates it against the request body, causing 401 on non-empty bodies.
+  // Scope the token to the target room. LiveKit requires video.room to match the
+  // target room for UpdateRoomMetadata (roomAdmin alone, without room scope, returns 401).
+  // roomCreate is included so the CreateRoom step also works with the same token.
+  // Do NOT include sha256 — that field is for participant tokens (metadata integrity)
+  // and causes 401 on non-empty Room Service request bodies.
   const payload = Buffer.from(
     JSON.stringify({
       exp: now + 60,
       iss: apiKey,
       nbf: now,
       sub: apiKey,
-      video: { roomCreate: true, roomAdmin: true },
+      video: { room: roomName, roomCreate: true, roomAdmin: true },
     }),
   ).toString("base64url");
   const sig = createHmac("sha256", apiSecret).update(`${header}.${payload}`).digest("base64url");
