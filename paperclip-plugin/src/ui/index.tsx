@@ -777,9 +777,9 @@ const DEFAULT_PARTICIPANT = `This is a live multi-party voice call daily standup
 const DEFAULT_AGENDA_OPENING = `Open the standup: greet everyone, introduce this as a Papervoice voice standup, and hand it to {next_speaker} for their update.`;
 
 function PromptsSection({ companyId }: { companyId: string }) {
-  const [promptModerator, setPromptModerator] = useState("");
-  const [promptParticipant, setPromptParticipant] = useState("");
-  const [promptAgendaOpening, setPromptAgendaOpening] = useState("");
+  const [promptModerator, setPromptModerator] = useState(DEFAULT_MODERATOR);
+  const [promptParticipant, setPromptParticipant] = useState(DEFAULT_PARTICIPANT);
+  const [promptAgendaOpening, setPromptAgendaOpening] = useState(DEFAULT_AGENDA_OPENING);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -789,9 +789,9 @@ function PromptsSection({ companyId }: { companyId: string }) {
         if (!r.ok) return;
         const body = await r.json();
         const values = body.configJson ?? body;
-        setPromptModerator(values.promptModerator ?? "");
-        setPromptParticipant(values.promptParticipant ?? "");
-        setPromptAgendaOpening(values.promptAgendaOpening ?? "");
+        setPromptModerator(values.promptModerator ?? DEFAULT_MODERATOR);
+        setPromptParticipant(values.promptParticipant ?? DEFAULT_PARTICIPANT);
+        setPromptAgendaOpening(values.promptAgendaOpening ?? DEFAULT_AGENDA_OPENING);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -863,7 +863,6 @@ function PromptsSection({ companyId }: { companyId: string }) {
           <p style={hintStyle}>System-level instructions for the standup moderator agent.</p>
           <textarea
             value={promptModerator}
-            placeholder={DEFAULT_MODERATOR}
             onChange={(e) => setPromptModerator(e.target.value)}
             style={areaStyle}
             rows={6}
@@ -875,7 +874,6 @@ function PromptsSection({ companyId }: { companyId: string }) {
           <p style={hintStyle}>System-level instructions for participant (non-moderator) agents.</p>
           <textarea
             value={promptParticipant}
-            placeholder={DEFAULT_PARTICIPANT}
             onChange={(e) => setPromptParticipant(e.target.value)}
             style={areaStyle}
             rows={6}
@@ -890,7 +888,6 @@ function PromptsSection({ companyId }: { companyId: string }) {
           </p>
           <textarea
             value={promptAgendaOpening}
-            placeholder={DEFAULT_AGENDA_OPENING}
             onChange={(e) => setPromptAgendaOpening(e.target.value)}
             style={{ ...areaStyle, minHeight: 60 }}
             rows={3}
@@ -915,9 +912,9 @@ function PromptsSection({ companyId }: { companyId: string }) {
           </button>
           <button
             onClick={() => {
-              setPromptModerator("");
-              setPromptParticipant("");
-              setPromptAgendaOpening("");
+              setPromptModerator(DEFAULT_MODERATOR);
+              setPromptParticipant(DEFAULT_PARTICIPANT);
+              setPromptAgendaOpening(DEFAULT_AGENDA_OPENING);
             }}
             style={{
               background: "none",

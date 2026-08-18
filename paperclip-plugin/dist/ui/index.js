@@ -766,9 +766,9 @@ var DEFAULT_MODERATOR = `This is a daily standup, and you are the moderator. You
 var DEFAULT_PARTICIPANT = `This is a live multi-party voice call daily standup, and you are a participant. Your role is to update the moderator and board with the latest status of your recent Paperclip issues, and to ask questions if there are blockers or decisions that need to be taken. Be concise and conversational \u2014 one or two sentences per issue, no lists, no markdown. Report what Paperclip issues on your name you have done recently, what's still pending, what needs decisions from the board, and any blockers. After your update, give the floor to another agent. If you have a genuinely useful reaction \u2014 advice, a question \u2014 give it. If not, call the pass_on_reacting tool and don't say anything else; don't force a comment just to fill air time. If a human starts talking while you're mid-sentence, stop immediately. If you need the board's steering or a decision before you can continue, ask the question out loud and then call the ask_board tool with that same question to wait for their answer \u2014 don't just guess or wait for the human to bring it up on their own.`;
 var DEFAULT_AGENDA_OPENING = `Open the standup: greet everyone, introduce this as a Papervoice voice standup, and hand it to {next_speaker} for their update.`;
 function PromptsSection({ companyId }) {
-  const [promptModerator, setPromptModerator] = useState("");
-  const [promptParticipant, setPromptParticipant] = useState("");
-  const [promptAgendaOpening, setPromptAgendaOpening] = useState("");
+  const [promptModerator, setPromptModerator] = useState(DEFAULT_MODERATOR);
+  const [promptParticipant, setPromptParticipant] = useState(DEFAULT_PARTICIPANT);
+  const [promptAgendaOpening, setPromptAgendaOpening] = useState(DEFAULT_AGENDA_OPENING);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(null);
   useEffect(() => {
@@ -776,9 +776,9 @@ function PromptsSection({ companyId }) {
       if (!r.ok) return;
       const body = await r.json();
       const values = body.configJson ?? body;
-      setPromptModerator(values.promptModerator ?? "");
-      setPromptParticipant(values.promptParticipant ?? "");
-      setPromptAgendaOpening(values.promptAgendaOpening ?? "");
+      setPromptModerator(values.promptModerator ?? DEFAULT_MODERATOR);
+      setPromptParticipant(values.promptParticipant ?? DEFAULT_PARTICIPANT);
+      setPromptAgendaOpening(values.promptAgendaOpening ?? DEFAULT_AGENDA_OPENING);
     }).catch(() => {
     }).finally(() => setLoading(false));
   }, [companyId]);
@@ -843,7 +843,6 @@ function PromptsSection({ companyId }) {
               "textarea",
               {
                 value: promptModerator,
-                placeholder: DEFAULT_MODERATOR,
                 onChange: (e) => setPromptModerator(e.target.value),
                 style: areaStyle,
                 rows: 6
@@ -857,7 +856,6 @@ function PromptsSection({ companyId }) {
               "textarea",
               {
                 value: promptParticipant,
-                placeholder: DEFAULT_PARTICIPANT,
                 onChange: (e) => setPromptParticipant(e.target.value),
                 style: areaStyle,
                 rows: 6
@@ -875,7 +873,6 @@ function PromptsSection({ companyId }) {
               "textarea",
               {
                 value: promptAgendaOpening,
-                placeholder: DEFAULT_AGENDA_OPENING,
                 onChange: (e) => setPromptAgendaOpening(e.target.value),
                 style: { ...areaStyle, minHeight: 60 },
                 rows: 3
@@ -904,9 +901,9 @@ function PromptsSection({ companyId }) {
               "button",
               {
                 onClick: () => {
-                  setPromptModerator("");
-                  setPromptParticipant("");
-                  setPromptAgendaOpening("");
+                  setPromptModerator(DEFAULT_MODERATOR);
+                  setPromptParticipant(DEFAULT_PARTICIPANT);
+                  setPromptAgendaOpening(DEFAULT_AGENDA_OPENING);
                 },
                 style: {
                   background: "none",
