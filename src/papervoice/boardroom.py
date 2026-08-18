@@ -183,7 +183,15 @@ def _standup_agenda(
         if paperclip_offline
         else ""
     )
-    opening_prompt = cfg.agenda_opening.format(next_speaker=rest[0].display_name) + offline_notice
+    if rest:
+        opening_prompt = cfg.agenda_opening.format(next_speaker=rest[0].display_name) + offline_notice
+    else:
+        # Single-agent standup: opener is the only speaker; skip the handoff.
+        opening_prompt = (
+            "Open the standup: greet everyone, introduce this as a Papervoice voice standup,"
+            " then give your own status update."
+            + offline_notice
+        )
     items = [
         AgendaItem(opener.identity, opening_prompt)
     ]
@@ -800,6 +808,15 @@ async def entrypoint(ctx) -> None:
                         ctx.room.name,
                         [p.identity for p in roster],
                     )
+                    unmatched = wanted - {p.paperclip_agent_id for p in roster if p.paperclip_agent_id}
+                    if unmatched:
+                        logger.warning(
+                            "preset %s: %d agent(s) in metadata not found in live roster "
+                            "(not papervoice-enabled or removed): %s",
+                            ctx.room.name,
+                            len(unmatched),
+                            sorted(unmatched),
+                        )
             except Exception:
                 logger.warning("could not parse room metadata for preset %s", ctx.room.name, exc_info=True)
 
