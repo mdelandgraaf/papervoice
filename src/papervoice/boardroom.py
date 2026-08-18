@@ -91,6 +91,45 @@ def _dismissal_target(text: str, roster: tuple[Persona, ...]) -> str | None:
     return None
 
 
+# Filler words a human might lead with before naming the agent they're
+# addressing ("hey Eng...", "ok so Eng...") — stripped so the vocative still
+# matches at the start of the utterance.
+_ADDRESS_LEAD = r"(?:hey |hi |ok |okay |so |and |alright |right |um |uh |well )*"
+# Explicit handoff / question cues that name the agent being addressed
+# somewhere other than the very start ("over to Eng", "what about Eng?").
+_ADDRESS_CUE = (
+    r"(?:ask|tell|over to|hand(?: it| this| it over)? to|hand off to|hear from|"
+    r"what about|how about|what does|what do|question for|back to|to you)"
+)
+
+
+def _addressed_target(text: str, roster: tuple[Persona, ...]) -> str | None:
+    """Resolve which agent, if any, a human utterance addresses by name.
+
+    Used by the moderator (PER-293) to route a barge-in or open-floor question
+    to the specific agent it was aimed at — "Eng, what's blocking you?" should
+    be answered by Eng, not by whoever happened to hold the floor. Matches the
+    agent's display name or bare identity (``agent-eng`` -> ``eng``) as a whole
+    word (``\\bEng\\b`` never fires on "engineering") in one of three positions:
+    a leading vocative ("Eng, ..." / "hey Eng ..."), after an explicit handoff
+    or question cue ("over to Eng", "what about Eng"), or as a trailing vocative
+    on a question ("what do you think, Eng?"). Punctuation is optional since STT
+    transcripts are often uncommaed. Returns None when no agent is named — the
+    caller then keeps its default responder.
+    """
+    normalized = " ".join(text.lower().split())
+    for persona in roster:
+        names = {persona.display_name.lower(), persona.identity.lower().removeprefix("agent-")}
+        for name in names:
+            n = re.escape(name)
+            leading = rf"\A{_ADDRESS_LEAD}{n}\b"
+            cued = rf"\b{_ADDRESS_CUE} {n}\b"
+            trailing = rf"\b{n}\s*[?!]+\Z"
+            if re.search(leading, normalized) or re.search(cued, normalized) or re.search(trailing, normalized):
+                return persona.identity
+    return None
+
+
 def _standup_agenda(
     roster: tuple[Persona, ...],
     context: dict[str, str] | None = None,
@@ -627,6 +666,9 @@ async def run_standup(
     moderator = Moderator(
         agenda=_standup_agenda(roster, context, paperclip_offline=paperclip_offline, prompt_cfg=prompt_cfg),
         speakers={},
+        # Route a barge-in / open-floor question that names a specific agent to
+        # that agent, instead of always to whoever held the floor (PER-293).
+        addressee_resolver=lambda text: _addressed_target(text, roster),
     )
     sessions: list[AgentSession] = []
     rooms: list[rtc.Room] = []

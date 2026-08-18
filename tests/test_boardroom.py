@@ -23,6 +23,7 @@ from papervoice.boardroom import (
     _background_tasks,
     _build_summary,
     _direct_call_instructions,
+    _addressed_target,
     _direct_file_issue_tool,
     _file_issue_tool,
     _fire_and_forget,
@@ -51,6 +52,31 @@ class ExplicitDismissalTest(unittest.TestCase):
 
     def test_targets_only_the_named_agent(self):
         self.assertEqual(_dismissal_target("Tell Eng to drop off", BOARDROOM_ROSTER), "agent-eng")
+
+
+class AddressedTargetTest(unittest.TestCase):
+    """PER-293: resolve which agent a human utterance addresses by name so the
+    moderator routes the question to them, not to whoever held the floor."""
+
+    def test_leading_vocative_resolves_the_named_agent(self):
+        self.assertEqual(_addressed_target("Eng, what's blocking you?", BOARDROOM_ROSTER), "agent-eng")
+        # STT often drops the comma — the bare leading name must still resolve.
+        self.assertEqual(_addressed_target("Eng what shipped this week", BOARDROOM_ROSTER), "agent-eng")
+        self.assertEqual(_addressed_target("hey CEO can you summarize", BOARDROOM_ROSTER), "agent-ceo")
+
+    def test_handoff_cue_resolves_the_named_agent(self):
+        self.assertEqual(_addressed_target("over to Eng", BOARDROOM_ROSTER), "agent-eng")
+        self.assertEqual(_addressed_target("what about Eng on the deploy", BOARDROOM_ROSTER), "agent-eng")
+
+    def test_trailing_vocative_question_resolves_the_named_agent(self):
+        self.assertEqual(_addressed_target("what do you think, Eng?", BOARDROOM_ROSTER), "agent-eng")
+
+    def test_no_name_returns_none(self):
+        self.assertIsNone(_addressed_target("what's our runway?", BOARDROOM_ROSTER))
+
+    def test_substring_of_another_word_does_not_match(self):
+        # "engineering" must not be mistaken for the "Eng" agent.
+        self.assertIsNone(_addressed_target("how's the engineering roadmap looking", BOARDROOM_ROSTER))
 
 
 class StandupAgendaTest(unittest.TestCase):

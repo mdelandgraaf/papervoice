@@ -106,6 +106,7 @@ class Moderator:
         barge_in_reply_timeout_seconds: float = DEFAULT_BARGE_IN_REPLY_TIMEOUT_SECONDS,
         open_floor_seconds: float | None = DEFAULT_OPEN_FLOOR_SECONDS,
         ask_and_wait_timeout_seconds: float = DEFAULT_ASK_AND_WAIT_TIMEOUT_SECONDS,
+        addressee_resolver: Callable[[str], str | None] | None = None,
     ) -> None:
         self._agenda = list(agenda)
         self._speakers = dict(speakers)
@@ -113,6 +114,13 @@ class Moderator:
         self._barge_in_reply_timeout_seconds = barge_in_reply_timeout_seconds
         self._open_floor_seconds = open_floor_seconds
         self._ask_and_wait_timeout_seconds = ask_and_wait_timeout_seconds
+        # Resolve a human utterance to the identity of the specific agent it
+        # addresses by name (e.g. "Eng, what's blocking you?" -> "agent-eng"),
+        # or None when it names no one. Injected by boardroom.py from the live
+        # roster so the moderator stays LiveKit/persona-agnostic. Without it,
+        # addressing is a no-op and answers route to the interrupted/holding
+        # agent exactly as before (PER-293).
+        self._addressee_resolver = addressee_resolver
         self.current_speaker: str | None = None
         self.transcript: list[tuple[str, str]] = []
         self.dropped: set[str] = set()
@@ -135,6 +143,22 @@ class Moderator:
 
     def add_speaker(self, identity: str, handle: SpeakerHandle) -> None:
         self._speakers[identity] = handle
+
+    def _addressed_available_agent(self, text: str | None) -> str | None:
+        """Identity of the specific agent a human utterance addresses by name,
+        but only when that agent is actually present and able to answer.
+
+        Returns None when no resolver is configured, the text names no one, or
+        the named agent has been dropped/dismissed/never joined — callers then
+        fall back to their default responder (the interrupted agent, or the
+        floor-holder). Never redirects a question into a dead end.
+        """
+        if not text or self._addressee_resolver is None:
+            return None
+        identity = self._addressee_resolver(text)
+        if identity is None or identity in self.dropped or identity not in self._speakers:
+            return None
+        return identity
 
     async def dismiss_speaker(self, identity: str) -> bool:
         """Remove only the explicitly named agent from the live conversation."""
@@ -238,6 +262,11 @@ class Moderator:
             )
             if not answered and self._open_floor_seconds is not None:
                 return
+            if isinstance(answered, str):
+                # A named question may have been fielded by a different agent
+                # than the current floor-holder; keep the follow-up with them
+                # so a back-and-forth doesn't bounce back to the opener.
+                responder_identity = answered
 
     async def _ask_and_wait(self, identity: str, question: str, timeout: float | None = None) -> str | None:
         """Agent-initiated steering ask (PER-83): let `identity` pose `question`
@@ -341,14 +370,22 @@ class Moderator:
 
     async def _respond_to_barge_in(
         self, responder_identity: str, *, reply_timeout_seconds: float | None = None, wait_until_call_ends: bool = False
-    ) -> bool:
+    ) -> str | bool:
         """A barge-in just cut ``responder_identity`` off mid-turn (or the
         agenda just ended and the floor is being held open for a final
         question — see `_hold_open_floor`). Wait briefly for the human's
-        finished utterance and have that same agent answer it — looping if
-        the human interrupts the answer too — before returning control to
-        the caller (which, mid-agenda, gives the agent a further turn to
+        finished utterance and have an agent answer it — looping if the human
+        interrupts the answer too — before returning control to the caller
+        (which, mid-agenda, gives the interrupted agent a further turn to
         finish whatever it was originally saying — see `_run_turn`).
+
+        ``responder_identity`` is only the default answerer. When the finished
+        human utterance addresses a specific agent by name (e.g. "Eng, what's
+        blocking you?"), that agent answers instead — routing the question to
+        who it was actually aimed at rather than whoever happened to hold the
+        floor (PER-293). Returns the identity that answered on a clean reply
+        (so `_hold_open_floor` can keep a natural back-and-forth going with the
+        same agent), or False when nothing was answered.
         """
         timeout = reply_timeout_seconds if reply_timeout_seconds is not None else self._barge_in_reply_timeout_seconds
         while True:
@@ -385,6 +422,9 @@ class Moderator:
             self._human_reply_ready.clear()
             if self._call_ended.is_set():
                 return False
+            # Route to the agent the human named, if any is present; otherwise
+            # the default responder (interrupted agent / floor-holder) answers.
+            responder_identity = self._addressed_available_agent(question) or responder_identity
             if responder_identity in self.dropped or responder_identity not in self._speakers:
                 return False
 
@@ -395,4 +435,4 @@ class Moderator:
                 return False
 
             if self._awaiting_reply_to != responder_identity:
-                return True  # answered cleanly, no further barge-in on the answer itself
+                return responder_identity  # answered cleanly, no further barge-in on the answer itself

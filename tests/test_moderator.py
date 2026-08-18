@@ -7,6 +7,7 @@ Run: PYTHONPATH=src python -m unittest discover -s tests -v
 """
 
 import asyncio
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -241,6 +242,132 @@ class ModeratorBargeInResponseTest(unittest.IsolatedAsyncioTestCase):
         resume_calls = [entry for entry in log if entry[0] == "ceo" and entry[1] != "open"]
         self.assertEqual(len(resume_calls), 1)
         self.assertIn("interrupted before finishing", resume_calls[0][1])
+
+
+def _name_resolver(mapping):
+    """A tiny stand-in for boardroom._addressed_target: map any whole-word name
+    in the utterance to its agent identity. Keeps these moderator tests free of
+    the real roster/regex, which test_boardroom.AddressedTargetTest covers."""
+
+    def resolve(text):
+        low = text.lower()
+        for name, identity in mapping.items():
+            if re.search(rf"\b{re.escape(name)}\b", low):
+                return identity
+        return None
+
+    return resolve
+
+
+def _answer_signaling_speaker(identity, log, answered):
+    """Non-blocking speaker that flags an asyncio.Event whenever it's asked to
+    answer a barge-in question, so a test can drive successive open-floor
+    exchanges deterministically."""
+
+    async def speak(prompt):
+        log.append((identity, prompt))
+        if prompt.startswith("Someone just asked"):
+            answered.set()
+
+    async def interrupt():
+        return None
+
+    return SpeakerHandle(identity, speak, interrupt)
+
+
+class ModeratorAddressingTest(unittest.IsolatedAsyncioTestCase):
+    """PER-293: a human naming a specific agent ("Eng, ...") must be answered by
+    that agent, not by whoever happened to hold the floor when they spoke."""
+
+    async def test_barge_in_naming_another_agent_routes_the_answer_to_that_agent(self):
+        log = []
+        agenda = [AgendaItem("ceo", "open"), AgendaItem("eng", "update")]
+        speakers = {"ceo": make_interruptible_speaker("ceo", log), "eng": make_speaker("eng", log)}
+        moderator = Moderator(agenda, speakers, addressee_resolver=_name_resolver({"eng": "eng"}))
+
+        task = asyncio.ensure_future(moderator.run_agenda())
+        await asyncio.sleep(0)  # let ceo's "open" turn start and block
+        await moderator.on_human_speech_started()  # barge-in cuts ceo off
+        moderator.record_transcript("board-member", "Eng, what's blocking you?")
+
+        completed = await asyncio.wait_for(task, timeout=1)
+
+        self.assertEqual(completed, ["ceo", "eng"])
+        # Eng — not the interrupted ceo — fields the addressed question.
+        eng_answer = next(p for who, p in log if who == "eng" and p.startswith("Someone just asked"))
+        self.assertIn("what's blocking you?", eng_answer)
+        self.assertFalse(any(who == "ceo" and p.startswith("Someone just asked") for who, p in log))
+        # The interrupted ceo still gets to finish its own cut-off update.
+        self.assertTrue(any(who == "ceo" and "interrupted before finishing" in p for who, p in log))
+
+    async def test_open_floor_question_naming_an_agent_is_answered_by_that_agent(self):
+        log = []
+        speakers = {"ceo": make_speaker("ceo", log), "eng": make_speaker("eng", log)}
+        moderator = Moderator(
+            [AgendaItem("ceo", "close")],
+            speakers,
+            open_floor_seconds=0.2,
+            addressee_resolver=_name_resolver({"eng": "eng"}),
+        )
+
+        task = asyncio.ensure_future(moderator.run_agenda())
+        await asyncio.sleep(0)  # let ceo close and the open floor arm
+        moderator.record_transcript("board-member", "Eng, one more thing before we wrap")
+
+        completed = await asyncio.wait_for(task, timeout=1)
+
+        self.assertEqual(completed, ["ceo"])
+        self.assertTrue(any(who == "eng" and "one more thing" in p for who, p in log))
+        self.assertFalse(any(who == "ceo" and p.startswith("Someone just asked") for who, p in log))
+
+    async def test_unnamed_follow_up_stays_with_the_agent_just_addressed(self):
+        log = []
+        answered = asyncio.Event()
+        speakers = {
+            "ceo": _answer_signaling_speaker("ceo", log, answered),
+            "eng": _answer_signaling_speaker("eng", log, answered),
+        }
+        moderator = Moderator(
+            [AgendaItem("ceo", "close")],
+            speakers,
+            open_floor_seconds=0.2,
+            addressee_resolver=_name_resolver({"eng": "eng"}),
+        )
+
+        task = asyncio.create_task(moderator.run_agenda())
+        await asyncio.sleep(0)
+        moderator.record_transcript("board-member", "Eng, status?")
+        await asyncio.wait_for(answered.wait(), timeout=1)
+
+        answered.clear()
+        await asyncio.sleep(0.02)  # let the open floor re-arm with eng as responder
+        moderator.record_transcript("board-member", "and anything else")  # no name
+        await asyncio.wait_for(answered.wait(), timeout=1)
+
+        completed = await asyncio.wait_for(task, timeout=1)
+        self.assertEqual(completed, ["ceo"])
+        eng_answers = [p for who, p in log if who == "eng" and p.startswith("Someone just asked")]
+        self.assertEqual(len(eng_answers), 2)  # both the named question and the unnamed follow-up
+        self.assertFalse(any(who == "ceo" and p.startswith("Someone just asked") for who, p in log))
+
+    async def test_naming_an_unavailable_agent_falls_back_to_the_default_responder(self):
+        log = []
+        agenda = [AgendaItem("ceo", "open"), AgendaItem("eng", "update")]
+        speakers = {"ceo": make_interruptible_speaker("ceo", log), "eng": make_speaker("eng", log)}
+        moderator = Moderator(agenda, speakers, addressee_resolver=_name_resolver({"eng": "eng"}))
+        moderator.dropped.add("eng")  # eng dropped this call — can't take the question
+
+        task = asyncio.ensure_future(moderator.run_agenda())
+        await asyncio.sleep(0)
+        await moderator.on_human_speech_started()
+        moderator.record_transcript("board-member", "Eng, can you cover that?")
+
+        completed = await asyncio.wait_for(task, timeout=1)
+
+        self.assertEqual(completed, ["ceo"])  # eng was dropped, so its agenda turn is skipped
+        # With eng unavailable the question falls back to the interrupted ceo,
+        # never silently dropped for want of the named agent.
+        self.assertTrue(any(who == "ceo" and p.startswith("Someone just asked") for who, p in log))
 
 
 class ModeratorAskAndWaitTest(unittest.IsolatedAsyncioTestCase):

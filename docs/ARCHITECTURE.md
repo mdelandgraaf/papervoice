@@ -214,6 +214,23 @@ moderator floor control, human tracks preempt):
     call, while a clear sentence-level imperative naming a roster agent (for example, "Eng, please
     leave") closes only that agent session. Questions and unnamed group phrases do not dismiss anyone.
 
+14. **A question that names an agent is answered by that agent (PER-293).** Both the barge-in answer
+    (note 8) and the open-floor discussion (note 9) used to hand the reply to whoever held the floor
+    — the interrupted agent, or the meeting closer — so "Eng, what's blocking you?" got answered by
+    the CEO/opener, never Eng. `_respond_to_barge_in` now resolves the finished human utterance to a
+    specific agent when it addresses one by name and grants *that* agent the floor to answer instead,
+    falling back to the default responder when no one is named or the named agent is
+    dropped/dismissed/absent (a question is never dropped for want of the named agent). Name matching
+    lives in `boardroom._addressed_target` (display name or bare `agent-eng` → `eng`, whole-word so
+    "engineering" never matches, in a leading vocative / handoff-cue / trailing-question position, all
+    tolerant of STT's missing commas) and is injected into the `Moderator` as an `addressee_resolver`
+    so the moderator itself stays roster-agnostic — mirroring how `_dismissal_target` (note 13) feeds
+    dismissals. During the open-floor discussion the responder then sticks to the last agent who
+    answered, so an unnamed follow-up ("and anything else?") continues the back-and-forth with them
+    rather than bouncing back to the opener. Scripted agenda handoffs are unaffected: an agent's own
+    "over to you, Eng" is spoken text recorded under that agent's identity, never a human utterance,
+    so it never triggers routing — turn order stays agenda-driven.
+
 ## M3b implementation notes (PER-89) — Paperclip agents as voice personas
 
 Each boardroom persona now represents a real Paperclip agent rather than a hardcoded
