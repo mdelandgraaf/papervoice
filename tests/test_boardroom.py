@@ -34,7 +34,13 @@ from papervoice.boardroom import (
     _standup_agenda,
 )
 from papervoice.moderator import Moderator
-from papervoice.personas import BOARDROOM_ROSTER, build_persona_from_agent, load_roster_from_paperclip
+from papervoice.personas import (
+    BOARDROOM_ROSTER,
+    build_persona_from_agent,
+    filter_roster,
+    load_roster_from_paperclip,
+    parse_custom_room_identities,
+)
 from papervoice.vendors import paperclip as pc_vendor
 
 
@@ -52,6 +58,28 @@ class ExplicitDismissalTest(unittest.TestCase):
 
     def test_targets_only_the_named_agent(self):
         self.assertEqual(_dismissal_target("Tell Eng to drop off", BOARDROOM_ROSTER), "agent-eng")
+
+
+class CustomRoomRosterTest(unittest.TestCase):
+    """PER-314: custom room names select an explicit subset of enabled agents."""
+
+    def test_parses_selected_identities(self):
+        self.assertEqual(
+            parse_custom_room_identities("papervoice-room-agent-ceo.agent-marketing"),
+            ("agent-ceo", "agent-marketing"),
+        )
+
+    def test_non_custom_and_empty_rooms_do_not_select_agents(self):
+        self.assertIsNone(parse_custom_room_identities("papervoice-boardroom"))
+        self.assertIsNone(parse_custom_room_identities("papervoice-room-"))
+
+    def test_filter_ignores_unknown_agents_and_preserves_roster_order(self):
+        selected = filter_roster(BOARDROOM_ROSTER, ("agent-eng", "unknown", "agent-ceo"))
+        self.assertEqual(tuple(p.identity for p in selected), ("agent-ceo", "agent-eng"))
+
+    def test_filter_can_create_single_agent_room(self):
+        selected = filter_roster(BOARDROOM_ROSTER, ("agent-eng",))
+        self.assertEqual(tuple(p.identity for p in selected), ("agent-eng",))
 
 
 class AddressedTargetTest(unittest.TestCase):

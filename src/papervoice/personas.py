@@ -27,6 +27,13 @@ from dataclasses import dataclass
 
 BOARDROOM_ROOM = "papervoice-boardroom"
 DIRECT_ROOM_PREFIX = "papervoice-direct-"
+# PER-314: custom rooms let a caller handpick which voice agents join a call —
+# e.g. a marketing sync with just Marketing + CEO instead of the full boardroom.
+# The chosen membership is encoded directly in the room name (dot-joined agent
+# identities after this prefix), because the room name is the only channel that
+# reaches the dispatched worker. This mirrors how DIRECT_ROOM_PREFIX encodes its
+# single target identity, and keeps custom rooms fully stateless (no new storage).
+CUSTOM_ROOM_PREFIX = "papervoice-room-"
 
 CEO_AGENT_ID = "99228e80-fdb1-4ad2-9cba-f74b891c9b8f"  # Aissistent
 ENG_AGENT_ID = "5685b8be-37ef-4bfe-8c68-7dd21ef48382"  # VoiceEngineer
@@ -84,6 +91,40 @@ BOARDROOM_ROSTER = (
 
 def persona_by_identity(identity: str) -> Persona | None:
     return next((p for p in BOARDROOM_ROSTER if p.identity == identity), None)
+
+
+def parse_custom_room_identities(room_name: str) -> tuple[str, ...] | None:
+    """LiveKit identities a custom room (PER-314) selected, or None if not a custom room.
+
+    Custom room names carry their hand-picked membership directly, dot-joined
+    after CUSTOM_ROOM_PREFIX (e.g. ``papervoice-room-agent-ceo.agent-marketing``
+    for a CEO + Marketing sync). Returns the identities in the order encoded, or
+    None when `room_name` is not a custom room. An empty/degenerate encoding
+    (just the bare prefix) also yields None so the caller can reject it.
+
+    LiveKit identities must not contain '.', since that is the member separator —
+    the plugin UI only ever emits the ``agent-<slug>``/configured identities,
+    none of which use dots.
+    """
+    if not room_name.startswith(CUSTOM_ROOM_PREFIX):
+        return None
+    encoded = room_name[len(CUSTOM_ROOM_PREFIX):]
+    identities = tuple(part for part in encoded.split(".") if part)
+    return identities or None
+
+
+def filter_roster(roster: tuple[Persona, ...], identities: tuple[str, ...]) -> tuple[Persona, ...]:
+    """Keep only the personas whose identity is in `identities`, preserving roster order.
+
+    Order follows the input `roster` (which load_roster_from_paperclip already
+    sorts moderator-first), so the opener/closer stays valid for any subset that
+    includes it — and if the moderator was not selected, the first remaining
+    persona by roster order becomes the opener. Identities not present in the
+    roster are silently ignored (an agent could have been disabled between when
+    the link was minted and the call).
+    """
+    wanted = set(identities)
+    return tuple(p for p in roster if p.identity in wanted)
 
 
 _logger = logging.getLogger(__name__)

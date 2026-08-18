@@ -85,6 +85,38 @@ function PapervoiceLinksWidget({ context }) {
     !loading && !error && linkedAgents.length === 0 && /* @__PURE__ */ jsx("div", { style: { color: "#94a3b8", fontSize: 12 }, children: "No agents have a LiveKit identity configured." })
   ] });
 }
+function CustomRoomSection({ companyId, agents }) {
+  const available = [...agents].filter((agent) => agent.enabled && agent.identity.trim()).sort((a, b) => a.order - b.order);
+  const [selected, setSelected] = useState([]);
+  const room = "papervoice-room-" + selected.join(".");
+  const toggle = (identity) => setSelected((current) => current.includes(identity) ? current.filter((item) => item !== identity) : [...current, identity]);
+  return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 12 }, children: [
+    /* @__PURE__ */ jsxs("div", { children: [
+      /* @__PURE__ */ jsx("h2", { style: { fontSize: 16, fontWeight: 600, color: "#0f172a", marginBottom: 4 }, children: "Create a room" }),
+      /* @__PURE__ */ jsx("p", { style: { fontSize: 13, color: "#64748b" }, children: "Choose exactly which enabled voice agents should join this call." })
+    ] }),
+    /* @__PURE__ */ jsxs("div", { style: { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 16, display: "flex", flexDirection: "column", gap: 10 }, children: [
+      available.map((agent) => /* @__PURE__ */ jsxs("label", { style: { display: "flex", alignItems: "center", gap: 9, cursor: "pointer", fontSize: 13 }, children: [
+        /* @__PURE__ */ jsx("input", { type: "checkbox", checked: selected.includes(agent.identity), onChange: () => toggle(agent.identity) }),
+        /* @__PURE__ */ jsx("span", { style: { fontWeight: 500 }, children: agent.displayName || agent.name }),
+        /* @__PURE__ */ jsx("code", { style: { marginLeft: "auto", fontSize: 10, color: "#94a3b8" }, children: agent.identity })
+      ] }, agent.id)),
+      available.length === 0 && /* @__PURE__ */ jsx("div", { style: { color: "#94a3b8", fontSize: 12 }, children: "Enable at least one agent with a LiveKit identity first." }),
+      selected.length > 0 && /* @__PURE__ */ jsxs("div", { style: { borderTop: "1px solid #e2e8f0", paddingTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }, children: [
+        /* @__PURE__ */ jsxs("div", { children: [
+          /* @__PURE__ */ jsxs("div", { style: { fontSize: 12, color: "#475569" }, children: [
+            selected.length,
+            " agent",
+            selected.length === 1 ? "" : "s",
+            " selected"
+          ] }),
+          /* @__PURE__ */ jsx("code", { style: { fontSize: 10, color: "#94a3b8" }, children: room })
+        ] }),
+        /* @__PURE__ */ jsx(LinkButton, { companyId, room, label: "Start room" })
+      ] })
+    ] })
+  ] });
+}
 function useWorkerStatus(companyId) {
   const [running, setRunning] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1036,6 +1068,7 @@ function PapervoicePage({ context }) {
   const { running: workerRunning, loading: workerLoading, refresh: refreshWorker } = useWorkerStatus(companyId);
   const tabs = [
     { id: "agents", label: "Agents" },
+    { id: "rooms", label: "Rooms" },
     { id: "join", label: "Join Link" },
     { id: "prompts", label: "Prompts" },
     { id: "settings", label: "Settings" }
@@ -1097,6 +1130,7 @@ function PapervoicePage({ context }) {
             onRefresh: refreshAgents
           }
         ),
+        activeTab === "rooms" && /* @__PURE__ */ jsx(CustomRoomSection, { companyId, agents: agents ?? [] }),
         activeTab === "join" && /* @__PURE__ */ jsx(JoinLinkSection, { companyId }),
         activeTab === "prompts" && /* @__PURE__ */ jsx(PromptsSection, { companyId }),
         activeTab === "settings" && /* @__PURE__ */ jsx(

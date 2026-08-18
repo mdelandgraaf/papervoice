@@ -108,6 +108,34 @@ export function PapervoiceLinksWidget({ context }: PluginWidgetProps) {
   );
 }
 
+function CustomRoomSection({ companyId, agents }: { companyId: string; agents: VoiceAgent[] }) {
+  const available = [...agents].filter((agent) => agent.enabled && agent.identity.trim()).sort((a, b) => a.order - b.order);
+  const [selected, setSelected] = useState<string[]>([]);
+  const room = "papervoice-room-" + selected.join(".");
+  const toggle = (identity: string) => setSelected((current) => current.includes(identity) ? current.filter((item) => item !== identity) : [...current, identity]);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div><h2 style={{ fontSize: 16, fontWeight: 600, color: "#0f172a", marginBottom: 4 }}>Create a room</h2>
+        <p style={{ fontSize: 13, color: "#64748b" }}>Choose exactly which enabled voice agents should join this call.</p></div>
+      <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+        {available.map((agent) => (
+          <label key={agent.id} style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", fontSize: 13 }}>
+            <input type="checkbox" checked={selected.includes(agent.identity)} onChange={() => toggle(agent.identity)} />
+            <span style={{ fontWeight: 500 }}>{agent.displayName || agent.name}</span>
+            <code style={{ marginLeft: "auto", fontSize: 10, color: "#94a3b8" }}>{agent.identity}</code>
+          </label>
+        ))}
+        {available.length === 0 && <div style={{ color: "#94a3b8", fontSize: 12 }}>Enable at least one agent with a LiveKit identity first.</div>}
+        {selected.length > 0 && <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <div><div style={{ fontSize: 12, color: "#475569" }}>{selected.length} agent{selected.length === 1 ? "" : "s"} selected</div>
+            <code style={{ fontSize: 10, color: "#94a3b8" }}>{room}</code></div>
+          <LinkButton companyId={companyId} room={room} label="Start room" />
+        </div>}
+      </div>
+    </div>
+  );
+}
+
 function useWorkerStatus(companyId: string) {
   const [running, setRunning] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1057,7 +1085,7 @@ function SettingsSection({
 
 export function PapervoicePage({ context }: PluginCompanySettingsPageProps) {
   const companyId = context.companyId ?? "";
-  const [activeTab, setActiveTab] = useState<"agents" | "join" | "prompts" | "settings">("agents");
+  const [activeTab, setActiveTab] = useState<"agents" | "rooms" | "join" | "prompts" | "settings">("agents");
 
   const { data: agents, loading: agentsLoading, error: agentsError, refresh: refreshAgents } = usePluginData<
     VoiceAgent[]
@@ -1067,6 +1095,7 @@ export function PapervoicePage({ context }: PluginCompanySettingsPageProps) {
 
   const tabs = [
     { id: "agents" as const, label: "Agents" },
+    { id: "rooms" as const, label: "Rooms" },
     { id: "join" as const, label: "Join Link" },
     { id: "prompts" as const, label: "Prompts" },
     { id: "settings" as const, label: "Settings" },
@@ -1131,6 +1160,8 @@ export function PapervoicePage({ context }: PluginCompanySettingsPageProps) {
           onRefresh={refreshAgents}
         />
       )}
+
+      {activeTab === "rooms" && <CustomRoomSection companyId={companyId} agents={agents ?? []} />}
 
       {/* Join Link tab */}
       {activeTab === "join" && <JoinLinkSection companyId={companyId} />}

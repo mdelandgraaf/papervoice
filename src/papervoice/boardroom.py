@@ -43,7 +43,16 @@ from livekit.agents.voice.events import UserInputTranscribedEvent, UserStateChan
 from livekit.plugins import anthropic, silero
 
 from papervoice.moderator import AgendaItem, Moderator, SpeakerHandle
-from papervoice.personas import BOARDROOM_ROOM, DIRECT_ROOM_PREFIX, Persona, load_roster_from_paperclip, persona_by_identity
+from papervoice.personas import (
+    BOARDROOM_ROOM,
+    CUSTOM_ROOM_PREFIX,
+    DIRECT_ROOM_PREFIX,
+    Persona,
+    filter_roster,
+    load_roster_from_paperclip,
+    parse_custom_room_identities,
+    persona_by_identity,
+)
 from papervoice.prompts import PromptConfig, load_prompt_config
 from papervoice.vendors import elevenlabs as el_vendor
 from papervoice.vendors import livekit as lk_vendor
@@ -759,6 +768,16 @@ async def entrypoint(ctx) -> None:
         logger.info("starting direct call with %s in room %s", livekit_identity, ctx.room.name)
         summary_issue_id = os.environ.get("PAPERCLIP_STANDUP_SUMMARY_ISSUE_ID")
         await run_direct_call(ctx.room.name, persona, summary_issue_id=summary_issue_id)
+    elif ctx.room.name.startswith(CUSTOM_ROOM_PREFIX):
+        identities = parse_custom_room_identities(ctx.room.name)
+        live_roster = await asyncio.to_thread(load_roster_from_paperclip)
+        roster = filter_roster(live_roster, identities or ())
+        if not roster:
+            logger.error("custom room %s has no enabled matching agents; closing", ctx.room.name)
+            return
+        logger.info("starting custom room %s with agents %s", ctx.room.name, [p.identity for p in roster])
+        summary_issue_id = os.environ.get("PAPERCLIP_STANDUP_SUMMARY_ISSUE_ID")
+        await run_standup(ctx.room.name, summary_issue_id=summary_issue_id, roster=roster)
     else:
         # Full boardroom standup.
         summary_issue_id = os.environ.get("PAPERCLIP_STANDUP_SUMMARY_ISSUE_ID")
