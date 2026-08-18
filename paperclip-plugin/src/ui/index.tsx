@@ -5,7 +5,6 @@ import {
   useHostContext,
   StatusBadge,
   Spinner,
-  ActionBar,
 } from "@paperclipai/plugin-sdk/ui";
 import type { PluginCompanySettingsPageProps, PluginWidgetProps } from "@paperclipai/plugin-sdk/ui";
 
@@ -32,6 +31,180 @@ interface CompanySecretSummary {
   status?: string;
 }
 
+// ─── Design tokens ────────────────────────────────────────────────────────────
+
+const C = {
+  bg: "#fff",
+  bgMuted: "#f8fafc",
+  bgSubtle: "#f1f5f9",
+  border: "#e2e8f0",
+  borderFocus: "#93c5fd",
+  textPrimary: "#0f172a",
+  textSecondary: "#1e293b",
+  textMuted: "#64748b",
+  textFaint: "#94a3b8",
+  textLabel: "#475569",
+  blue: "#2563eb",
+  blueHover: "#1d4ed8",
+  red: "#dc2626",
+  green: "#166534",
+  greenBg: "#dcfce7",
+  amber: "#b45309",
+  purple: "#7c3aed",
+} as const;
+
+// ─── Shared style helpers ──────────────────────────────────────────────────────
+
+const inputStyle: React.CSSProperties = {
+  border: `1px solid ${C.border}`,
+  borderRadius: 6,
+  padding: "7px 10px",
+  fontSize: 13,
+  background: C.bgMuted,
+  color: C.textPrimary,
+  outline: "none",
+  width: "100%",
+  boxSizing: "border-box",
+};
+
+const selectStyle: React.CSSProperties = {
+  ...inputStyle,
+  cursor: "pointer",
+};
+
+const btnPrimary = (disabled = false): React.CSSProperties => ({
+  background: disabled ? "#93c5fd" : C.blue,
+  border: "none",
+  borderRadius: 6,
+  padding: "7px 16px",
+  fontSize: 13,
+  fontWeight: 600,
+  color: "#fff",
+  cursor: disabled ? "not-allowed" : "pointer",
+  whiteSpace: "nowrap",
+});
+
+const btnSecondary: React.CSSProperties = {
+  background: C.bgSubtle,
+  border: `1px solid ${C.border}`,
+  borderRadius: 6,
+  padding: "7px 14px",
+  fontSize: 12,
+  fontWeight: 500,
+  color: "#334155",
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+
+const btnGhost: React.CSSProperties = {
+  background: "none",
+  border: `1px solid ${C.border}`,
+  borderRadius: 6,
+  padding: "7px 14px",
+  fontSize: 12,
+  color: C.textMuted,
+  cursor: "pointer",
+};
+
+const btnDestructive: React.CSSProperties = {
+  background: "#fef2f2",
+  border: `1px solid #fecaca`,
+  borderRadius: 6,
+  padding: "7px 14px",
+  fontSize: 12,
+  fontWeight: 500,
+  color: C.red,
+  cursor: "pointer",
+};
+
+// ─── Primitive layout components ──────────────────────────────────────────────
+
+function Card({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return (
+    <div
+      style={{
+        background: C.bg,
+        border: `1px solid ${C.border}`,
+        borderRadius: 8,
+        padding: 16,
+        ...style,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function SectionHeader({
+  title,
+  description,
+  action,
+}: {
+  title: string;
+  description?: React.ReactNode;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+      <div>
+        <h2 style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary, margin: 0 }}>{title}</h2>
+        {description && (
+          <p style={{ fontSize: 13, color: C.textMuted, margin: "4px 0 0" }}>{description}</p>
+        )}
+      </div>
+      {action && <div style={{ flexShrink: 0 }}>{action}</div>}
+    </div>
+  );
+}
+
+function FormField({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <label style={{ fontSize: 12, fontWeight: 600, color: C.textLabel }}>{label}</label>
+      {hint && <p style={{ fontSize: 11, color: C.textFaint, margin: 0 }}>{hint}</p>}
+      {children}
+    </div>
+  );
+}
+
+function InlineMessage({ text, ok }: { text: string; ok: boolean }) {
+  return (
+    <div style={{ fontSize: 12, color: ok ? C.green : C.red, marginTop: 4 }}>{text}</div>
+  );
+}
+
+function CodeBox({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        background: C.bgSubtle,
+        border: `1px solid ${C.border}`,
+        borderRadius: 6,
+        padding: "8px 10px",
+        fontFamily: "monospace",
+        fontSize: 12,
+        wordBreak: "break-all",
+        color: C.textSecondary,
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 8,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+// ─── LinkButton ───────────────────────────────────────────────────────────────
+
 function LinkButton({ companyId, room, label }: { companyId: string; room: string; label: string }) {
   const mintJoinLink = usePluginAction("mint-join-link");
   const [busy, setBusy] = useState(false);
@@ -51,23 +224,16 @@ function LinkButton({ companyId, room, label }: { companyId: string; room: strin
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
-      <button
-        onClick={openLink}
-        disabled={busy}
-        title={`Open ${room}`}
-        style={{
-          background: "#2563eb", border: "none", borderRadius: 6, padding: "5px 10px",
-          color: "#fff", fontSize: 12, fontWeight: 600,
-          cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1, whiteSpace: "nowrap",
-        }}
-      >
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+      <button onClick={openLink} disabled={busy} title={`Open ${room}`} style={btnPrimary(busy)}>
         {busy ? "Opening…" : label}
       </button>
-      {error && <span style={{ color: "#dc2626", fontSize: 10, maxWidth: 180 }}>{error}</span>}
+      {error && <span style={{ color: C.red, fontSize: 11, maxWidth: 180, textAlign: "right" }}>{error}</span>}
     </div>
   );
 }
+
+// ─── Dashboard widget ─────────────────────────────────────────────────────────
 
 export function PapervoiceLinksWidget({ context }: PluginWidgetProps) {
   const companyId = context.companyId ?? "";
@@ -80,21 +246,28 @@ export function PapervoiceLinksWidget({ context }: PluginWidgetProps) {
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
         <div>
-          <div style={{ fontWeight: 600, color: "#0f172a" }}>Boardroom</div>
-          <code style={{ fontSize: 11, color: "#64748b" }}>papervoice-boardroom</code>
+          <div style={{ fontWeight: 600, color: C.textPrimary }}>Boardroom</div>
+          <code style={{ fontSize: 11, color: C.textMuted }}>papervoice-boardroom</code>
         </div>
         <LinkButton companyId={companyId} room="papervoice-boardroom" label="Join room" />
       </div>
       {loading && <Spinner />}
-      {error && <div style={{ color: "#dc2626", fontSize: 12 }}>Failed to load agents: {error.message}</div>}
+      {error && <div style={{ color: C.red, fontSize: 12 }}>Failed to load agents: {error.message}</div>}
       {linkedAgents.map((agent) => (
-        <div key={agent.id} style={{
-          borderTop: "1px solid #e2e8f0", paddingTop: 8, display: "flex",
-          alignItems: "center", justifyContent: "space-between", gap: 12,
-        }}>
+        <div
+          key={agent.id}
+          style={{
+            borderTop: `1px solid ${C.border}`,
+            paddingTop: 8,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 500, color: "#1e293b" }}>{agent.displayName || agent.name}</div>
-            <code style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: "#94a3b8" }}>
+            <div style={{ fontSize: 13, fontWeight: 500, color: C.textSecondary }}>{agent.displayName || agent.name}</div>
+            <code style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: C.textFaint }}>
               papervoice-direct-{agent.identity}
             </code>
           </div>
@@ -102,25 +275,205 @@ export function PapervoiceLinksWidget({ context }: PluginWidgetProps) {
         </div>
       ))}
       {!loading && !error && linkedAgents.length === 0 && (
-        <div style={{ color: "#94a3b8", fontSize: 12 }}>No agents have a LiveKit identity configured.</div>
+        <div style={{ color: C.textFaint, fontSize: 12 }}>No agents have a LiveKit identity configured.</div>
       )}
     </div>
   );
 }
 
+// ─── Rooms section ────────────────────────────────────────────────────────────
+
 function CustomRoomSection({ companyId, agents }: { companyId: string; agents: VoiceAgent[] }) {
   type Preset = { id: string; name: string; agentIds: string[] };
+
   const { data: loaded, loading, error } = usePluginData<Preset[]>("room-presets", { companyId });
   const validate = usePluginAction("validate-room-preset");
-  const [presets, setPresets] = useState<Preset[]>([]), [name, setName] = useState(""), [selected, setSelected] = useState<string[]>([]), [editing, setEditing] = useState<string | null>(null), [message, setMessage] = useState<string | null>(null);
+
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [name, setName] = useState("");
+  const [selected, setSelected] = useState<string[]>([]);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
   useEffect(() => setPresets(loaded ?? []), [loaded]);
+
   const byId = new Map(agents.map((a) => [a.id, a]));
-  async function write(next: Preset[]) { const response = await fetch("/api/plugins/papervoice/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ companyId, configJson: await currentConfig(companyId, { roomPresetsVersion: 1, roomPresets: next }) }) }); if (!response.ok) throw new Error("Save failed"); setPresets(next); }
-  async function save() { try { const preset = await validate({ companyId, id: editing ?? undefined, name, agentIds: selected }) as Preset; await write(editing ? presets.map((p) => p.id === editing ? preset : p) : [...presets, preset]); setName(""); setSelected([]); setEditing(null); setMessage("Preset saved."); } catch (e: any) { setMessage(e?.message ?? "Save failed"); } }
-  async function remove(id: string) { if (!window.confirm("Delete this room preset?")) return; await write(presets.filter((p) => p.id !== id)); }
-  return <div style={{ display: "flex", flexDirection: "column", gap: 12 }}><div><h2 style={{ fontSize: 16, fontWeight: 600 }}>Rooms</h2><p style={{ fontSize: 13, color: "#64748b" }}>Saved presets persist across reloads; calls remain ephemeral.</p></div><div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 16 }}><b>Boardroom</b><span style={{ marginLeft: 12 }}><LinkButton companyId={companyId} room="papervoice-boardroom" label="Join room" /></span></div>{loading && <Spinner />}{error && <div style={{ color: "#dc2626" }}>Failed to load presets: {error.message}</div>}{presets.map((p) => { const stale = p.agentIds.filter((id) => !byId.get(id)?.enabled), valid = p.agentIds.filter((id) => byId.get(id)?.enabled); return <div key={p.id} style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 14, display: "flex", justifyContent: "space-between", gap: 12 }}><div><b>{p.name}</b><div style={{ fontSize: 12, color: "#64748b" }}>{p.agentIds.map((id) => byId.get(id)?.displayName || id).join(", ")}</div>{stale.length > 0 && <div style={{ color: "#b45309", fontSize: 12 }}>Needs repair: {stale.length} stale selection{stale.length === 1 ? "" : "s"}</div>}</div><div style={{ display: "flex", gap: 6 }}><LinkButton companyId={companyId} room={`papervoice-preset-${p.id}`} label={valid.length ? "Join room" : "No valid agents"} /><button disabled={!valid.length} onClick={() => { setEditing(p.id); setName(p.name); setSelected(p.agentIds); }}>Edit</button><button onClick={() => remove(p.id)}>Delete</button></div></div>; })}<div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}><b>{editing ? "Edit preset" : "Create preset"}</b><input value={name} onChange={(e) => setName(e.target.value)} placeholder="Marketing" maxLength={80} />{agents.filter((a) => a.enabled).map((a) => <label key={a.id}><input type="checkbox" checked={selected.includes(a.id)} onChange={() => setSelected((x) => x.includes(a.id) ? x.filter((i) => i !== a.id) : [...x, a.id])} /> {a.displayName || a.name}</label>)}<button onClick={save} disabled={!name.trim() || !selected.length}>{editing ? "Save changes" : "Create room"}</button>{editing && <button onClick={() => { setEditing(null); setName(""); setSelected([]); }}>Cancel</button>}{message && <div style={{ fontSize: 12 }}>{message}</div>}</div></div>;
+
+  async function write(next: Preset[]) {
+    const response = await fetch("/api/plugins/papervoice/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        companyId,
+        configJson: await currentConfig(companyId, { roomPresetsVersion: 1, roomPresets: next }),
+      }),
+    });
+    if (!response.ok) throw new Error("Save failed");
+    setPresets(next);
+  }
+
+  async function save() {
+    try {
+      const preset = (await validate({ companyId, id: editing ?? undefined, name, agentIds: selected })) as Preset;
+      await write(editing ? presets.map((p) => (p.id === editing ? preset : p)) : [...presets, preset]);
+      setName("");
+      setSelected([]);
+      setEditing(null);
+      setMessage("Preset saved.");
+    } catch (e: any) {
+      setMessage(e?.message ?? "Save failed");
+    }
+  }
+
+  async function remove(id: string) {
+    if (!window.confirm("Delete this room preset?")) return;
+    await write(presets.filter((p) => p.id !== id));
+  }
+
+  function startEdit(p: Preset) {
+    setEditing(p.id);
+    setName(p.name);
+    setSelected(p.agentIds);
+  }
+
+  function cancelEdit() {
+    setEditing(null);
+    setName("");
+    setSelected([]);
+  }
+
+  const enabledAgents = agents.filter((a) => a.enabled);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <SectionHeader
+        title="Rooms"
+        description="Saved presets persist across reloads; calls remain ephemeral."
+      />
+
+      {/* Boardroom (built-in) */}
+      <Card>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14, color: C.textPrimary }}>Boardroom</div>
+            <code style={{ fontSize: 11, color: C.textMuted }}>papervoice-boardroom</code>
+          </div>
+          <LinkButton companyId={companyId} room="papervoice-boardroom" label="Join room" />
+        </div>
+      </Card>
+
+      {loading && <Spinner />}
+      {error && <div style={{ color: C.red, fontSize: 13 }}>Failed to load presets: {error.message}</div>}
+
+      {/* Existing presets */}
+      {presets.map((p) => {
+        const stale = p.agentIds.filter((id) => !byId.get(id)?.enabled);
+        const valid = p.agentIds.filter((id) => byId.get(id)?.enabled);
+        return (
+          <Card key={p.id}>
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 14, color: C.textPrimary }}>{p.name}</div>
+                <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>
+                  {p.agentIds.map((id) => byId.get(id)?.displayName || id).join(", ")}
+                </div>
+                {stale.length > 0 && (
+                  <div style={{ color: C.amber, fontSize: 12, marginTop: 4 }}>
+                    Needs repair: {stale.length} stale agent{stale.length === 1 ? "" : "s"}
+                  </div>
+                )}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                <LinkButton
+                  companyId={companyId}
+                  room={`papervoice-preset-${p.id}`}
+                  label={valid.length ? "Join room" : "No valid agents"}
+                />
+                <button style={btnSecondary} onClick={() => startEdit(p)}>
+                  Edit
+                </button>
+                <button style={btnDestructive} onClick={() => remove(p.id)}>
+                  Delete
+                </button>
+              </div>
+            </div>
+          </Card>
+        );
+      })}
+
+      {/* Create / edit form */}
+      <Card>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ fontWeight: 600, fontSize: 14, color: C.textPrimary }}>
+            {editing ? "Edit preset" : "Create preset"}
+          </div>
+
+          <FormField label="Room name">
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Marketing standup"
+              maxLength={80}
+              style={inputStyle}
+            />
+          </FormField>
+
+          {enabledAgents.length > 0 && (
+            <FormField label="Agents">
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {enabledAgents.map((a) => (
+                  <label key={a.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={selected.includes(a.id)}
+                      onChange={() =>
+                        setSelected((x) =>
+                          x.includes(a.id) ? x.filter((i) => i !== a.id) : [...x, a.id]
+                        )
+                      }
+                      style={{ accentColor: C.blue, width: 14, height: 14 }}
+                    />
+                    {a.displayName || a.name}
+                  </label>
+                ))}
+              </div>
+            </FormField>
+          )}
+
+          {enabledAgents.length === 0 && (
+            <div style={{ fontSize: 12, color: C.textFaint }}>
+              No enabled agents. Enable agents on the Agents tab first.
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={save}
+              disabled={!name.trim() || !selected.length}
+              style={btnPrimary(!name.trim() || !selected.length)}
+            >
+              {editing ? "Save changes" : "Create room"}
+            </button>
+            {editing && (
+              <button style={btnGhost} onClick={cancelEdit}>
+                Cancel
+              </button>
+            )}
+          </div>
+          {message && <InlineMessage text={message} ok={message === "Preset saved."} />}
+        </div>
+      </Card>
+    </div>
+  );
 }
-async function currentConfig(companyId: string, changes: Record<string, unknown>) { const response = await fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`); const body = response.ok ? await response.json().catch(() => ({})) : {}; return { ...(body.configJson ?? body), ...changes }; }
+
+async function currentConfig(companyId: string, changes: Record<string, unknown>) {
+  const response = await fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`);
+  const body = response.ok ? await response.json().catch(() => ({})) : {};
+  return { ...(body.configJson ?? body), ...changes };
+}
+
+// ─── Worker status hook ───────────────────────────────────────────────────────
 
 function useWorkerStatus(companyId: string) {
   const [running, setRunning] = useState<boolean | null>(null);
@@ -150,6 +503,8 @@ function useWorkerStatus(companyId: string) {
 
   return { running, loading, refresh };
 }
+
+// ─── Agents section ───────────────────────────────────────────────────────────
 
 function agentPapervoiceMetadata(a: VoiceAgent) {
   return {
@@ -267,17 +622,8 @@ function AgentRow({
   }
 
   return (
-    <div
-      style={{
-        background: "#fff",
-        border: "1px solid #e2e8f0",
-        borderRadius: 8,
-        padding: "14px 16px",
-        display: "flex",
-        flexDirection: "column",
-        gap: 10,
-      }}
-    >
+    <Card>
+      {/* Agent header row */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <label
@@ -289,24 +635,23 @@ function AgentRow({
               name="moderator-selection"
               checked={isModerator}
               onChange={onSetModerator}
-              style={{ accentColor: "#7c3aed", width: 15, height: 15, cursor: "pointer" }}
+              style={{ accentColor: C.purple, width: 15, height: 15, cursor: "pointer" }}
             />
-            <span style={{ fontSize: 11, color: isModerator ? "#7c3aed" : "#94a3b8", fontWeight: isModerator ? 600 : 400 }}>
+            <span style={{ fontSize: 11, color: isModerator ? C.purple : C.textFaint, fontWeight: isModerator ? 600 : 400 }}>
               MOD
             </span>
           </label>
           <div>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>{agent.displayName || agent.name}</div>
-            <div style={{ fontSize: 12, color: "#64748b" }}>{agent.role}</div>
+            <div style={{ fontWeight: 600, fontSize: 14, color: C.textPrimary }}>{agent.displayName || agent.name}</div>
+            <div style={{ fontSize: 12, color: C.textMuted }}>{agent.role}</div>
           </div>
         </div>
+
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {isModerator && (
-            <StatusBadge variant="info">Moderator</StatusBadge>
-          )}
-          <StatusBadge variant={agent.enabled ? "success" : "neutral"}>
-            {agent.enabled ? "Enabled" : "Disabled"}
-          </StatusBadge>
+          {isModerator && <StatusBadge status="info" label="Moderator" />}
+          <StatusBadge status={agent.enabled ? "ok" : "pending"} label={agent.enabled ? "Enabled" : "Disabled"} />
+
+          {/* Toggle switch */}
           <label
             style={{
               position: "relative",
@@ -327,7 +672,7 @@ function AgentRow({
               style={{
                 position: "absolute",
                 inset: 0,
-                background: agent.enabled ? "#2563eb" : "#cbd5e1",
+                background: agent.enabled ? C.blue : "#cbd5e1",
                 borderRadius: 9999,
                 transition: "background 0.2s",
               }}
@@ -346,165 +691,80 @@ function AgentRow({
               }}
             />
           </label>
-          <button
-            onClick={() => setExpanded((v) => !v)}
-            style={{
-              background: "#f1f5f9",
-              border: "1px solid #e2e8f0",
-              borderRadius: 6,
-              padding: "4px 10px",
-              fontSize: 12,
-              cursor: "pointer",
-              fontWeight: 500,
-              color: "#334155",
-            }}
-          >
+
+          <button onClick={() => setExpanded((v) => !v)} style={btnSecondary}>
             {expanded ? "Close" : "Configure"}
           </button>
         </div>
       </div>
 
+      {/* Expanded config panel */}
       {expanded && (
         <div
           style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: 10,
-            borderTop: "1px solid #f1f5f9",
-            paddingTop: 10,
+            display: "flex",
+            flexDirection: "column",
+            gap: 12,
+            borderTop: `1px solid ${C.bgSubtle}`,
+            paddingTop: 14,
+            marginTop: 12,
           }}
         >
-          {[
-            { label: "Voice ID", key: "voiceId", placeholder: "ElevenLabs voice ID" },
-            { label: "Display Name", key: "displayName", placeholder: "Name shown on calls" },
-            { label: "LiveKit Identity", key: "identity", placeholder: "papervoice-ceo" },
-            { label: "Order (1–99)", key: "order", placeholder: "1" },
-          ].map(({ label, key, placeholder }) => (
-            <div key={key} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <label style={{ fontSize: 12, fontWeight: 500, color: "#475569" }}>{label}</label>
-              <input
-                type="text"
-                value={fields[key as keyof typeof fields]}
-                placeholder={placeholder}
-                onChange={(e) => setFields((f) => ({ ...f, [key]: e.target.value }))}
-                style={{
-                  border: "1px solid #e2e8f0",
-                  borderRadius: 6,
-                  padding: "6px 10px",
-                  fontSize: 13,
-                  outline: "none",
-                  background: "#f8fafc",
-                  color: "#0f172a",
-                }}
-              />
-            </div>
-          ))}
-          <div
-            style={{
-              gridColumn: "1 / -1",
-              display: "flex",
-              justifyContent: "flex-end",
-              gap: 8,
-            }}
-          >
-            <button
-              onClick={() => setExpanded(false)}
-              style={{
-                background: "#f1f5f9",
-                border: "1px solid #e2e8f0",
-                borderRadius: 6,
-                padding: "6px 14px",
-                fontSize: 12,
-                cursor: "pointer",
-                color: "#334155",
-                fontWeight: 500,
-              }}
-            >
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            {[
+              { label: "Voice ID", key: "voiceId", placeholder: "ElevenLabs voice ID" },
+              { label: "Display Name", key: "displayName", placeholder: "Name shown on calls" },
+              { label: "LiveKit Identity", key: "identity", placeholder: "papervoice-ceo" },
+              { label: "Order (1–99)", key: "order", placeholder: "1" },
+            ].map(({ label, key, placeholder }) => (
+              <FormField key={key} label={label}>
+                <input
+                  type="text"
+                  value={fields[key as keyof typeof fields]}
+                  placeholder={placeholder}
+                  onChange={(e) => setFields((f) => ({ ...f, [key]: e.target.value }))}
+                  style={inputStyle}
+                />
+              </FormField>
+            ))}
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <button onClick={() => setExpanded(false)} style={btnGhost}>
               Cancel
             </button>
-            <button
-              onClick={saveConfig}
-              disabled={saving}
-              style={{
-                background: "#2563eb",
-                border: "none",
-                borderRadius: 6,
-                padding: "6px 14px",
-                fontSize: 12,
-                cursor: saving ? "not-allowed" : "pointer",
-                color: "#fff",
-                fontWeight: 600,
-                opacity: saving ? 0.6 : 1,
-              }}
-            >
+            <button onClick={saveConfig} disabled={saving} style={btnPrimary(saving)}>
               {saving ? "Saving…" : "Save"}
             </button>
           </div>
 
-          <div
-            style={{
-              gridColumn: "1 / -1",
-              borderTop: "1px solid #f1f5f9",
-              paddingTop: 10,
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
-            }}
-          >
+          {/* Direct call link */}
+          <div style={{ borderTop: `1px solid ${C.bgSubtle}`, paddingTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
               <div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#475569" }}>Direct call link</div>
-                <div style={{ fontSize: 11, color: "#94a3b8" }}>
-                  1:1 voice call with this agent (room <code>papervoice-direct-{fields.identity || "…"}</code>).
+                <div style={{ fontSize: 12, fontWeight: 600, color: C.textLabel }}>Direct call link</div>
+                <div style={{ fontSize: 11, color: C.textFaint }}>
+                  1:1 voice call (room <code>papervoice-direct-{fields.identity || "…"}</code>)
                 </div>
               </div>
-              <button
-                onClick={generateDirectLink}
-                disabled={directBusy}
-                style={{
-                  background: "#f1f5f9",
-                  border: "1px solid #e2e8f0",
-                  borderRadius: 6,
-                  padding: "6px 12px",
-                  fontSize: 12,
-                  cursor: directBusy ? "not-allowed" : "pointer",
-                  fontWeight: 600,
-                  color: "#334155",
-                  whiteSpace: "nowrap",
-                  opacity: directBusy ? 0.6 : 1,
-                }}
-              >
+              <button onClick={generateDirectLink} disabled={directBusy} style={btnSecondary}>
                 {directBusy ? "Generating…" : "Direct link"}
               </button>
             </div>
-            {directError && <div style={{ color: "#dc2626", fontSize: 12 }}>{directError}</div>}
+            {directError && <div style={{ color: C.red, fontSize: 12 }}>{directError}</div>}
             {directLink && (
-              <div
-                style={{
-                  background: "#f1f5f9",
-                  border: "1px solid #e2e8f0",
-                  borderRadius: 6,
-                  padding: "8px 10px",
-                  fontFamily: "monospace",
-                  fontSize: 12,
-                  wordBreak: "break-all",
-                  color: "#1e293b",
-                  display: "flex",
-                  alignItems: "flex-start",
-                  gap: 8,
-                }}
-              >
+              <CodeBox>
                 <span style={{ flex: 1 }}>{directLink}</span>
                 <button
                   onClick={copyDirectLink}
                   style={{
-                    background: directCopied ? "#dcfce7" : "#e2e8f0",
+                    background: directCopied ? C.greenBg : C.border,
                     border: "none",
                     borderRadius: 4,
                     padding: "4px 10px",
                     fontSize: 12,
                     cursor: "pointer",
-                    color: directCopied ? "#166534" : "#334155",
+                    color: directCopied ? C.green : "#334155",
                     fontWeight: 600,
                     whiteSpace: "nowrap",
                     flexShrink: 0,
@@ -512,12 +772,12 @@ function AgentRow({
                 >
                   {directCopied ? "Copied!" : "Copy"}
                 </button>
-              </div>
+              </CodeBox>
             )}
           </div>
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -530,7 +790,7 @@ function AgentsSection({
 }: {
   agents: VoiceAgent[];
   agentsLoading: boolean;
-  agentsError: Error | null;
+  agentsError: { message: string } | null;
   companyId: string;
   onRefresh: () => void;
 }) {
@@ -568,37 +828,27 @@ function AgentsSection({
   const sorted = [...agents].sort((a, b) => a.order - b.order);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between" }}>
-        <h2 style={{ fontSize: 16, fontWeight: 600, color: "#0f172a" }}>Voice Agents</h2>
-        <button
-          onClick={onRefresh}
-          style={{
-            background: "#f1f5f9",
-            border: "1px solid #e2e8f0",
-            borderRadius: 6,
-            padding: "4px 12px",
-            fontSize: 12,
-            cursor: "pointer",
-            color: "#334155",
-            fontWeight: 500,
-          }}
-        >
-          Refresh
-        </button>
-      </div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <SectionHeader
+        title="Voice Agents"
+        description={
+          <>
+            Use the <strong>MOD</strong> radio to designate one agent as moderator — they open the standup, keep it on time, and close it.
+          </>
+        }
+        action={
+          <button onClick={onRefresh} style={btnSecondary}>
+            Refresh
+          </button>
+        }
+      />
 
-      <p style={{ fontSize: 12, color: "#64748b", margin: 0 }}>
-        Use the <strong>MOD</strong> radio to designate one agent as moderator — they open the standup, keep it on time, and close it.
-      </p>
-
-      {agentsLoading && <Spinner />}
-      {settingModerator && <Spinner />}
+      {(agentsLoading || settingModerator) && <Spinner />}
       {agentsError && (
-        <div style={{ color: "#dc2626", fontSize: 13 }}>Failed to load agents: {agentsError.message}</div>
+        <div style={{ color: C.red, fontSize: 13 }}>Failed to load agents: {agentsError.message}</div>
       )}
       {agents.length === 0 && !agentsLoading && (
-        <div style={{ color: "#94a3b8", fontSize: 14, textAlign: "center", padding: 20 }}>
+        <div style={{ color: C.textFaint, fontSize: 14, textAlign: "center", padding: 32 }}>
           No agents found. Agents with <code>metadata.papervoice</code> set will appear here.
         </div>
       )}
@@ -615,6 +865,8 @@ function AgentsSection({
     </div>
   );
 }
+
+// ─── Join Link section ────────────────────────────────────────────────────────
 
 function JoinLinkSection({ companyId }: { companyId: string }) {
   const mintJoinLink = usePluginAction("mint-join-link");
@@ -654,107 +906,69 @@ function JoinLinkSection({ companyId }: { companyId: string }) {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <h2 style={{ fontSize: 16, fontWeight: 600, color: "#0f172a" }}>Join Link</h2>
-      <div
-        style={{
-          background: "#fff",
-          border: "1px solid #e2e8f0",
-          borderRadius: 8,
-          padding: "16px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 12,
-        }}
-      >
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 80px", gap: 10 }}>
-          {[
-            { label: "Participant Name", key: "identity", placeholder: "human-guest" },
-            { label: "Room", key: "room", placeholder: "papervoice-boardroom" },
-            { label: "TTL (h)", key: "ttlHours", placeholder: "48" },
-          ].map(({ label, key, placeholder }) => (
-            <div key={key} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <label style={{ fontSize: 12, fontWeight: 500, color: "#475569" }}>{label}</label>
-              <input
-                type="text"
-                value={form[key as keyof typeof form]}
-                placeholder={placeholder}
-                onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
-                style={{
-                  border: "1px solid #e2e8f0",
-                  borderRadius: 6,
-                  padding: "6px 10px",
-                  fontSize: 13,
-                  background: "#f8fafc",
-                  color: "#0f172a",
-                  outline: "none",
-                }}
-              />
-            </div>
-          ))}
-        </div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <SectionHeader
+        title="Join Link"
+        description="Generate a time-limited join link for any room."
+      />
 
-        <button
-          onClick={generate}
-          disabled={busy}
-          style={{
-            background: "#2563eb",
-            color: "#fff",
-            border: "none",
-            borderRadius: 6,
-            padding: "8px 18px",
-            fontWeight: 600,
-            fontSize: 13,
-            cursor: busy ? "not-allowed" : "pointer",
-            opacity: busy ? 0.6 : 1,
-            alignSelf: "flex-start",
-          }}
-        >
-          {busy ? "Generating…" : "Generate Link"}
-        </button>
+      <Card>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 88px", gap: 10 }}>
+            {[
+              { label: "Participant name", key: "identity", placeholder: "human-guest" },
+              { label: "Room", key: "room", placeholder: "papervoice-boardroom" },
+              { label: "TTL (hours)", key: "ttlHours", placeholder: "48" },
+            ].map(({ label, key, placeholder }) => (
+              <FormField key={key} label={label}>
+                <input
+                  type="text"
+                  value={form[key as keyof typeof form]}
+                  placeholder={placeholder}
+                  onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+                  style={inputStyle}
+                />
+              </FormField>
+            ))}
+          </div>
 
-        {error && <div style={{ color: "#dc2626", fontSize: 13 }}>{error}</div>}
-
-        {link && (
-          <div
-            style={{
-              background: "#f1f5f9",
-              border: "1px solid #e2e8f0",
-              borderRadius: 6,
-              padding: "10px 12px",
-              fontFamily: "monospace",
-              fontSize: 12,
-              wordBreak: "break-all",
-              color: "#1e293b",
-              display: "flex",
-              alignItems: "flex-start",
-              gap: 8,
-            }}
-          >
-            <span style={{ flex: 1 }}>{link}</span>
-            <button
-              onClick={copyLink}
-              style={{
-                background: copied ? "#dcfce7" : "#e2e8f0",
-                border: "none",
-                borderRadius: 4,
-                padding: "4px 10px",
-                fontSize: 12,
-                cursor: "pointer",
-                color: copied ? "#166534" : "#334155",
-                fontWeight: 600,
-                whiteSpace: "nowrap",
-                flexShrink: 0,
-              }}
-            >
-              {copied ? "Copied!" : "Copy"}
+          <div>
+            <button onClick={generate} disabled={busy} style={btnPrimary(busy)}>
+              {busy ? "Generating…" : "Generate link"}
             </button>
           </div>
-        )}
-      </div>
+
+          {error && <InlineMessage text={error} ok={false} />}
+
+          {link && (
+            <CodeBox>
+              <span style={{ flex: 1 }}>{link}</span>
+              <button
+                onClick={copyLink}
+                style={{
+                  background: copied ? C.greenBg : C.border,
+                  border: "none",
+                  borderRadius: 4,
+                  padding: "4px 10px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  color: copied ? C.green : "#334155",
+                  fontWeight: 600,
+                  whiteSpace: "nowrap",
+                  flexShrink: 0,
+                }}
+              >
+                {copied ? "Copied!" : "Copy"}
+              </button>
+            </CodeBox>
+          )}
+        </div>
+      </Card>
     </div>
   );
 }
+
+// ─── Prompts section ──────────────────────────────────────────────────────────
 
 const DEFAULT_MODERATOR = `This is a daily standup, and you are the moderator. You open the standup, keep it on time, and close it. Be concise and conversational — one or two sentences per turn, no lists, no markdown. This is a live multi-party voice call. Report what Paperclip issues on your name you have done recently, what's still pending, what needs decisions from the board, and any blockers. After your update, give the floor to another agent. If you have a genuinely useful reaction — advice, a question — give it. If not, call the pass_on_reacting tool and don't say anything else; don't force a comment just to fill air time. If a human starts talking while you're mid-sentence, stop immediately. If you need the board's steering or a decision before you can continue, ask the question out loud and then call the ask_board tool with that same question to wait for their answer — don't just guess or wait for the human to bring it up on their own.`;
 
@@ -789,7 +1003,6 @@ function PromptsSection({ companyId }: { companyId: string }) {
 
   async function savePrompts() {
     setMessage(null);
-    // Preserve other config fields (LiveKit settings etc.)
     const currentResp = await fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`);
     const currentBody = currentResp.ok ? await currentResp.json().catch(() => ({})) : {};
     const existing = currentBody.configJson ?? currentBody;
@@ -812,139 +1025,113 @@ function PromptsSection({ companyId }: { companyId: string }) {
   }
 
   const areaStyle: React.CSSProperties = {
-    border: "1px solid #e2e8f0",
+    border: `1px solid ${C.border}`,
     borderRadius: 6,
     padding: "8px 10px",
     fontSize: 12,
     fontFamily: "monospace",
-    resize: "vertical" as const,
+    resize: "vertical",
     minHeight: 100,
-    background: "#f8fafc",
-    color: "#0f172a",
+    background: C.bgMuted,
+    color: C.textPrimary,
     width: "100%",
-    boxSizing: "border-box" as const,
+    boxSizing: "border-box",
     outline: "none",
   };
 
-  const labelStyle: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 2, display: "block" };
-  const hintStyle: React.CSSProperties = { fontSize: 11, color: "#94a3b8", marginBottom: 4 };
-
   if (loading) return <Spinner />;
 
+  const prompts: Array<{
+    label: string;
+    hint: React.ReactNode;
+    value: string;
+    onChange: (v: string) => void;
+    rows: number;
+  }> = [
+    {
+      label: "Moderator system prompt",
+      hint: "System-level instructions for the standup moderator agent.",
+      value: promptModerator,
+      onChange: setPromptModerator,
+      rows: 6,
+    },
+    {
+      label: "Participant system prompt",
+      hint: "System-level instructions for participant (non-moderator) agents.",
+      value: promptParticipant,
+      onChange: setPromptParticipant,
+      rows: 6,
+    },
+    {
+      label: "Opening agenda prompt",
+      hint: (
+        <>
+          Instructions for the moderator&apos;s opening turn. Use <code>{"{next_speaker}"}</code> where the first update
+          speaker&apos;s name should appear.
+        </>
+      ),
+      value: promptAgendaOpening,
+      onChange: setPromptAgendaOpening,
+      rows: 3,
+    },
+    {
+      label: "One-on-one call prompt",
+      hint: (
+        <>
+          System-level instructions for an agent on a 1:1 direct call. Use <code>{"{agent_name}"}</code> where the
+          agent&apos;s display name should appear. The agent&apos;s open issues are appended automatically.
+        </>
+      ),
+      value: promptDirectCall,
+      onChange: setPromptDirectCall,
+      rows: 5,
+    },
+  ];
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <h2 style={{ fontSize: 16, fontWeight: 600, color: "#0f172a" }}>Prompts</h2>
-      <p style={{ fontSize: 12, color: "#64748b", margin: 0 }}>
-        Customise the instructions that drive agent behaviour during a standup.
-        Leave a field blank to use the built-in default. Changes take effect at the start of the next call.
-      </p>
-      <div
-        style={{
-          background: "#fff",
-          border: "1px solid #e2e8f0",
-          borderRadius: 8,
-          padding: 16,
-          display: "flex",
-          flexDirection: "column",
-          gap: 14,
-        }}
-      >
-        <div>
-          <label style={labelStyle}>Moderator system prompt</label>
-          <p style={hintStyle}>System-level instructions for the standup moderator agent.</p>
-          <textarea
-            value={promptModerator}
-            onChange={(e) => setPromptModerator(e.target.value)}
-            style={areaStyle}
-            rows={6}
-          />
-        </div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <SectionHeader
+        title="Prompts"
+        description="Customise the instructions that drive agent behaviour during a standup. Leave a field blank to use the built-in default. Changes take effect at the start of the next call."
+      />
 
-        <div>
-          <label style={labelStyle}>Participant system prompt</label>
-          <p style={hintStyle}>System-level instructions for participant (non-moderator) agents.</p>
-          <textarea
-            value={promptParticipant}
-            onChange={(e) => setPromptParticipant(e.target.value)}
-            style={areaStyle}
-            rows={6}
-          />
-        </div>
+      <Card>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {prompts.map((p) => (
+            <FormField key={p.label} label={p.label} hint={p.hint}>
+              <textarea
+                value={p.value}
+                onChange={(e) => p.onChange(e.target.value)}
+                style={{ ...areaStyle, minHeight: p.rows * 22 }}
+                rows={p.rows}
+              />
+            </FormField>
+          ))}
 
-        <div>
-          <label style={labelStyle}>Opening agenda prompt</label>
-          <p style={hintStyle}>
-            Instructions for the moderator&apos;s opening turn. Use <code>{"{next_speaker}"}</code> where the
-            first update speaker&apos;s name should appear.
-          </p>
-          <textarea
-            value={promptAgendaOpening}
-            onChange={(e) => setPromptAgendaOpening(e.target.value)}
-            style={{ ...areaStyle, minHeight: 60 }}
-            rows={3}
-          />
-        </div>
-
-        <div>
-          <label style={labelStyle}>One-on-one call prompt</label>
-          <p style={hintStyle}>
-            System-level instructions for an agent on a 1:1 direct call with a board member.
-            Use <code>{"{agent_name}"}</code> where the agent&apos;s display name should appear.
-            The agent&apos;s current open issues are appended automatically when available.
-          </p>
-          <textarea
-            value={promptDirectCall}
-            onChange={(e) => setPromptDirectCall(e.target.value)}
-            style={areaStyle}
-            rows={5}
-          />
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button
-            onClick={savePrompts}
-            style={{
-              background: "#2563eb",
-              color: "#fff",
-              border: "none",
-              borderRadius: 6,
-              padding: "8px 18px",
-              fontWeight: 600,
-              fontSize: 13,
-              cursor: "pointer",
-            }}
-          >
-            Save Prompts
-          </button>
-          <button
-            onClick={() => {
-              setPromptModerator(DEFAULT_MODERATOR);
-              setPromptParticipant(DEFAULT_PARTICIPANT);
-              setPromptAgendaOpening(DEFAULT_AGENDA_OPENING);
-              setPromptDirectCall(DEFAULT_DIRECT_CALL);
-            }}
-            style={{
-              background: "none",
-              color: "#64748b",
-              border: "1px solid #e2e8f0",
-              borderRadius: 6,
-              padding: "8px 14px",
-              fontSize: 12,
-              cursor: "pointer",
-            }}
-          >
-            Reset to defaults
-          </button>
-        </div>
-        {message && (
-          <div style={{ fontSize: 12, color: message === "Prompts saved." ? "#166534" : "#dc2626" }}>
-            {message}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, borderTop: `1px solid ${C.border}`, paddingTop: 14 }}>
+            <button onClick={savePrompts} style={btnPrimary()}>
+              Save prompts
+            </button>
+            <button
+              onClick={() => {
+                setPromptModerator(DEFAULT_MODERATOR);
+                setPromptParticipant(DEFAULT_PARTICIPANT);
+                setPromptAgendaOpening(DEFAULT_AGENDA_OPENING);
+                setPromptDirectCall(DEFAULT_DIRECT_CALL);
+              }}
+              style={btnGhost}
+            >
+              Reset to defaults
+            </button>
           </div>
-        )}
-      </div>
+          {message && <InlineMessage text={message} ok={message === "Prompts saved."} />}
+        </div>
+      </Card>
     </div>
   );
 }
+
+// ─── Settings section ─────────────────────────────────────────────────────────
 
 function SettingsSection({
   companyId,
@@ -985,7 +1172,7 @@ function SettingsSection({
       .then(async (response) => {
         if (!response.ok) throw new Error(`Could not load company secrets (${response.status})`);
         const secrets = (await response.json()) as CompanySecretSummary[];
-        setCompanySecrets(secrets.filter((secret) => !secret.status || secret.status === "active"));
+        setCompanySecrets(secrets.filter((s) => !s.status || s.status === "active"));
       })
       .catch((error) => setMessage(error.message))
       .finally(() => setSecretsLoading(false));
@@ -993,7 +1180,6 @@ function SettingsSection({
 
   async function saveLiveKitConfig() {
     setMessage(null);
-    // Fetch current config first so we preserve other fields (e.g. prompt overrides)
     const currentResp = await fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`);
     const currentBody = currentResp.ok ? await currentResp.json().catch(() => ({})) : {};
     const existing = currentBody.configJson ?? currentBody;
@@ -1012,80 +1198,113 @@ function SettingsSection({
       }),
     });
     const body = await response.json().catch(() => ({}));
-    setMessage(response.ok ? "LiveKit configuration saved." : body.error ?? `Save failed (${response.status})`);
+    setMessage(
+      response.ok ? "LiveKit configuration saved." : body.error ?? `Save failed (${response.status})`
+    );
   }
 
-  const fieldStyle = { border: "1px solid #e2e8f0", borderRadius: 6, padding: "7px 10px", fontSize: 13 };
+  const secretOptions = secretsLoading
+    ? [<option key="" value="">Loading secrets…</option>]
+    : [
+        <option key="" value="">Select a company secret</option>,
+        ...companySecrets.map((s) => (
+          <option key={s.id} value={s.id}>
+            {s.name}
+            {s.key ? ` (${s.key})` : ""}
+          </option>
+        )),
+      ];
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <h2 style={{ fontSize: 16, fontWeight: 600, color: "#0f172a" }}>Settings</h2>
-      <div
-        style={{
-          background: "#fff",
-          border: "1px solid #e2e8f0",
-          borderRadius: 8,
-          padding: "16px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 10,
-        }}
-      >
-        <h3 style={{ fontSize: 14, fontWeight: 600 }}>LiveKit</h3>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>LiveKit URL<input type="url" value={liveKitUrl} placeholder="wss://your-project.livekit.cloud" onChange={(event) => setLiveKitUrl(event.target.value)} style={fieldStyle} /></label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
-          LiveKit API key company secret
-          <select value={apiKeySecretId} disabled={secretsLoading} onChange={(event) => setApiKeySecretId(event.target.value)} style={fieldStyle}>
-            <option value="">{secretsLoading ? "Loading company secrets…" : "Select a company secret"}</option>
-            {companySecrets.map((secret) => <option key={secret.id} value={secret.id}>{secret.name}{secret.key ? ` (${secret.key})` : ""}</option>)}
-          </select>
-        </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
-          LiveKit API secret company secret
-          <select value={apiSecretSecretId} disabled={secretsLoading} onChange={(event) => setApiSecretSecretId(event.target.value)} style={fieldStyle}>
-            <option value="">{secretsLoading ? "Loading company secrets…" : "Select a company secret"}</option>
-            {companySecrets.map((secret) => <option key={secret.id} value={secret.id}>{secret.name}{secret.key ? ` (${secret.key})` : ""}</option>)}
-          </select>
-        </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>Default room<input value={room} onChange={(event) => setRoom(event.target.value)} style={fieldStyle} /></label>
-        <button onClick={saveLiveKitConfig} disabled={!liveKitUrl || !apiKeySecretId || !apiSecretSecretId} style={{ alignSelf: "flex-start", background: "#2563eb", color: "white", border: 0, borderRadius: 6, padding: "8px 18px", fontWeight: 600 }}>
-          Save LiveKit Settings
-        </button>
-        {message && <div style={{ fontSize: 12, color: message.endsWith("saved.") ? "#166534" : "#dc2626" }}>{message}</div>}
-        <div style={{ borderTop: "1px solid #e2e8f0", margin: "6px 0" }} />
-        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14 }}>
-          <span style={{ color: "#475569", fontWeight: 500 }}>Boardroom worker:</span>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <SectionHeader title="Settings" />
+
+      {/* LiveKit config card */}
+      <Card>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ fontWeight: 600, fontSize: 14, color: C.textPrimary }}>LiveKit</div>
+
+          <FormField label="LiveKit URL">
+            <input
+              type="url"
+              value={liveKitUrl}
+              placeholder="wss://your-project.livekit.cloud"
+              onChange={(e) => setLiveKitUrl(e.target.value)}
+              style={inputStyle}
+            />
+          </FormField>
+
+          <FormField label="LiveKit API key secret">
+            <select
+              value={apiKeySecretId}
+              disabled={secretsLoading}
+              onChange={(e) => setApiKeySecretId(e.target.value)}
+              style={selectStyle}
+            >
+              {secretOptions}
+            </select>
+          </FormField>
+
+          <FormField label="LiveKit API secret">
+            <select
+              value={apiSecretSecretId}
+              disabled={secretsLoading}
+              onChange={(e) => setApiSecretSecretId(e.target.value)}
+              style={selectStyle}
+            >
+              {secretOptions}
+            </select>
+          </FormField>
+
+          <FormField label="Default room">
+            <input
+              value={room}
+              onChange={(e) => setRoom(e.target.value)}
+              style={inputStyle}
+            />
+          </FormField>
+
+          <div>
+            <button
+              onClick={saveLiveKitConfig}
+              disabled={!liveKitUrl || !apiKeySecretId || !apiSecretSecretId}
+              style={btnPrimary(!liveKitUrl || !apiKeySecretId || !apiSecretSecretId)}
+            >
+              Save LiveKit settings
+            </button>
+          </div>
+
+          {message && <InlineMessage text={message} ok={message.endsWith("saved.")} />}
+        </div>
+      </Card>
+
+      {/* Boardroom worker card */}
+      <Card>
+        <div style={{ fontWeight: 600, fontSize: 14, color: C.textPrimary, marginBottom: 12 }}>Boardroom worker</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
           {workerLoading ? (
             <Spinner size="sm" />
           ) : workerRunning === null ? (
-            <StatusBadge variant="neutral">Unknown</StatusBadge>
+            <StatusBadge status="pending" label="Unknown" />
           ) : workerRunning ? (
-            <StatusBadge variant="success">Running</StatusBadge>
+            <StatusBadge status="ok" label="Running" />
           ) : (
-            <StatusBadge variant="error">Stopped</StatusBadge>
+            <StatusBadge status="error" label="Stopped" />
           )}
-          <button
-            onClick={onRefreshWorker}
-            style={{
-              background: "none",
-              border: "1px solid #e2e8f0",
-              borderRadius: 6,
-              padding: "3px 10px",
-              fontSize: 12,
-              cursor: "pointer",
-              color: "#64748b",
-            }}
-          >
+          <button onClick={onRefreshWorker} style={btnGhost}>
             Refresh
           </button>
         </div>
-        <p style={{ fontSize: 12, color: "#94a3b8" }}>
+        <p style={{ fontSize: 12, color: C.textFaint, margin: 0 }}>
           The boardroom worker runs <code>boardroom.py</code> which dispatches LiveKit agents into the boardroom room.
           Start it with <code>scripts/boardroom-worker</code>.
         </p>
-      </div>
+      </Card>
     </div>
   );
 }
+
+// ─── Main page component ──────────────────────────────────────────────────────
 
 export function PapervoicePage({ context }: PluginCompanySettingsPageProps) {
   const companyId = context.companyId ?? "";
@@ -1097,12 +1316,12 @@ export function PapervoicePage({ context }: PluginCompanySettingsPageProps) {
 
   const { running: workerRunning, loading: workerLoading, refresh: refreshWorker } = useWorkerStatus(companyId);
 
-  const tabs = [
-    { id: "agents" as const, label: "Agents" },
-    { id: "rooms" as const, label: "Rooms" },
-    { id: "join" as const, label: "Join Link" },
-    { id: "prompts" as const, label: "Prompts" },
-    { id: "settings" as const, label: "Settings" },
+  const tabs: Array<{ id: typeof activeTab; label: string }> = [
+    { id: "agents", label: "Agents" },
+    { id: "rooms", label: "Rooms" },
+    { id: "join", label: "Join Link" },
+    { id: "prompts", label: "Prompts" },
+    { id: "settings", label: "Settings" },
   ];
 
   return (
@@ -1110,26 +1329,26 @@ export function PapervoicePage({ context }: PluginCompanySettingsPageProps) {
       style={{
         maxWidth: 800,
         margin: "0 auto",
-        padding: "24px 20px",
-        fontFamily: "system-ui, sans-serif",
-        color: "#1e293b",
+        padding: "28px 24px",
+        fontFamily: "system-ui, -apple-system, sans-serif",
+        color: C.textSecondary,
       }}
     >
-      <div style={{ marginBottom: 20 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>Papervoice</h1>
-        <p style={{ fontSize: 14, color: "#64748b" }}>
+      {/* Page header */}
+      <div style={{ marginBottom: 24 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, color: C.textPrimary, margin: "0 0 6px" }}>Papervoice</h1>
+        <p style={{ fontSize: 14, color: C.textMuted, margin: 0 }}>
           Voice AI agents for live standups — manage personas, generate join links, and monitor the boardroom worker.
         </p>
       </div>
 
-      {/* Tab nav */}
+      {/* Tab navigation */}
       <div
         style={{
           display: "flex",
-          gap: 4,
-          marginBottom: 20,
-          borderBottom: "1px solid #e2e8f0",
-          paddingBottom: 0,
+          gap: 0,
+          marginBottom: 24,
+          borderBottom: `1px solid ${C.border}`,
         }}
       >
         {tabs.map((tab) => (
@@ -1139,14 +1358,14 @@ export function PapervoicePage({ context }: PluginCompanySettingsPageProps) {
             style={{
               background: "none",
               border: "none",
-              borderBottom: activeTab === tab.id ? "2px solid #2563eb" : "2px solid transparent",
-              padding: "8px 14px",
+              borderBottom: activeTab === tab.id ? `2px solid ${C.blue}` : "2px solid transparent",
+              padding: "8px 16px",
               fontSize: 14,
               fontWeight: activeTab === tab.id ? 600 : 400,
-              color: activeTab === tab.id ? "#2563eb" : "#64748b",
+              color: activeTab === tab.id ? C.blue : C.textMuted,
               cursor: "pointer",
               marginBottom: -1,
-              transition: "color 0.15s",
+              transition: "color 0.12s",
             }}
           >
             {tab.label}
@@ -1154,7 +1373,6 @@ export function PapervoicePage({ context }: PluginCompanySettingsPageProps) {
         ))}
       </div>
 
-      {/* Agents tab */}
       {activeTab === "agents" && (
         <AgentsSection
           agents={agents ?? []}
@@ -1167,13 +1385,10 @@ export function PapervoicePage({ context }: PluginCompanySettingsPageProps) {
 
       {activeTab === "rooms" && <CustomRoomSection companyId={companyId} agents={agents ?? []} />}
 
-      {/* Join Link tab */}
       {activeTab === "join" && <JoinLinkSection companyId={companyId} />}
 
-      {/* Prompts tab */}
       {activeTab === "prompts" && <PromptsSection companyId={companyId} />}
 
-      {/* Settings tab */}
       {activeTab === "settings" && (
         <SettingsSection
           companyId={companyId}

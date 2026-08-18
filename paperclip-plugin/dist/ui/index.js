@@ -6,7 +6,145 @@ import {
   StatusBadge,
   Spinner
 } from "@paperclipai/plugin-sdk/ui";
-import { jsx, jsxs } from "react/jsx-runtime";
+import { Fragment, jsx, jsxs } from "react/jsx-runtime";
+var C = {
+  bg: "#fff",
+  bgMuted: "#f8fafc",
+  bgSubtle: "#f1f5f9",
+  border: "#e2e8f0",
+  borderFocus: "#93c5fd",
+  textPrimary: "#0f172a",
+  textSecondary: "#1e293b",
+  textMuted: "#64748b",
+  textFaint: "#94a3b8",
+  textLabel: "#475569",
+  blue: "#2563eb",
+  blueHover: "#1d4ed8",
+  red: "#dc2626",
+  green: "#166534",
+  greenBg: "#dcfce7",
+  amber: "#b45309",
+  purple: "#7c3aed"
+};
+var inputStyle = {
+  border: `1px solid ${C.border}`,
+  borderRadius: 6,
+  padding: "7px 10px",
+  fontSize: 13,
+  background: C.bgMuted,
+  color: C.textPrimary,
+  outline: "none",
+  width: "100%",
+  boxSizing: "border-box"
+};
+var selectStyle = {
+  ...inputStyle,
+  cursor: "pointer"
+};
+var btnPrimary = (disabled = false) => ({
+  background: disabled ? "#93c5fd" : C.blue,
+  border: "none",
+  borderRadius: 6,
+  padding: "7px 16px",
+  fontSize: 13,
+  fontWeight: 600,
+  color: "#fff",
+  cursor: disabled ? "not-allowed" : "pointer",
+  whiteSpace: "nowrap"
+});
+var btnSecondary = {
+  background: C.bgSubtle,
+  border: `1px solid ${C.border}`,
+  borderRadius: 6,
+  padding: "7px 14px",
+  fontSize: 12,
+  fontWeight: 500,
+  color: "#334155",
+  cursor: "pointer",
+  whiteSpace: "nowrap"
+};
+var btnGhost = {
+  background: "none",
+  border: `1px solid ${C.border}`,
+  borderRadius: 6,
+  padding: "7px 14px",
+  fontSize: 12,
+  color: C.textMuted,
+  cursor: "pointer"
+};
+var btnDestructive = {
+  background: "#fef2f2",
+  border: `1px solid #fecaca`,
+  borderRadius: 6,
+  padding: "7px 14px",
+  fontSize: 12,
+  fontWeight: 500,
+  color: C.red,
+  cursor: "pointer"
+};
+function Card({ children, style }) {
+  return /* @__PURE__ */ jsx(
+    "div",
+    {
+      style: {
+        background: C.bg,
+        border: `1px solid ${C.border}`,
+        borderRadius: 8,
+        padding: 16,
+        ...style
+      },
+      children
+    }
+  );
+}
+function SectionHeader({
+  title,
+  description,
+  action
+}) {
+  return /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 12 }, children: [
+    /* @__PURE__ */ jsxs("div", { children: [
+      /* @__PURE__ */ jsx("h2", { style: { fontSize: 16, fontWeight: 600, color: C.textPrimary, margin: 0 }, children: title }),
+      description && /* @__PURE__ */ jsx("p", { style: { fontSize: 13, color: C.textMuted, margin: "4px 0 0" }, children: description })
+    ] }),
+    action && /* @__PURE__ */ jsx("div", { style: { flexShrink: 0 }, children: action })
+  ] });
+}
+function FormField({
+  label,
+  hint,
+  children
+}) {
+  return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 4 }, children: [
+    /* @__PURE__ */ jsx("label", { style: { fontSize: 12, fontWeight: 600, color: C.textLabel }, children: label }),
+    hint && /* @__PURE__ */ jsx("p", { style: { fontSize: 11, color: C.textFaint, margin: 0 }, children: hint }),
+    children
+  ] });
+}
+function InlineMessage({ text, ok }) {
+  return /* @__PURE__ */ jsx("div", { style: { fontSize: 12, color: ok ? C.green : C.red, marginTop: 4 }, children: text });
+}
+function CodeBox({ children }) {
+  return /* @__PURE__ */ jsx(
+    "div",
+    {
+      style: {
+        background: C.bgSubtle,
+        border: `1px solid ${C.border}`,
+        borderRadius: 6,
+        padding: "8px 10px",
+        fontFamily: "monospace",
+        fontSize: 12,
+        wordBreak: "break-all",
+        color: C.textSecondary,
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 8
+      },
+      children
+    }
+  );
+}
 function LinkButton({ companyId, room, label }) {
   const mintJoinLink = usePluginAction("mint-join-link");
   const [busy, setBusy] = useState(false);
@@ -23,29 +161,9 @@ function LinkButton({ companyId, room, label }) {
       setBusy(false);
     }
   }
-  return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }, children: [
-    /* @__PURE__ */ jsx(
-      "button",
-      {
-        onClick: openLink,
-        disabled: busy,
-        title: `Open ${room}`,
-        style: {
-          background: "#2563eb",
-          border: "none",
-          borderRadius: 6,
-          padding: "5px 10px",
-          color: "#fff",
-          fontSize: 12,
-          fontWeight: 600,
-          cursor: busy ? "not-allowed" : "pointer",
-          opacity: busy ? 0.6 : 1,
-          whiteSpace: "nowrap"
-        },
-        children: busy ? "Opening\u2026" : label
-      }
-    ),
-    error && /* @__PURE__ */ jsx("span", { style: { color: "#dc2626", fontSize: 10, maxWidth: 180 }, children: error })
+  return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }, children: [
+    /* @__PURE__ */ jsx("button", { onClick: openLink, disabled: busy, title: `Open ${room}`, style: btnPrimary(busy), children: busy ? "Opening\u2026" : label }),
+    error && /* @__PURE__ */ jsx("span", { style: { color: C.red, fontSize: 11, maxWidth: 180, textAlign: "right" }, children: error })
   ] });
 }
 function PapervoiceLinksWidget({ context }) {
@@ -55,44 +173,62 @@ function PapervoiceLinksWidget({ context }) {
   return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 10 }, children: [
     /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }, children: [
       /* @__PURE__ */ jsxs("div", { children: [
-        /* @__PURE__ */ jsx("div", { style: { fontWeight: 600, color: "#0f172a" }, children: "Boardroom" }),
-        /* @__PURE__ */ jsx("code", { style: { fontSize: 11, color: "#64748b" }, children: "papervoice-boardroom" })
+        /* @__PURE__ */ jsx("div", { style: { fontWeight: 600, color: C.textPrimary }, children: "Boardroom" }),
+        /* @__PURE__ */ jsx("code", { style: { fontSize: 11, color: C.textMuted }, children: "papervoice-boardroom" })
       ] }),
       /* @__PURE__ */ jsx(LinkButton, { companyId, room: "papervoice-boardroom", label: "Join room" })
     ] }),
     loading && /* @__PURE__ */ jsx(Spinner, {}),
-    error && /* @__PURE__ */ jsxs("div", { style: { color: "#dc2626", fontSize: 12 }, children: [
+    error && /* @__PURE__ */ jsxs("div", { style: { color: C.red, fontSize: 12 }, children: [
       "Failed to load agents: ",
       error.message
     ] }),
-    linkedAgents.map((agent) => /* @__PURE__ */ jsxs("div", { style: {
-      borderTop: "1px solid #e2e8f0",
-      paddingTop: 8,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      gap: 12
-    }, children: [
-      /* @__PURE__ */ jsxs("div", { style: { minWidth: 0 }, children: [
-        /* @__PURE__ */ jsx("div", { style: { fontSize: 13, fontWeight: 500, color: "#1e293b" }, children: agent.displayName || agent.name }),
-        /* @__PURE__ */ jsxs("code", { style: { display: "block", overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: "#94a3b8" }, children: [
-          "papervoice-direct-",
-          agent.identity
-        ] })
-      ] }),
-      /* @__PURE__ */ jsx(LinkButton, { companyId, room: `papervoice-direct-${agent.identity}`, label: "Call agent" })
-    ] }, agent.id)),
-    !loading && !error && linkedAgents.length === 0 && /* @__PURE__ */ jsx("div", { style: { color: "#94a3b8", fontSize: 12 }, children: "No agents have a LiveKit identity configured." })
+    linkedAgents.map((agent) => /* @__PURE__ */ jsxs(
+      "div",
+      {
+        style: {
+          borderTop: `1px solid ${C.border}`,
+          paddingTop: 8,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12
+        },
+        children: [
+          /* @__PURE__ */ jsxs("div", { style: { minWidth: 0 }, children: [
+            /* @__PURE__ */ jsx("div", { style: { fontSize: 13, fontWeight: 500, color: C.textSecondary }, children: agent.displayName || agent.name }),
+            /* @__PURE__ */ jsxs("code", { style: { display: "block", overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: C.textFaint }, children: [
+              "papervoice-direct-",
+              agent.identity
+            ] })
+          ] }),
+          /* @__PURE__ */ jsx(LinkButton, { companyId, room: `papervoice-direct-${agent.identity}`, label: "Call agent" })
+        ]
+      },
+      agent.id
+    )),
+    !loading && !error && linkedAgents.length === 0 && /* @__PURE__ */ jsx("div", { style: { color: C.textFaint, fontSize: 12 }, children: "No agents have a LiveKit identity configured." })
   ] });
 }
 function CustomRoomSection({ companyId, agents }) {
   const { data: loaded, loading, error } = usePluginData("room-presets", { companyId });
   const validate = usePluginAction("validate-room-preset");
-  const [presets, setPresets] = useState([]), [name, setName] = useState(""), [selected, setSelected] = useState([]), [editing, setEditing] = useState(null), [message, setMessage] = useState(null);
+  const [presets, setPresets] = useState([]);
+  const [name, setName] = useState("");
+  const [selected, setSelected] = useState([]);
+  const [editing, setEditing] = useState(null);
+  const [message, setMessage] = useState(null);
   useEffect(() => setPresets(loaded ?? []), [loaded]);
   const byId = new Map(agents.map((a) => [a.id, a]));
   async function write(next) {
-    const response = await fetch("/api/plugins/papervoice/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ companyId, configJson: await currentConfig(companyId, { roomPresetsVersion: 1, roomPresets: next }) }) });
+    const response = await fetch("/api/plugins/papervoice/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        companyId,
+        configJson: await currentConfig(companyId, { roomPresetsVersion: 1, roomPresets: next })
+      })
+    });
     if (!response.ok) throw new Error("Save failed");
     setPresets(next);
   }
@@ -112,60 +248,106 @@ function CustomRoomSection({ companyId, agents }) {
     if (!window.confirm("Delete this room preset?")) return;
     await write(presets.filter((p) => p.id !== id));
   }
-  return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 12 }, children: [
-    /* @__PURE__ */ jsxs("div", { children: [
-      /* @__PURE__ */ jsx("h2", { style: { fontSize: 16, fontWeight: 600 }, children: "Rooms" }),
-      /* @__PURE__ */ jsx("p", { style: { fontSize: 13, color: "#64748b" }, children: "Saved presets persist across reloads; calls remain ephemeral." })
-    ] }),
-    /* @__PURE__ */ jsxs("div", { style: { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 16 }, children: [
-      /* @__PURE__ */ jsx("b", { children: "Boardroom" }),
-      /* @__PURE__ */ jsx("span", { style: { marginLeft: 12 }, children: /* @__PURE__ */ jsx(LinkButton, { companyId, room: "papervoice-boardroom", label: "Join room" }) })
-    ] }),
+  function startEdit(p) {
+    setEditing(p.id);
+    setName(p.name);
+    setSelected(p.agentIds);
+  }
+  function cancelEdit() {
+    setEditing(null);
+    setName("");
+    setSelected([]);
+  }
+  const enabledAgents = agents.filter((a) => a.enabled);
+  return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 16 }, children: [
+    /* @__PURE__ */ jsx(
+      SectionHeader,
+      {
+        title: "Rooms",
+        description: "Saved presets persist across reloads; calls remain ephemeral."
+      }
+    ),
+    /* @__PURE__ */ jsx(Card, { children: /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }, children: [
+      /* @__PURE__ */ jsxs("div", { children: [
+        /* @__PURE__ */ jsx("div", { style: { fontWeight: 600, fontSize: 14, color: C.textPrimary }, children: "Boardroom" }),
+        /* @__PURE__ */ jsx("code", { style: { fontSize: 11, color: C.textMuted }, children: "papervoice-boardroom" })
+      ] }),
+      /* @__PURE__ */ jsx(LinkButton, { companyId, room: "papervoice-boardroom", label: "Join room" })
+    ] }) }),
     loading && /* @__PURE__ */ jsx(Spinner, {}),
-    error && /* @__PURE__ */ jsxs("div", { style: { color: "#dc2626" }, children: [
+    error && /* @__PURE__ */ jsxs("div", { style: { color: C.red, fontSize: 13 }, children: [
       "Failed to load presets: ",
       error.message
     ] }),
     presets.map((p) => {
-      const stale = p.agentIds.filter((id) => !byId.get(id)?.enabled), valid = p.agentIds.filter((id) => byId.get(id)?.enabled);
-      return /* @__PURE__ */ jsxs("div", { style: { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 14, display: "flex", justifyContent: "space-between", gap: 12 }, children: [
+      const stale = p.agentIds.filter((id) => !byId.get(id)?.enabled);
+      const valid = p.agentIds.filter((id) => byId.get(id)?.enabled);
+      return /* @__PURE__ */ jsx(Card, { children: /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }, children: [
         /* @__PURE__ */ jsxs("div", { children: [
-          /* @__PURE__ */ jsx("b", { children: p.name }),
-          /* @__PURE__ */ jsx("div", { style: { fontSize: 12, color: "#64748b" }, children: p.agentIds.map((id) => byId.get(id)?.displayName || id).join(", ") }),
-          stale.length > 0 && /* @__PURE__ */ jsxs("div", { style: { color: "#b45309", fontSize: 12 }, children: [
+          /* @__PURE__ */ jsx("div", { style: { fontWeight: 600, fontSize: 14, color: C.textPrimary }, children: p.name }),
+          /* @__PURE__ */ jsx("div", { style: { fontSize: 12, color: C.textMuted, marginTop: 2 }, children: p.agentIds.map((id) => byId.get(id)?.displayName || id).join(", ") }),
+          stale.length > 0 && /* @__PURE__ */ jsxs("div", { style: { color: C.amber, fontSize: 12, marginTop: 4 }, children: [
             "Needs repair: ",
             stale.length,
-            " stale selection",
+            " stale agent",
             stale.length === 1 ? "" : "s"
           ] })
         ] }),
-        /* @__PURE__ */ jsxs("div", { style: { display: "flex", gap: 6 }, children: [
-          /* @__PURE__ */ jsx(LinkButton, { companyId, room: `papervoice-preset-${p.id}`, label: valid.length ? "Join room" : "No valid agents" }),
-          /* @__PURE__ */ jsx("button", { disabled: !valid.length, onClick: () => {
-            setEditing(p.id);
-            setName(p.name);
-            setSelected(p.agentIds);
-          }, children: "Edit" }),
-          /* @__PURE__ */ jsx("button", { onClick: () => remove(p.id), children: "Delete" })
+        /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }, children: [
+          /* @__PURE__ */ jsx(
+            LinkButton,
+            {
+              companyId,
+              room: `papervoice-preset-${p.id}`,
+              label: valid.length ? "Join room" : "No valid agents"
+            }
+          ),
+          /* @__PURE__ */ jsx("button", { style: btnSecondary, onClick: () => startEdit(p), children: "Edit" }),
+          /* @__PURE__ */ jsx("button", { style: btnDestructive, onClick: () => remove(p.id), children: "Delete" })
         ] })
-      ] }, p.id);
+      ] }) }, p.id);
     }),
-    /* @__PURE__ */ jsxs("div", { style: { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 16, display: "flex", flexDirection: "column", gap: 10 }, children: [
-      /* @__PURE__ */ jsx("b", { children: editing ? "Edit preset" : "Create preset" }),
-      /* @__PURE__ */ jsx("input", { value: name, onChange: (e) => setName(e.target.value), placeholder: "Marketing", maxLength: 80 }),
-      agents.filter((a) => a.enabled).map((a) => /* @__PURE__ */ jsxs("label", { children: [
-        /* @__PURE__ */ jsx("input", { type: "checkbox", checked: selected.includes(a.id), onChange: () => setSelected((x) => x.includes(a.id) ? x.filter((i) => i !== a.id) : [...x, a.id]) }),
-        " ",
+    /* @__PURE__ */ jsx(Card, { children: /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 12 }, children: [
+      /* @__PURE__ */ jsx("div", { style: { fontWeight: 600, fontSize: 14, color: C.textPrimary }, children: editing ? "Edit preset" : "Create preset" }),
+      /* @__PURE__ */ jsx(FormField, { label: "Room name", children: /* @__PURE__ */ jsx(
+        "input",
+        {
+          value: name,
+          onChange: (e) => setName(e.target.value),
+          placeholder: "Marketing standup",
+          maxLength: 80,
+          style: inputStyle
+        }
+      ) }),
+      enabledAgents.length > 0 && /* @__PURE__ */ jsx(FormField, { label: "Agents", children: /* @__PURE__ */ jsx("div", { style: { display: "flex", flexDirection: "column", gap: 6 }, children: enabledAgents.map((a) => /* @__PURE__ */ jsxs("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }, children: [
+        /* @__PURE__ */ jsx(
+          "input",
+          {
+            type: "checkbox",
+            checked: selected.includes(a.id),
+            onChange: () => setSelected(
+              (x) => x.includes(a.id) ? x.filter((i) => i !== a.id) : [...x, a.id]
+            ),
+            style: { accentColor: C.blue, width: 14, height: 14 }
+          }
+        ),
         a.displayName || a.name
-      ] }, a.id)),
-      /* @__PURE__ */ jsx("button", { onClick: save, disabled: !name.trim() || !selected.length, children: editing ? "Save changes" : "Create room" }),
-      editing && /* @__PURE__ */ jsx("button", { onClick: () => {
-        setEditing(null);
-        setName("");
-        setSelected([]);
-      }, children: "Cancel" }),
-      message && /* @__PURE__ */ jsx("div", { style: { fontSize: 12 }, children: message })
-    ] })
+      ] }, a.id)) }) }),
+      enabledAgents.length === 0 && /* @__PURE__ */ jsx("div", { style: { fontSize: 12, color: C.textFaint }, children: "No enabled agents. Enable agents on the Agents tab first." }),
+      /* @__PURE__ */ jsxs("div", { style: { display: "flex", gap: 8 }, children: [
+        /* @__PURE__ */ jsx(
+          "button",
+          {
+            onClick: save,
+            disabled: !name.trim() || !selected.length,
+            style: btnPrimary(!name.trim() || !selected.length),
+            children: editing ? "Save changes" : "Create room"
+          }
+        ),
+        editing && /* @__PURE__ */ jsx("button", { style: btnGhost, onClick: cancelEdit, children: "Cancel" })
+      ] }),
+      message && /* @__PURE__ */ jsx(InlineMessage, { text: message, ok: message === "Preset saved." })
+    ] }) })
   ] });
 }
 async function currentConfig(companyId, changes) {
@@ -297,301 +479,166 @@ function AgentRow({
       });
     }
   }
-  return /* @__PURE__ */ jsxs(
-    "div",
-    {
-      style: {
-        background: "#fff",
-        border: "1px solid #e2e8f0",
-        borderRadius: 8,
-        padding: "14px 16px",
-        display: "flex",
-        flexDirection: "column",
-        gap: 10
-      },
-      children: [
-        /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 12, justifyContent: "space-between" }, children: [
-          /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 10 }, children: [
-            /* @__PURE__ */ jsxs(
-              "label",
-              {
-                title: "Set as moderator",
-                style: { display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none" },
-                children: [
-                  /* @__PURE__ */ jsx(
-                    "input",
-                    {
-                      type: "radio",
-                      name: "moderator-selection",
-                      checked: isModerator,
-                      onChange: onSetModerator,
-                      style: { accentColor: "#7c3aed", width: 15, height: 15, cursor: "pointer" }
-                    }
-                  ),
-                  /* @__PURE__ */ jsx("span", { style: { fontSize: 11, color: isModerator ? "#7c3aed" : "#94a3b8", fontWeight: isModerator ? 600 : 400 }, children: "MOD" })
-                ]
-              }
-            ),
-            /* @__PURE__ */ jsxs("div", { children: [
-              /* @__PURE__ */ jsx("div", { style: { fontWeight: 600, fontSize: 14 }, children: agent.displayName || agent.name }),
-              /* @__PURE__ */ jsx("div", { style: { fontSize: 12, color: "#64748b" }, children: agent.role })
-            ] })
-          ] }),
-          /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 8 }, children: [
-            isModerator && /* @__PURE__ */ jsx(StatusBadge, { variant: "info", children: "Moderator" }),
-            /* @__PURE__ */ jsx(StatusBadge, { variant: agent.enabled ? "success" : "neutral", children: agent.enabled ? "Enabled" : "Disabled" }),
-            /* @__PURE__ */ jsxs(
-              "label",
-              {
-                style: {
-                  position: "relative",
-                  width: 40,
-                  height: 22,
-                  cursor: saving ? "not-allowed" : "pointer",
-                  display: "inline-block"
-                },
-                children: [
-                  /* @__PURE__ */ jsx(
-                    "input",
-                    {
-                      type: "checkbox",
-                      checked: agent.enabled,
-                      onChange: toggleEnabled,
-                      disabled: saving,
-                      style: { opacity: 0, width: 0, height: 0 }
-                    }
-                  ),
-                  /* @__PURE__ */ jsx(
-                    "span",
-                    {
-                      style: {
-                        position: "absolute",
-                        inset: 0,
-                        background: agent.enabled ? "#2563eb" : "#cbd5e1",
-                        borderRadius: 9999,
-                        transition: "background 0.2s"
-                      }
-                    }
-                  ),
-                  /* @__PURE__ */ jsx(
-                    "span",
-                    {
-                      style: {
-                        position: "absolute",
-                        top: 3,
-                        left: agent.enabled ? 21 : 3,
-                        width: 16,
-                        height: 16,
-                        background: "#fff",
-                        borderRadius: "50%",
-                        boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
-                        transition: "left 0.2s"
-                      }
-                    }
-                  )
-                ]
-              }
-            ),
-            /* @__PURE__ */ jsx(
-              "button",
-              {
-                onClick: () => setExpanded((v) => !v),
-                style: {
-                  background: "#f1f5f9",
-                  border: "1px solid #e2e8f0",
-                  borderRadius: 6,
-                  padding: "4px 10px",
-                  fontSize: 12,
-                  cursor: "pointer",
-                  fontWeight: 500,
-                  color: "#334155"
-                },
-                children: expanded ? "Close" : "Configure"
-              }
-            )
-          ] })
-        ] }),
-        expanded && /* @__PURE__ */ jsxs(
-          "div",
+  return /* @__PURE__ */ jsxs(Card, { children: [
+    /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 12, justifyContent: "space-between" }, children: [
+      /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 10 }, children: [
+        /* @__PURE__ */ jsxs(
+          "label",
           {
-            style: {
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 10,
-              borderTop: "1px solid #f1f5f9",
-              paddingTop: 10
-            },
+            title: "Set as moderator",
+            style: { display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none" },
             children: [
-              [
-                { label: "Voice ID", key: "voiceId", placeholder: "ElevenLabs voice ID" },
-                { label: "Display Name", key: "displayName", placeholder: "Name shown on calls" },
-                { label: "LiveKit Identity", key: "identity", placeholder: "papervoice-ceo" },
-                { label: "Order (1\u201399)", key: "order", placeholder: "1" }
-              ].map(({ label, key, placeholder }) => /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 4 }, children: [
-                /* @__PURE__ */ jsx("label", { style: { fontSize: 12, fontWeight: 500, color: "#475569" }, children: label }),
-                /* @__PURE__ */ jsx(
-                  "input",
-                  {
-                    type: "text",
-                    value: fields[key],
-                    placeholder,
-                    onChange: (e) => setFields((f) => ({ ...f, [key]: e.target.value })),
-                    style: {
-                      border: "1px solid #e2e8f0",
-                      borderRadius: 6,
-                      padding: "6px 10px",
-                      fontSize: 13,
-                      outline: "none",
-                      background: "#f8fafc",
-                      color: "#0f172a"
-                    }
-                  }
-                )
-              ] }, key)),
-              /* @__PURE__ */ jsxs(
-                "div",
+              /* @__PURE__ */ jsx(
+                "input",
                 {
-                  style: {
-                    gridColumn: "1 / -1",
-                    display: "flex",
-                    justifyContent: "flex-end",
-                    gap: 8
-                  },
-                  children: [
-                    /* @__PURE__ */ jsx(
-                      "button",
-                      {
-                        onClick: () => setExpanded(false),
-                        style: {
-                          background: "#f1f5f9",
-                          border: "1px solid #e2e8f0",
-                          borderRadius: 6,
-                          padding: "6px 14px",
-                          fontSize: 12,
-                          cursor: "pointer",
-                          color: "#334155",
-                          fontWeight: 500
-                        },
-                        children: "Cancel"
-                      }
-                    ),
-                    /* @__PURE__ */ jsx(
-                      "button",
-                      {
-                        onClick: saveConfig,
-                        disabled: saving,
-                        style: {
-                          background: "#2563eb",
-                          border: "none",
-                          borderRadius: 6,
-                          padding: "6px 14px",
-                          fontSize: 12,
-                          cursor: saving ? "not-allowed" : "pointer",
-                          color: "#fff",
-                          fontWeight: 600,
-                          opacity: saving ? 0.6 : 1
-                        },
-                        children: saving ? "Saving\u2026" : "Save"
-                      }
-                    )
-                  ]
+                  type: "radio",
+                  name: "moderator-selection",
+                  checked: isModerator,
+                  onChange: onSetModerator,
+                  style: { accentColor: C.purple, width: 15, height: 15, cursor: "pointer" }
                 }
               ),
-              /* @__PURE__ */ jsxs(
-                "div",
+              /* @__PURE__ */ jsx("span", { style: { fontSize: 11, color: isModerator ? C.purple : C.textFaint, fontWeight: isModerator ? 600 : 400 }, children: "MOD" })
+            ]
+          }
+        ),
+        /* @__PURE__ */ jsxs("div", { children: [
+          /* @__PURE__ */ jsx("div", { style: { fontWeight: 600, fontSize: 14, color: C.textPrimary }, children: agent.displayName || agent.name }),
+          /* @__PURE__ */ jsx("div", { style: { fontSize: 12, color: C.textMuted }, children: agent.role })
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 8 }, children: [
+        isModerator && /* @__PURE__ */ jsx(StatusBadge, { status: "info", label: "Moderator" }),
+        /* @__PURE__ */ jsx(StatusBadge, { status: agent.enabled ? "ok" : "pending", label: agent.enabled ? "Enabled" : "Disabled" }),
+        /* @__PURE__ */ jsxs(
+          "label",
+          {
+            style: {
+              position: "relative",
+              width: 40,
+              height: 22,
+              cursor: saving ? "not-allowed" : "pointer",
+              display: "inline-block"
+            },
+            children: [
+              /* @__PURE__ */ jsx(
+                "input",
+                {
+                  type: "checkbox",
+                  checked: agent.enabled,
+                  onChange: toggleEnabled,
+                  disabled: saving,
+                  style: { opacity: 0, width: 0, height: 0 }
+                }
+              ),
+              /* @__PURE__ */ jsx(
+                "span",
                 {
                   style: {
-                    gridColumn: "1 / -1",
-                    borderTop: "1px solid #f1f5f9",
-                    paddingTop: 10,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 8
-                  },
-                  children: [
-                    /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }, children: [
-                      /* @__PURE__ */ jsxs("div", { children: [
-                        /* @__PURE__ */ jsx("div", { style: { fontSize: 12, fontWeight: 600, color: "#475569" }, children: "Direct call link" }),
-                        /* @__PURE__ */ jsxs("div", { style: { fontSize: 11, color: "#94a3b8" }, children: [
-                          "1:1 voice call with this agent (room ",
-                          /* @__PURE__ */ jsxs("code", { children: [
-                            "papervoice-direct-",
-                            fields.identity || "\u2026"
-                          ] }),
-                          ")."
-                        ] })
-                      ] }),
-                      /* @__PURE__ */ jsx(
-                        "button",
-                        {
-                          onClick: generateDirectLink,
-                          disabled: directBusy,
-                          style: {
-                            background: "#f1f5f9",
-                            border: "1px solid #e2e8f0",
-                            borderRadius: 6,
-                            padding: "6px 12px",
-                            fontSize: 12,
-                            cursor: directBusy ? "not-allowed" : "pointer",
-                            fontWeight: 600,
-                            color: "#334155",
-                            whiteSpace: "nowrap",
-                            opacity: directBusy ? 0.6 : 1
-                          },
-                          children: directBusy ? "Generating\u2026" : "Direct link"
-                        }
-                      )
-                    ] }),
-                    directError && /* @__PURE__ */ jsx("div", { style: { color: "#dc2626", fontSize: 12 }, children: directError }),
-                    directLink && /* @__PURE__ */ jsxs(
-                      "div",
-                      {
-                        style: {
-                          background: "#f1f5f9",
-                          border: "1px solid #e2e8f0",
-                          borderRadius: 6,
-                          padding: "8px 10px",
-                          fontFamily: "monospace",
-                          fontSize: 12,
-                          wordBreak: "break-all",
-                          color: "#1e293b",
-                          display: "flex",
-                          alignItems: "flex-start",
-                          gap: 8
-                        },
-                        children: [
-                          /* @__PURE__ */ jsx("span", { style: { flex: 1 }, children: directLink }),
-                          /* @__PURE__ */ jsx(
-                            "button",
-                            {
-                              onClick: copyDirectLink,
-                              style: {
-                                background: directCopied ? "#dcfce7" : "#e2e8f0",
-                                border: "none",
-                                borderRadius: 4,
-                                padding: "4px 10px",
-                                fontSize: 12,
-                                cursor: "pointer",
-                                color: directCopied ? "#166534" : "#334155",
-                                fontWeight: 600,
-                                whiteSpace: "nowrap",
-                                flexShrink: 0
-                              },
-                              children: directCopied ? "Copied!" : "Copy"
-                            }
-                          )
-                        ]
-                      }
-                    )
-                  ]
+                    position: "absolute",
+                    inset: 0,
+                    background: agent.enabled ? C.blue : "#cbd5e1",
+                    borderRadius: 9999,
+                    transition: "background 0.2s"
+                  }
+                }
+              ),
+              /* @__PURE__ */ jsx(
+                "span",
+                {
+                  style: {
+                    position: "absolute",
+                    top: 3,
+                    left: agent.enabled ? 21 : 3,
+                    width: 16,
+                    height: 16,
+                    background: "#fff",
+                    borderRadius: "50%",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                    transition: "left 0.2s"
+                  }
                 }
               )
             ]
           }
-        )
-      ]
-    }
-  );
+        ),
+        /* @__PURE__ */ jsx("button", { onClick: () => setExpanded((v) => !v), style: btnSecondary, children: expanded ? "Close" : "Configure" })
+      ] })
+    ] }),
+    expanded && /* @__PURE__ */ jsxs(
+      "div",
+      {
+        style: {
+          display: "flex",
+          flexDirection: "column",
+          gap: 12,
+          borderTop: `1px solid ${C.bgSubtle}`,
+          paddingTop: 14,
+          marginTop: 12
+        },
+        children: [
+          /* @__PURE__ */ jsx("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }, children: [
+            { label: "Voice ID", key: "voiceId", placeholder: "ElevenLabs voice ID" },
+            { label: "Display Name", key: "displayName", placeholder: "Name shown on calls" },
+            { label: "LiveKit Identity", key: "identity", placeholder: "papervoice-ceo" },
+            { label: "Order (1\u201399)", key: "order", placeholder: "1" }
+          ].map(({ label, key, placeholder }) => /* @__PURE__ */ jsx(FormField, { label, children: /* @__PURE__ */ jsx(
+            "input",
+            {
+              type: "text",
+              value: fields[key],
+              placeholder,
+              onChange: (e) => setFields((f) => ({ ...f, [key]: e.target.value })),
+              style: inputStyle
+            }
+          ) }, key)) }),
+          /* @__PURE__ */ jsxs("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8 }, children: [
+            /* @__PURE__ */ jsx("button", { onClick: () => setExpanded(false), style: btnGhost, children: "Cancel" }),
+            /* @__PURE__ */ jsx("button", { onClick: saveConfig, disabled: saving, style: btnPrimary(saving), children: saving ? "Saving\u2026" : "Save" })
+          ] }),
+          /* @__PURE__ */ jsxs("div", { style: { borderTop: `1px solid ${C.bgSubtle}`, paddingTop: 12, display: "flex", flexDirection: "column", gap: 8 }, children: [
+            /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }, children: [
+              /* @__PURE__ */ jsxs("div", { children: [
+                /* @__PURE__ */ jsx("div", { style: { fontSize: 12, fontWeight: 600, color: C.textLabel }, children: "Direct call link" }),
+                /* @__PURE__ */ jsxs("div", { style: { fontSize: 11, color: C.textFaint }, children: [
+                  "1:1 voice call (room ",
+                  /* @__PURE__ */ jsxs("code", { children: [
+                    "papervoice-direct-",
+                    fields.identity || "\u2026"
+                  ] }),
+                  ")"
+                ] })
+              ] }),
+              /* @__PURE__ */ jsx("button", { onClick: generateDirectLink, disabled: directBusy, style: btnSecondary, children: directBusy ? "Generating\u2026" : "Direct link" })
+            ] }),
+            directError && /* @__PURE__ */ jsx("div", { style: { color: C.red, fontSize: 12 }, children: directError }),
+            directLink && /* @__PURE__ */ jsxs(CodeBox, { children: [
+              /* @__PURE__ */ jsx("span", { style: { flex: 1 }, children: directLink }),
+              /* @__PURE__ */ jsx(
+                "button",
+                {
+                  onClick: copyDirectLink,
+                  style: {
+                    background: directCopied ? C.greenBg : C.border,
+                    border: "none",
+                    borderRadius: 4,
+                    padding: "4px 10px",
+                    fontSize: 12,
+                    cursor: "pointer",
+                    color: directCopied ? C.green : "#334155",
+                    fontWeight: 600,
+                    whiteSpace: "nowrap",
+                    flexShrink: 0
+                  },
+                  children: directCopied ? "Copied!" : "Copy"
+                }
+              )
+            ] })
+          ] })
+        ]
+      }
+    )
+  ] });
 }
 function AgentsSection({
   agents,
@@ -630,39 +677,25 @@ function AgentsSection({
     }
   }
   const sorted = [...agents].sort((a, b) => a.order - b.order);
-  return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 12 }, children: [
-    /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between" }, children: [
-      /* @__PURE__ */ jsx("h2", { style: { fontSize: 16, fontWeight: 600, color: "#0f172a" }, children: "Voice Agents" }),
-      /* @__PURE__ */ jsx(
-        "button",
-        {
-          onClick: onRefresh,
-          style: {
-            background: "#f1f5f9",
-            border: "1px solid #e2e8f0",
-            borderRadius: 6,
-            padding: "4px 12px",
-            fontSize: 12,
-            cursor: "pointer",
-            color: "#334155",
-            fontWeight: 500
-          },
-          children: "Refresh"
-        }
-      )
-    ] }),
-    /* @__PURE__ */ jsxs("p", { style: { fontSize: 12, color: "#64748b", margin: 0 }, children: [
-      "Use the ",
-      /* @__PURE__ */ jsx("strong", { children: "MOD" }),
-      " radio to designate one agent as moderator \u2014 they open the standup, keep it on time, and close it."
-    ] }),
-    agentsLoading && /* @__PURE__ */ jsx(Spinner, {}),
-    settingModerator && /* @__PURE__ */ jsx(Spinner, {}),
-    agentsError && /* @__PURE__ */ jsxs("div", { style: { color: "#dc2626", fontSize: 13 }, children: [
+  return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 16 }, children: [
+    /* @__PURE__ */ jsx(
+      SectionHeader,
+      {
+        title: "Voice Agents",
+        description: /* @__PURE__ */ jsxs(Fragment, { children: [
+          "Use the ",
+          /* @__PURE__ */ jsx("strong", { children: "MOD" }),
+          " radio to designate one agent as moderator \u2014 they open the standup, keep it on time, and close it."
+        ] }),
+        action: /* @__PURE__ */ jsx("button", { onClick: onRefresh, style: btnSecondary, children: "Refresh" })
+      }
+    ),
+    (agentsLoading || settingModerator) && /* @__PURE__ */ jsx(Spinner, {}),
+    agentsError && /* @__PURE__ */ jsxs("div", { style: { color: C.red, fontSize: 13 }, children: [
       "Failed to load agents: ",
       agentsError.message
     ] }),
-    agents.length === 0 && !agentsLoading && /* @__PURE__ */ jsxs("div", { style: { color: "#94a3b8", fontSize: 14, textAlign: "center", padding: 20 }, children: [
+    agents.length === 0 && !agentsLoading && /* @__PURE__ */ jsxs("div", { style: { color: C.textFaint, fontSize: 14, textAlign: "center", padding: 32 }, children: [
       "No agents found. Agents with ",
       /* @__PURE__ */ jsx("code", { children: "metadata.papervoice" }),
       " set will appear here."
@@ -712,110 +745,54 @@ function JoinLinkSection({ companyId }) {
       });
     }
   }
-  return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 12 }, children: [
-    /* @__PURE__ */ jsx("h2", { style: { fontSize: 16, fontWeight: 600, color: "#0f172a" }, children: "Join Link" }),
-    /* @__PURE__ */ jsxs(
-      "div",
+  return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 16 }, children: [
+    /* @__PURE__ */ jsx(
+      SectionHeader,
       {
-        style: {
-          background: "#fff",
-          border: "1px solid #e2e8f0",
-          borderRadius: 8,
-          padding: "16px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 12
-        },
-        children: [
-          /* @__PURE__ */ jsx("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 80px", gap: 10 }, children: [
-            { label: "Participant Name", key: "identity", placeholder: "human-guest" },
-            { label: "Room", key: "room", placeholder: "papervoice-boardroom" },
-            { label: "TTL (h)", key: "ttlHours", placeholder: "48" }
-          ].map(({ label, key, placeholder }) => /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 4 }, children: [
-            /* @__PURE__ */ jsx("label", { style: { fontSize: 12, fontWeight: 500, color: "#475569" }, children: label }),
-            /* @__PURE__ */ jsx(
-              "input",
-              {
-                type: "text",
-                value: form[key],
-                placeholder,
-                onChange: (e) => setForm((f) => ({ ...f, [key]: e.target.value })),
-                style: {
-                  border: "1px solid #e2e8f0",
-                  borderRadius: 6,
-                  padding: "6px 10px",
-                  fontSize: 13,
-                  background: "#f8fafc",
-                  color: "#0f172a",
-                  outline: "none"
-                }
-              }
-            )
-          ] }, key)) }),
-          /* @__PURE__ */ jsx(
-            "button",
-            {
-              onClick: generate,
-              disabled: busy,
-              style: {
-                background: "#2563eb",
-                color: "#fff",
-                border: "none",
-                borderRadius: 6,
-                padding: "8px 18px",
-                fontWeight: 600,
-                fontSize: 13,
-                cursor: busy ? "not-allowed" : "pointer",
-                opacity: busy ? 0.6 : 1,
-                alignSelf: "flex-start"
-              },
-              children: busy ? "Generating\u2026" : "Generate Link"
-            }
-          ),
-          error && /* @__PURE__ */ jsx("div", { style: { color: "#dc2626", fontSize: 13 }, children: error }),
-          link && /* @__PURE__ */ jsxs(
-            "div",
-            {
-              style: {
-                background: "#f1f5f9",
-                border: "1px solid #e2e8f0",
-                borderRadius: 6,
-                padding: "10px 12px",
-                fontFamily: "monospace",
-                fontSize: 12,
-                wordBreak: "break-all",
-                color: "#1e293b",
-                display: "flex",
-                alignItems: "flex-start",
-                gap: 8
-              },
-              children: [
-                /* @__PURE__ */ jsx("span", { style: { flex: 1 }, children: link }),
-                /* @__PURE__ */ jsx(
-                  "button",
-                  {
-                    onClick: copyLink,
-                    style: {
-                      background: copied ? "#dcfce7" : "#e2e8f0",
-                      border: "none",
-                      borderRadius: 4,
-                      padding: "4px 10px",
-                      fontSize: 12,
-                      cursor: "pointer",
-                      color: copied ? "#166534" : "#334155",
-                      fontWeight: 600,
-                      whiteSpace: "nowrap",
-                      flexShrink: 0
-                    },
-                    children: copied ? "Copied!" : "Copy"
-                  }
-                )
-              ]
-            }
-          )
-        ]
+        title: "Join Link",
+        description: "Generate a time-limited join link for any room."
       }
-    )
+    ),
+    /* @__PURE__ */ jsx(Card, { children: /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 14 }, children: [
+      /* @__PURE__ */ jsx("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 88px", gap: 10 }, children: [
+        { label: "Participant name", key: "identity", placeholder: "human-guest" },
+        { label: "Room", key: "room", placeholder: "papervoice-boardroom" },
+        { label: "TTL (hours)", key: "ttlHours", placeholder: "48" }
+      ].map(({ label, key, placeholder }) => /* @__PURE__ */ jsx(FormField, { label, children: /* @__PURE__ */ jsx(
+        "input",
+        {
+          type: "text",
+          value: form[key],
+          placeholder,
+          onChange: (e) => setForm((f) => ({ ...f, [key]: e.target.value })),
+          style: inputStyle
+        }
+      ) }, key)) }),
+      /* @__PURE__ */ jsx("div", { children: /* @__PURE__ */ jsx("button", { onClick: generate, disabled: busy, style: btnPrimary(busy), children: busy ? "Generating\u2026" : "Generate link" }) }),
+      error && /* @__PURE__ */ jsx(InlineMessage, { text: error, ok: false }),
+      link && /* @__PURE__ */ jsxs(CodeBox, { children: [
+        /* @__PURE__ */ jsx("span", { style: { flex: 1 }, children: link }),
+        /* @__PURE__ */ jsx(
+          "button",
+          {
+            onClick: copyLink,
+            style: {
+              background: copied ? C.greenBg : C.border,
+              border: "none",
+              borderRadius: 4,
+              padding: "4px 10px",
+              fontSize: 12,
+              cursor: "pointer",
+              color: copied ? C.green : "#334155",
+              fontWeight: 600,
+              whiteSpace: "nowrap",
+              flexShrink: 0
+            },
+            children: copied ? "Copied!" : "Copy"
+          }
+        )
+      ] })
+    ] }) })
   ] });
 }
 var DEFAULT_MODERATOR = `This is a daily standup, and you are the moderator. You open the standup, keep it on time, and close it. Be concise and conversational \u2014 one or two sentences per turn, no lists, no markdown. This is a live multi-party voice call. Report what Paperclip issues on your name you have done recently, what's still pending, what needs decisions from the board, and any blockers. After your update, give the floor to another agent. If you have a genuinely useful reaction \u2014 advice, a question \u2014 give it. If not, call the pass_on_reacting tool and don't say anything else; don't force a comment just to fill air time. If a human starts talking while you're mid-sentence, stop immediately. If you need the board's steering or a decision before you can continue, ask the question out loud and then call the ask_board tool with that same question to wait for their answer \u2014 don't just guess or wait for the human to bring it up on their own.`;
@@ -864,142 +841,94 @@ function PromptsSection({ companyId }) {
     setMessage(response.ok ? "Prompts saved." : body.error ?? `Save failed (${response.status})`);
   }
   const areaStyle = {
-    border: "1px solid #e2e8f0",
+    border: `1px solid ${C.border}`,
     borderRadius: 6,
     padding: "8px 10px",
     fontSize: 12,
     fontFamily: "monospace",
     resize: "vertical",
     minHeight: 100,
-    background: "#f8fafc",
-    color: "#0f172a",
+    background: C.bgMuted,
+    color: C.textPrimary,
     width: "100%",
     boxSizing: "border-box",
     outline: "none"
   };
-  const labelStyle = { fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 2, display: "block" };
-  const hintStyle = { fontSize: 11, color: "#94a3b8", marginBottom: 4 };
   if (loading) return /* @__PURE__ */ jsx(Spinner, {});
-  return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 12 }, children: [
-    /* @__PURE__ */ jsx("h2", { style: { fontSize: 16, fontWeight: 600, color: "#0f172a" }, children: "Prompts" }),
-    /* @__PURE__ */ jsx("p", { style: { fontSize: 12, color: "#64748b", margin: 0 }, children: "Customise the instructions that drive agent behaviour during a standup. Leave a field blank to use the built-in default. Changes take effect at the start of the next call." }),
-    /* @__PURE__ */ jsxs(
-      "div",
+  const prompts = [
+    {
+      label: "Moderator system prompt",
+      hint: "System-level instructions for the standup moderator agent.",
+      value: promptModerator,
+      onChange: setPromptModerator,
+      rows: 6
+    },
+    {
+      label: "Participant system prompt",
+      hint: "System-level instructions for participant (non-moderator) agents.",
+      value: promptParticipant,
+      onChange: setPromptParticipant,
+      rows: 6
+    },
+    {
+      label: "Opening agenda prompt",
+      hint: /* @__PURE__ */ jsxs(Fragment, { children: [
+        "Instructions for the moderator's opening turn. Use ",
+        /* @__PURE__ */ jsx("code", { children: "{next_speaker}" }),
+        " where the first update speaker's name should appear."
+      ] }),
+      value: promptAgendaOpening,
+      onChange: setPromptAgendaOpening,
+      rows: 3
+    },
+    {
+      label: "One-on-one call prompt",
+      hint: /* @__PURE__ */ jsxs(Fragment, { children: [
+        "System-level instructions for an agent on a 1:1 direct call. Use ",
+        /* @__PURE__ */ jsx("code", { children: "{agent_name}" }),
+        " where the agent's display name should appear. The agent's open issues are appended automatically."
+      ] }),
+      value: promptDirectCall,
+      onChange: setPromptDirectCall,
+      rows: 5
+    }
+  ];
+  return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 16 }, children: [
+    /* @__PURE__ */ jsx(
+      SectionHeader,
       {
-        style: {
-          background: "#fff",
-          border: "1px solid #e2e8f0",
-          borderRadius: 8,
-          padding: 16,
-          display: "flex",
-          flexDirection: "column",
-          gap: 14
-        },
-        children: [
-          /* @__PURE__ */ jsxs("div", { children: [
-            /* @__PURE__ */ jsx("label", { style: labelStyle, children: "Moderator system prompt" }),
-            /* @__PURE__ */ jsx("p", { style: hintStyle, children: "System-level instructions for the standup moderator agent." }),
-            /* @__PURE__ */ jsx(
-              "textarea",
-              {
-                value: promptModerator,
-                onChange: (e) => setPromptModerator(e.target.value),
-                style: areaStyle,
-                rows: 6
-              }
-            )
-          ] }),
-          /* @__PURE__ */ jsxs("div", { children: [
-            /* @__PURE__ */ jsx("label", { style: labelStyle, children: "Participant system prompt" }),
-            /* @__PURE__ */ jsx("p", { style: hintStyle, children: "System-level instructions for participant (non-moderator) agents." }),
-            /* @__PURE__ */ jsx(
-              "textarea",
-              {
-                value: promptParticipant,
-                onChange: (e) => setPromptParticipant(e.target.value),
-                style: areaStyle,
-                rows: 6
-              }
-            )
-          ] }),
-          /* @__PURE__ */ jsxs("div", { children: [
-            /* @__PURE__ */ jsx("label", { style: labelStyle, children: "Opening agenda prompt" }),
-            /* @__PURE__ */ jsxs("p", { style: hintStyle, children: [
-              "Instructions for the moderator's opening turn. Use ",
-              /* @__PURE__ */ jsx("code", { children: "{next_speaker}" }),
-              " where the first update speaker's name should appear."
-            ] }),
-            /* @__PURE__ */ jsx(
-              "textarea",
-              {
-                value: promptAgendaOpening,
-                onChange: (e) => setPromptAgendaOpening(e.target.value),
-                style: { ...areaStyle, minHeight: 60 },
-                rows: 3
-              }
-            )
-          ] }),
-          /* @__PURE__ */ jsxs("div", { children: [
-            /* @__PURE__ */ jsx("label", { style: labelStyle, children: "One-on-one call prompt" }),
-            /* @__PURE__ */ jsxs("p", { style: hintStyle, children: [
-              "System-level instructions for an agent on a 1:1 direct call with a board member. Use ",
-              /* @__PURE__ */ jsx("code", { children: "{agent_name}" }),
-              " where the agent's display name should appear. The agent's current open issues are appended automatically when available."
-            ] }),
-            /* @__PURE__ */ jsx(
-              "textarea",
-              {
-                value: promptDirectCall,
-                onChange: (e) => setPromptDirectCall(e.target.value),
-                style: areaStyle,
-                rows: 5
-              }
-            )
-          ] }),
-          /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 10 }, children: [
-            /* @__PURE__ */ jsx(
-              "button",
-              {
-                onClick: savePrompts,
-                style: {
-                  background: "#2563eb",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 6,
-                  padding: "8px 18px",
-                  fontWeight: 600,
-                  fontSize: 13,
-                  cursor: "pointer"
-                },
-                children: "Save Prompts"
-              }
-            ),
-            /* @__PURE__ */ jsx(
-              "button",
-              {
-                onClick: () => {
-                  setPromptModerator(DEFAULT_MODERATOR);
-                  setPromptParticipant(DEFAULT_PARTICIPANT);
-                  setPromptAgendaOpening(DEFAULT_AGENDA_OPENING);
-                  setPromptDirectCall(DEFAULT_DIRECT_CALL);
-                },
-                style: {
-                  background: "none",
-                  color: "#64748b",
-                  border: "1px solid #e2e8f0",
-                  borderRadius: 6,
-                  padding: "8px 14px",
-                  fontSize: 12,
-                  cursor: "pointer"
-                },
-                children: "Reset to defaults"
-              }
-            )
-          ] }),
-          message && /* @__PURE__ */ jsx("div", { style: { fontSize: 12, color: message === "Prompts saved." ? "#166534" : "#dc2626" }, children: message })
-        ]
+        title: "Prompts",
+        description: "Customise the instructions that drive agent behaviour during a standup. Leave a field blank to use the built-in default. Changes take effect at the start of the next call."
       }
-    )
+    ),
+    /* @__PURE__ */ jsx(Card, { children: /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 16 }, children: [
+      prompts.map((p) => /* @__PURE__ */ jsx(FormField, { label: p.label, hint: p.hint, children: /* @__PURE__ */ jsx(
+        "textarea",
+        {
+          value: p.value,
+          onChange: (e) => p.onChange(e.target.value),
+          style: { ...areaStyle, minHeight: p.rows * 22 },
+          rows: p.rows
+        }
+      ) }, p.label)),
+      /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 10, borderTop: `1px solid ${C.border}`, paddingTop: 14 }, children: [
+        /* @__PURE__ */ jsx("button", { onClick: savePrompts, style: btnPrimary(), children: "Save prompts" }),
+        /* @__PURE__ */ jsx(
+          "button",
+          {
+            onClick: () => {
+              setPromptModerator(DEFAULT_MODERATOR);
+              setPromptParticipant(DEFAULT_PARTICIPANT);
+              setPromptAgendaOpening(DEFAULT_AGENDA_OPENING);
+              setPromptDirectCall(DEFAULT_DIRECT_CALL);
+            },
+            style: btnGhost,
+            children: "Reset to defaults"
+          }
+        )
+      ] }),
+      message && /* @__PURE__ */ jsx(InlineMessage, { text: message, ok: message === "Prompts saved." })
+    ] }) })
   ] });
 }
 function SettingsSection({
@@ -1031,7 +960,7 @@ function SettingsSection({
     fetch(`/api/companies/${encodeURIComponent(companyId)}/secrets`).then(async (response) => {
       if (!response.ok) throw new Error(`Could not load company secrets (${response.status})`);
       const secrets = await response.json();
-      setCompanySecrets(secrets.filter((secret) => !secret.status || secret.status === "active"));
+      setCompanySecrets(secrets.filter((s) => !s.status || s.status === "active"));
     }).catch((error) => setMessage(error.message)).finally(() => setSecretsLoading(false));
   }, [companyId]);
   async function saveLiveKitConfig() {
@@ -1054,86 +983,84 @@ function SettingsSection({
       })
     });
     const body = await response.json().catch(() => ({}));
-    setMessage(response.ok ? "LiveKit configuration saved." : body.error ?? `Save failed (${response.status})`);
+    setMessage(
+      response.ok ? "LiveKit configuration saved." : body.error ?? `Save failed (${response.status})`
+    );
   }
-  const fieldStyle = { border: "1px solid #e2e8f0", borderRadius: 6, padding: "7px 10px", fontSize: 13 };
-  return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 12 }, children: [
-    /* @__PURE__ */ jsx("h2", { style: { fontSize: 16, fontWeight: 600, color: "#0f172a" }, children: "Settings" }),
-    /* @__PURE__ */ jsxs(
-      "div",
-      {
-        style: {
-          background: "#fff",
-          border: "1px solid #e2e8f0",
-          borderRadius: 8,
-          padding: "16px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 10
-        },
-        children: [
-          /* @__PURE__ */ jsx("h3", { style: { fontSize: 14, fontWeight: 600 }, children: "LiveKit" }),
-          /* @__PURE__ */ jsxs("label", { style: { display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }, children: [
-            "LiveKit URL",
-            /* @__PURE__ */ jsx("input", { type: "url", value: liveKitUrl, placeholder: "wss://your-project.livekit.cloud", onChange: (event) => setLiveKitUrl(event.target.value), style: fieldStyle })
-          ] }),
-          /* @__PURE__ */ jsxs("label", { style: { display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }, children: [
-            "LiveKit API key company secret",
-            /* @__PURE__ */ jsxs("select", { value: apiKeySecretId, disabled: secretsLoading, onChange: (event) => setApiKeySecretId(event.target.value), style: fieldStyle, children: [
-              /* @__PURE__ */ jsx("option", { value: "", children: secretsLoading ? "Loading company secrets\u2026" : "Select a company secret" }),
-              companySecrets.map((secret) => /* @__PURE__ */ jsxs("option", { value: secret.id, children: [
-                secret.name,
-                secret.key ? ` (${secret.key})` : ""
-              ] }, secret.id))
-            ] })
-          ] }),
-          /* @__PURE__ */ jsxs("label", { style: { display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }, children: [
-            "LiveKit API secret company secret",
-            /* @__PURE__ */ jsxs("select", { value: apiSecretSecretId, disabled: secretsLoading, onChange: (event) => setApiSecretSecretId(event.target.value), style: fieldStyle, children: [
-              /* @__PURE__ */ jsx("option", { value: "", children: secretsLoading ? "Loading company secrets\u2026" : "Select a company secret" }),
-              companySecrets.map((secret) => /* @__PURE__ */ jsxs("option", { value: secret.id, children: [
-                secret.name,
-                secret.key ? ` (${secret.key})` : ""
-              ] }, secret.id))
-            ] })
-          ] }),
-          /* @__PURE__ */ jsxs("label", { style: { display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }, children: [
-            "Default room",
-            /* @__PURE__ */ jsx("input", { value: room, onChange: (event) => setRoom(event.target.value), style: fieldStyle })
-          ] }),
-          /* @__PURE__ */ jsx("button", { onClick: saveLiveKitConfig, disabled: !liveKitUrl || !apiKeySecretId || !apiSecretSecretId, style: { alignSelf: "flex-start", background: "#2563eb", color: "white", border: 0, borderRadius: 6, padding: "8px 18px", fontWeight: 600 }, children: "Save LiveKit Settings" }),
-          message && /* @__PURE__ */ jsx("div", { style: { fontSize: 12, color: message.endsWith("saved.") ? "#166534" : "#dc2626" }, children: message }),
-          /* @__PURE__ */ jsx("div", { style: { borderTop: "1px solid #e2e8f0", margin: "6px 0" } }),
-          /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 14 }, children: [
-            /* @__PURE__ */ jsx("span", { style: { color: "#475569", fontWeight: 500 }, children: "Boardroom worker:" }),
-            workerLoading ? /* @__PURE__ */ jsx(Spinner, { size: "sm" }) : workerRunning === null ? /* @__PURE__ */ jsx(StatusBadge, { variant: "neutral", children: "Unknown" }) : workerRunning ? /* @__PURE__ */ jsx(StatusBadge, { variant: "success", children: "Running" }) : /* @__PURE__ */ jsx(StatusBadge, { variant: "error", children: "Stopped" }),
-            /* @__PURE__ */ jsx(
-              "button",
-              {
-                onClick: onRefreshWorker,
-                style: {
-                  background: "none",
-                  border: "1px solid #e2e8f0",
-                  borderRadius: 6,
-                  padding: "3px 10px",
-                  fontSize: 12,
-                  cursor: "pointer",
-                  color: "#64748b"
-                },
-                children: "Refresh"
-              }
-            )
-          ] }),
-          /* @__PURE__ */ jsxs("p", { style: { fontSize: 12, color: "#94a3b8" }, children: [
-            "The boardroom worker runs ",
-            /* @__PURE__ */ jsx("code", { children: "boardroom.py" }),
-            " which dispatches LiveKit agents into the boardroom room. Start it with ",
-            /* @__PURE__ */ jsx("code", { children: "scripts/boardroom-worker" }),
-            "."
-          ] })
-        ]
-      }
-    )
+  const secretOptions = secretsLoading ? [/* @__PURE__ */ jsx("option", { value: "", children: "Loading secrets\u2026" }, "")] : [
+    /* @__PURE__ */ jsx("option", { value: "", children: "Select a company secret" }, ""),
+    ...companySecrets.map((s) => /* @__PURE__ */ jsxs("option", { value: s.id, children: [
+      s.name,
+      s.key ? ` (${s.key})` : ""
+    ] }, s.id))
+  ];
+  return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 16 }, children: [
+    /* @__PURE__ */ jsx(SectionHeader, { title: "Settings" }),
+    /* @__PURE__ */ jsx(Card, { children: /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 14 }, children: [
+      /* @__PURE__ */ jsx("div", { style: { fontWeight: 600, fontSize: 14, color: C.textPrimary }, children: "LiveKit" }),
+      /* @__PURE__ */ jsx(FormField, { label: "LiveKit URL", children: /* @__PURE__ */ jsx(
+        "input",
+        {
+          type: "url",
+          value: liveKitUrl,
+          placeholder: "wss://your-project.livekit.cloud",
+          onChange: (e) => setLiveKitUrl(e.target.value),
+          style: inputStyle
+        }
+      ) }),
+      /* @__PURE__ */ jsx(FormField, { label: "LiveKit API key secret", children: /* @__PURE__ */ jsx(
+        "select",
+        {
+          value: apiKeySecretId,
+          disabled: secretsLoading,
+          onChange: (e) => setApiKeySecretId(e.target.value),
+          style: selectStyle,
+          children: secretOptions
+        }
+      ) }),
+      /* @__PURE__ */ jsx(FormField, { label: "LiveKit API secret", children: /* @__PURE__ */ jsx(
+        "select",
+        {
+          value: apiSecretSecretId,
+          disabled: secretsLoading,
+          onChange: (e) => setApiSecretSecretId(e.target.value),
+          style: selectStyle,
+          children: secretOptions
+        }
+      ) }),
+      /* @__PURE__ */ jsx(FormField, { label: "Default room", children: /* @__PURE__ */ jsx(
+        "input",
+        {
+          value: room,
+          onChange: (e) => setRoom(e.target.value),
+          style: inputStyle
+        }
+      ) }),
+      /* @__PURE__ */ jsx("div", { children: /* @__PURE__ */ jsx(
+        "button",
+        {
+          onClick: saveLiveKitConfig,
+          disabled: !liveKitUrl || !apiKeySecretId || !apiSecretSecretId,
+          style: btnPrimary(!liveKitUrl || !apiKeySecretId || !apiSecretSecretId),
+          children: "Save LiveKit settings"
+        }
+      ) }),
+      message && /* @__PURE__ */ jsx(InlineMessage, { text: message, ok: message.endsWith("saved.") })
+    ] }) }),
+    /* @__PURE__ */ jsxs(Card, { children: [
+      /* @__PURE__ */ jsx("div", { style: { fontWeight: 600, fontSize: 14, color: C.textPrimary, marginBottom: 12 }, children: "Boardroom worker" }),
+      /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }, children: [
+        workerLoading ? /* @__PURE__ */ jsx(Spinner, { size: "sm" }) : workerRunning === null ? /* @__PURE__ */ jsx(StatusBadge, { status: "pending", label: "Unknown" }) : workerRunning ? /* @__PURE__ */ jsx(StatusBadge, { status: "ok", label: "Running" }) : /* @__PURE__ */ jsx(StatusBadge, { status: "error", label: "Stopped" }),
+        /* @__PURE__ */ jsx("button", { onClick: onRefreshWorker, style: btnGhost, children: "Refresh" })
+      ] }),
+      /* @__PURE__ */ jsxs("p", { style: { fontSize: 12, color: C.textFaint, margin: 0 }, children: [
+        "The boardroom worker runs ",
+        /* @__PURE__ */ jsx("code", { children: "boardroom.py" }),
+        " which dispatches LiveKit agents into the boardroom room. Start it with ",
+        /* @__PURE__ */ jsx("code", { children: "scripts/boardroom-worker" }),
+        "."
+      ] })
+    ] })
   ] });
 }
 function PapervoicePage({ context }) {
@@ -1154,24 +1081,23 @@ function PapervoicePage({ context }) {
       style: {
         maxWidth: 800,
         margin: "0 auto",
-        padding: "24px 20px",
-        fontFamily: "system-ui, sans-serif",
-        color: "#1e293b"
+        padding: "28px 24px",
+        fontFamily: "system-ui, -apple-system, sans-serif",
+        color: C.textSecondary
       },
       children: [
-        /* @__PURE__ */ jsxs("div", { style: { marginBottom: 20 }, children: [
-          /* @__PURE__ */ jsx("h1", { style: { fontSize: 22, fontWeight: 700, color: "#0f172a", marginBottom: 4 }, children: "Papervoice" }),
-          /* @__PURE__ */ jsx("p", { style: { fontSize: 14, color: "#64748b" }, children: "Voice AI agents for live standups \u2014 manage personas, generate join links, and monitor the boardroom worker." })
+        /* @__PURE__ */ jsxs("div", { style: { marginBottom: 24 }, children: [
+          /* @__PURE__ */ jsx("h1", { style: { fontSize: 22, fontWeight: 700, color: C.textPrimary, margin: "0 0 6px" }, children: "Papervoice" }),
+          /* @__PURE__ */ jsx("p", { style: { fontSize: 14, color: C.textMuted, margin: 0 }, children: "Voice AI agents for live standups \u2014 manage personas, generate join links, and monitor the boardroom worker." })
         ] }),
         /* @__PURE__ */ jsx(
           "div",
           {
             style: {
               display: "flex",
-              gap: 4,
-              marginBottom: 20,
-              borderBottom: "1px solid #e2e8f0",
-              paddingBottom: 0
+              gap: 0,
+              marginBottom: 24,
+              borderBottom: `1px solid ${C.border}`
             },
             children: tabs.map((tab) => /* @__PURE__ */ jsx(
               "button",
@@ -1180,14 +1106,14 @@ function PapervoicePage({ context }) {
                 style: {
                   background: "none",
                   border: "none",
-                  borderBottom: activeTab === tab.id ? "2px solid #2563eb" : "2px solid transparent",
-                  padding: "8px 14px",
+                  borderBottom: activeTab === tab.id ? `2px solid ${C.blue}` : "2px solid transparent",
+                  padding: "8px 16px",
                   fontSize: 14,
                   fontWeight: activeTab === tab.id ? 600 : 400,
-                  color: activeTab === tab.id ? "#2563eb" : "#64748b",
+                  color: activeTab === tab.id ? C.blue : C.textMuted,
                   cursor: "pointer",
                   marginBottom: -1,
-                  transition: "color 0.15s"
+                  transition: "color 0.12s"
                 },
                 children: tab.label
               },
