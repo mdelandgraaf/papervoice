@@ -110,6 +110,34 @@ async def room_has_human_participant(name: str) -> bool:
     return any(p.kind != api.ParticipantInfo.Kind.AGENT for p in resp.participants)
 
 
+async def any_active_call_in_progress() -> bool:
+    """True if any papervoice room (boardroom, direct, preset, or custom) has a human participant.
+
+    wake-maintenance originally only checked BOARDROOM_ROOM, so a worker restart
+    mid direct-call silenced the agent (PER-347). This checks every live room
+    whose name starts with "papervoice-" so that 1:1 direct calls and preset
+    rooms are protected the same way as the boardroom.
+    """
+    _require_env()
+    async with api.LiveKitAPI() as lk:
+        try:
+            rooms_resp = await lk.room.list_rooms(api.ListRoomsRequest())
+        except Exception:
+            return False
+        for room in rooms_resp.rooms:
+            if not room.name.startswith("papervoice-"):
+                continue
+            try:
+                participants = await lk.room.list_participants(
+                    api.ListParticipantsRequest(room=room.name)
+                )
+            except api.TwirpError:
+                continue
+            if any(p.kind != api.ParticipantInfo.Kind.AGENT for p in participants.participants):
+                return True
+    return False
+
+
 async def sip_trunk_status() -> str:
     """Confirm the LiveKit SIP API is reachable and report configured trunks.
 

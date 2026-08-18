@@ -47,8 +47,7 @@ import asyncio, sys
 from dotenv import load_dotenv
 load_dotenv('$env_file')
 from papervoice.vendors import livekit as lk
-from papervoice.personas import BOARDROOM_ROOM
-result = asyncio.run(lk.room_has_human_participant(BOARDROOM_ROOM))
+result = asyncio.run(lk.any_active_call_in_progress())
 sys.stdout.write('true' if result else 'false')
 " 2>/dev/null
   )
@@ -56,7 +55,7 @@ sys.stdout.write('true' if result else 'false')
     echo "boardroom worker: call in progress — skipping restart, new token loads on next call start"
     need_restart=false
   else
-    echo "boardroom worker: room empty — restarting to pick up fresh token"
+    echo "boardroom worker: all rooms empty — restarting to pick up fresh token"
     need_restart=true
   fi
 fi
