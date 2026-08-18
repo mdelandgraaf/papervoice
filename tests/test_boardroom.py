@@ -913,6 +913,64 @@ class DirectCallRoomReadinessTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("introduce yourself", instructions.lower(),
                       "fresh-call greeting must introduce the agent by name")
 
+    async def test_restart_agent_can_hear_preexisting_human(self):
+        """PER-350: on a worker restart into a room where the human is already present,
+        the replacement session must be wired to *hear* — not just speak.
+
+        The 19:24 incident (job AJ_BkESbCGMqt9X) crashed mid-1:1; the replacement was
+        silent because its STT/barge-in callbacks never picked up the human whose audio
+        track was published before the new session started. This test pins the two
+        guarantees that keep the agent's ears live on restart:
+
+          1. The session is constructed with an STT engine and a VAD (the ears), and
+          2. ``room_io.wait_for_ready()`` is awaited before greeting — that await is the
+             SDK gate that runs RoomIO._init_task, which enumerates *existing* room
+             participants and links the pre-existing human's audio track to STT input
+             (livekit/agents/voice/room_io/room_io.py::_init_task). Without awaiting it,
+             generate_reply() races ahead of audio-input subscription and the agent is
+             deaf even though it appears to greet.
+        """
+        persona = Persona("agent-eng", "Eng", "voice-eng", "You are Eng.")
+        mock_session, mock_room, registered = self._make_fixtures()
+
+        # Restart: the human is already in the room before the replacement joins.
+        fake_human = mock.MagicMock()
+        fake_human.kind = _boardroom_module.rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+        mock_room.remote_participants = {"human-1": fake_human}
+
+        captured = {}
+
+        def _capture_agent_session(*args, **kwargs):
+            captured["kwargs"] = kwargs
+            return mock_session
+
+        stt_marker = mock.MagicMock(name="stt")
+        vad_marker = mock.MagicMock(name="vad")
+
+        with mock.patch.dict(os.environ, self._ENV), \
+             mock.patch.object(_boardroom_module, "AgentSession", side_effect=_capture_agent_session), \
+             mock.patch.object(_boardroom_module.rtc, "Room", return_value=mock_room), \
+             mock.patch.object(_boardroom_module.lk_vendor, "mint_join_token", return_value="tok"), \
+             mock.patch.object(_boardroom_module.el_vendor, "plugin_stt", return_value=stt_marker), \
+             mock.patch.object(_boardroom_module.el_vendor, "plugin_tts", return_value=mock.MagicMock()), \
+             mock.patch.object(_boardroom_module.silero.VAD, "load", return_value=vad_marker), \
+             mock.patch.object(_boardroom_module.anthropic, "LLM", return_value=mock.MagicMock()), \
+             mock.patch.object(_boardroom_module, "load_prompt_config", return_value=PromptConfig()), \
+             mock.patch.object(_boardroom_module.pc_vendor, "context_briefing", return_value=None):
+            await asyncio.gather(
+                _boardroom_module.run_direct_call("papervoice-direct-agent-eng", persona),
+                self._trigger_disconnect(registered, mock_room),
+            )
+
+        # Ears attached: the replacement session has both an STT engine and a VAD.
+        self.assertIs(captured["kwargs"].get("stt"), stt_marker,
+                      "restart session must be built with an STT engine so it can hear")
+        self.assertIs(captured["kwargs"].get("vad"), vad_marker,
+                      "restart session must be built with a VAD so barge-in works")
+        # The session actually started, and the input-linking gate was awaited.
+        mock_session.start.assert_awaited_once()
+        mock_session.room_io.wait_for_ready.assert_awaited_once()
+
 
 if __name__ == "__main__":
     unittest.main()
