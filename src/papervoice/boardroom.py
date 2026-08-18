@@ -643,9 +643,25 @@ async def run_direct_call(
             # handles the explicit "last human left" teardown path instead.
             room_options=room_io.RoomOptions(close_on_disconnect=False),
         )
-        await session.generate_reply(
-            instructions=f"Greet the person who just joined and introduce yourself briefly as {persona.display_name}."
-        )
+        # Wait for RoomIO's _init_task to complete before greeting: it finds the
+        # human participant, subscribes to their audio input, and publishes the
+        # agent's audio output track. Without this, session.start() returns while
+        # _init_task is still running in the background, and generate_reply() can
+        # race against audio track publication — on a worker restart into an
+        # existing room the window is wide enough that the greeting is silently
+        # lost (PER-349).
+        try:
+            await asyncio.wait_for(session.room_io.wait_for_ready(), timeout=15.0)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "direct call: room I/O not ready within 15s for %s — no participant "
+                "detected; skipping greeting but staying live",
+                persona.identity,
+            )
+        else:
+            await session.generate_reply(
+                instructions=f"Greet the person who just joined and introduce yourself briefly as {persona.display_name}."
+            )
         await done.wait()
     finally:
         await session.aclose()
@@ -755,6 +771,28 @@ async def request_fnc(job_request) -> None:
 
 async def entrypoint(ctx) -> None:
     await ctx.connect()
+
+    # The dispatch connection (DISPATCH_IDENTITY) has no session host and
+    # therefore no lk.agent.session or lk.transcription stream handlers. Any
+    # such stream sent by a room participant (e.g. the human's browser sending
+    # remote-session control, or the persona broadcasting its transcription)
+    # would otherwise log "ignoring … no callback attached" at INFO. Register
+    # no-ops so those messages are cleanly absorbed on the dispatch side without
+    # interfering with the handlers the persona's own session registers on its
+    # separate room connection (PER-349).
+    async def _discard_stream(reader, _identity) -> None:
+        async with reader:
+            pass
+
+    try:
+        ctx.room.register_byte_stream_handler("lk.agent.session", _discard_stream)
+    except ValueError:
+        pass
+    try:
+        ctx.room.register_text_stream_handler("lk.transcription", _discard_stream)
+    except ValueError:
+        pass
+
     # Block on a human/SIP participant before spending any LLM/TTS budget —
     # agent playout doesn't complete until a real listener is in the room.
     logger.info("worker ready, waiting for a human to join room %s", ctx.room.name)

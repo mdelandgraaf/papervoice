@@ -9,6 +9,7 @@ Run: PYTHONPATH=src python -m unittest discover -s tests -v
 
 import asyncio
 import gc
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -733,6 +734,123 @@ class WebRTCTimeoutIsolationTest(unittest.IsolatedAsyncioTestCase):
 
         # Standup must not raise; it returns the completed identities list
         self.assertIsNotNone(completed)
+
+
+class DirectCallRoomReadinessTest(unittest.IsolatedAsyncioTestCase):
+    """PER-349: run_direct_call awaits room I/O readiness before greeting.
+
+    Guards the race between session.start() returning and _init_task finishing
+    audio setup (participant subscription + audio output track publication). On
+    a worker restart into an existing room the window is wide enough for
+    generate_reply() to fire before audio is live, silently discarding the
+    greeting.
+    """
+
+    _ENV = {"LIVEKIT_URL": "ws://test-only"}
+
+    def _make_fixtures(self, wait_for_ready_side_effect=None):
+        """Build (mock_session, mock_room, registered_handlers)."""
+        registered = {}
+        mock_room = mock.MagicMock()
+        mock_room.remote_participants = {}
+        mock_room.connect = mock.AsyncMock()
+        mock_room.disconnect = mock.AsyncMock()
+        mock_room.on = lambda evt, h: registered.update({evt: h})
+
+        mock_room_io = mock.MagicMock()
+        mock_room_io.wait_for_ready = mock.AsyncMock(side_effect=wait_for_ready_side_effect)
+
+        mock_session = mock.MagicMock()
+        mock_session.room_io = mock_room_io
+        mock_session.start = mock.AsyncMock()
+        mock_session.generate_reply = mock.AsyncMock()
+        mock_session.aclose = mock.AsyncMock()
+
+        return mock_session, mock_room, registered
+
+    async def _trigger_disconnect(self, registered, mock_room, *, delay_yields: int = 60):
+        """Simulate the last human leaving after `delay_yields` event-loop turns."""
+        for _ in range(delay_yields):
+            await asyncio.sleep(0)
+        handler = registered.get("participant_disconnected")
+        if handler:
+            fake_p = mock.MagicMock()
+            fake_p.kind = _boardroom_module.rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+            mock_room.remote_participants = {}
+            handler(fake_p)
+
+    async def test_greets_only_after_room_io_ready(self):
+        """generate_reply() fires only after wait_for_ready() completes (correct order)."""
+        persona = Persona("agent-eng", "Eng", "voice-eng", "You are Eng.")
+        call_order = []
+        ready_evt = asyncio.Event()
+
+        mock_session, mock_room, registered = self._make_fixtures()
+
+        async def _track_ready():
+            call_order.append("wait_for_ready")
+            ready_evt.set()
+
+        async def _track_greet(**kwargs):
+            call_order.append("generate_reply")
+
+        mock_session.room_io.wait_for_ready = mock.AsyncMock(side_effect=_track_ready)
+        mock_session.generate_reply = mock.AsyncMock(side_effect=_track_greet)
+
+        async def _fire_after_ready():
+            await ready_evt.wait()
+            # One more yield lets generate_reply() finish before we set done.
+            await asyncio.sleep(0)
+            handler = registered.get("participant_disconnected")
+            if handler:
+                fake_p = mock.MagicMock()
+                fake_p.kind = _boardroom_module.rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+                mock_room.remote_participants = {}
+                handler(fake_p)
+
+        with mock.patch.dict(os.environ, self._ENV), \
+             mock.patch.object(_boardroom_module, "AgentSession", return_value=mock_session), \
+             mock.patch.object(_boardroom_module.rtc, "Room", return_value=mock_room), \
+             mock.patch.object(_boardroom_module.lk_vendor, "mint_join_token", return_value="tok"), \
+             mock.patch.object(_boardroom_module.el_vendor, "plugin_stt", return_value=mock.MagicMock()), \
+             mock.patch.object(_boardroom_module.el_vendor, "plugin_tts", return_value=mock.MagicMock()), \
+             mock.patch.object(_boardroom_module.silero.VAD, "load", return_value=mock.MagicMock()), \
+             mock.patch.object(_boardroom_module.anthropic, "LLM", return_value=mock.MagicMock()), \
+             mock.patch.object(_boardroom_module, "load_prompt_config", return_value=PromptConfig()), \
+             mock.patch.object(_boardroom_module.pc_vendor, "context_briefing", return_value=None):
+            await asyncio.gather(
+                _boardroom_module.run_direct_call("papervoice-direct-agent-eng", persona),
+                _fire_after_ready(),
+            )
+
+        self.assertEqual(call_order, ["wait_for_ready", "generate_reply"],
+                         "wait_for_ready must complete before generate_reply is called")
+
+    async def test_skips_greeting_when_room_io_times_out(self):
+        """If wait_for_ready() times out, greeting is silently skipped; session stays live."""
+        persona = Persona("agent-eng", "Eng", "voice-eng", "You are Eng.")
+
+        async def _timeout():
+            raise asyncio.TimeoutError("no participant found in time")
+
+        mock_session, mock_room, registered = self._make_fixtures(wait_for_ready_side_effect=_timeout)
+
+        with mock.patch.dict(os.environ, self._ENV), \
+             mock.patch.object(_boardroom_module, "AgentSession", return_value=mock_session), \
+             mock.patch.object(_boardroom_module.rtc, "Room", return_value=mock_room), \
+             mock.patch.object(_boardroom_module.lk_vendor, "mint_join_token", return_value="tok"), \
+             mock.patch.object(_boardroom_module.el_vendor, "plugin_stt", return_value=mock.MagicMock()), \
+             mock.patch.object(_boardroom_module.el_vendor, "plugin_tts", return_value=mock.MagicMock()), \
+             mock.patch.object(_boardroom_module.silero.VAD, "load", return_value=mock.MagicMock()), \
+             mock.patch.object(_boardroom_module.anthropic, "LLM", return_value=mock.MagicMock()), \
+             mock.patch.object(_boardroom_module, "load_prompt_config", return_value=PromptConfig()), \
+             mock.patch.object(_boardroom_module.pc_vendor, "context_briefing", return_value=None):
+            await asyncio.gather(
+                _boardroom_module.run_direct_call("papervoice-direct-agent-eng", persona),
+                self._trigger_disconnect(registered, mock_room),
+            )
+
+        mock_session.generate_reply.assert_not_called()
 
 
 if __name__ == "__main__":
