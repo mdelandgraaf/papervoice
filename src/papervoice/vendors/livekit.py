@@ -80,7 +80,7 @@ async def verify_room_join(room: str, identity: str = "papervoice-healthcheck") 
     _require_env()
     token = mint_join_token(identity, room, ttl_hours=1)
     conn = rtc.Room()
-    await conn.connect(_room_ws_url(), token)
+    await asyncio.wait_for(conn.connect(_room_ws_url(), token), timeout=15.0)
     try:
         if conn.connection_state != rtc.ConnectionState.CONN_CONNECTED:
             raise RuntimeError(f"unexpected connection state: {conn.connection_state}")

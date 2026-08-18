@@ -18,6 +18,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+import papervoice.boardroom as _boardroom_module
 from papervoice.boardroom import (
     _ask_board_tool,
     _background_tasks,
@@ -32,15 +33,18 @@ from papervoice.boardroom import (
     _pass_on_reacting,
     _resolve_direct_persona,
     _standup_agenda,
+    run_standup,
 )
 from papervoice.moderator import Moderator
 from papervoice.personas import (
     BOARDROOM_ROSTER,
+    Persona,
     build_persona_from_agent,
     filter_roster,
     load_roster_from_paperclip,
     parse_custom_room_identities,
 )
+from papervoice.prompts import PromptConfig
 from papervoice.vendors import paperclip as pc_vendor
 
 
@@ -660,6 +664,75 @@ class ResolveDirectPersonaTest(unittest.TestCase):
         with mock.patch.object(pc_vendor, "get_voice_enabled_agents", return_value=[cfg]):
             persona = _resolve_direct_persona("agent-ceo")
         self.assertEqual(persona.instructions, "")
+
+
+class WebRTCTimeoutIsolationTest(unittest.IsolatedAsyncioTestCase):
+    """PER-337: connection timeouts and transcriber failure isolation."""
+
+    def _make_roster(self):
+        return (
+            Persona("agent-a", "A", "voice-a", "You are A."),
+            Persona("agent-b", "B", "voice-b", "You are B."),
+        )
+
+    async def test_agent_connect_timeout_drops_agent_and_continues(self):
+        """TimeoutError from room.connect propagates out of _connect_agent; run_standup
+        catches it per-agent, marks the agent dropped, and keeps the call alive."""
+        roster = self._make_roster()
+        captured = {}
+
+        orig_init = Moderator.__init__
+        def capturing_init(self, *args, **kwargs):
+            orig_init(self, *args, **kwargs)
+            captured["moderator"] = self
+
+        async def fake_connect_agent(room_name, persona, moderator):
+            if persona.identity == "agent-b":
+                raise asyncio.TimeoutError("ICE stalled")
+            return mock.AsyncMock(), mock.AsyncMock()
+
+        async def fake_connect_transcriber(*a, **kw):
+            return mock.AsyncMock(), mock.AsyncMock()
+
+        with mock.patch.object(Moderator, "__init__", capturing_init), \
+             mock.patch.object(Moderator, "run_agenda", new=mock.AsyncMock(return_value=[])), \
+             mock.patch.object(_boardroom_module, "_connect_agent",
+                               mock.AsyncMock(side_effect=fake_connect_agent)), \
+             mock.patch.object(_boardroom_module, "_connect_transcriber",
+                               mock.AsyncMock(side_effect=fake_connect_transcriber)), \
+             mock.patch.object(_boardroom_module, "_load_context",
+                               mock.AsyncMock(return_value=({}, False))), \
+             mock.patch.object(_boardroom_module, "load_prompt_config",
+                               return_value=PromptConfig()):
+            await run_standup("test-room", roster=roster)
+
+        self.assertIn("agent-b", captured["moderator"].dropped)
+        self.assertNotIn("agent-a", captured["moderator"].dropped)
+
+    async def test_transcriber_failure_keeps_standup_alive(self):
+        """If _connect_transcriber raises (timeout or any error), run_standup logs
+        the failure and continues the call without STT/barge-in instead of crashing."""
+        roster = self._make_roster()
+
+        async def fake_connect_transcriber(*a, **kw):
+            raise asyncio.TimeoutError("DTLS stalled")
+
+        async def fake_connect_agent(room_name, persona, moderator):
+            return mock.AsyncMock(), mock.AsyncMock()
+
+        with mock.patch.object(_boardroom_module, "_connect_transcriber",
+                               mock.AsyncMock(side_effect=fake_connect_transcriber)), \
+             mock.patch.object(_boardroom_module, "_connect_agent",
+                               mock.AsyncMock(side_effect=fake_connect_agent)), \
+             mock.patch.object(_boardroom_module, "_load_context",
+                               mock.AsyncMock(return_value=({}, False))), \
+             mock.patch.object(Moderator, "run_agenda", new=mock.AsyncMock(return_value=[])), \
+             mock.patch.object(_boardroom_module, "load_prompt_config",
+                               return_value=PromptConfig()):
+            completed = await run_standup("test-room", roster=roster)
+
+        # Standup must not raise; it returns the completed identities list
+        self.assertIsNotNone(completed)
 
 
 if __name__ == "__main__":

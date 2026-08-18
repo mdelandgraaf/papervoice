@@ -365,40 +365,43 @@ def _ask_board_tool(persona: Persona, moderator: Moderator):
 async def _connect_agent(room_name: str, persona: Persona, moderator: Moderator) -> tuple[AgentSession, rtc.Room]:
     token = lk_vendor.mint_join_token(persona.identity, room_name, ttl_hours=1, agent=True)
     room = rtc.Room()
-    await room.connect(os.environ["LIVEKIT_URL"], token)
+    await asyncio.wait_for(room.connect(os.environ["LIVEKIT_URL"], token), timeout=15.0)
     try:
         session = AgentSession(
             llm=anthropic.LLM(model=AGENT_LLM_MODEL),
             tts=el_vendor.plugin_tts(voice_id_override=persona.voice_id),
         )
-        await session.start(
-            # file_followup_issue (Milestone 3): lets this persona create a real Paperclip
-            # issue when the board decides something needs tracking. pass_on_reacting and
-            # ask_board (PER-83): let a reaction turn skip speaking, and let this persona
-            # proactively ask the board a question and wait for the answer mid-turn.
-            agent=Agent(
-                instructions=persona.instructions,
-                tools=[_file_issue_tool(persona, moderator), _pass_on_reacting, _ask_board_tool(persona, moderator)],
+        await asyncio.wait_for(
+            session.start(
+                # file_followup_issue (Milestone 3): lets this persona create a real Paperclip
+                # issue when the board decides something needs tracking. pass_on_reacting and
+                # ask_board (PER-83): let a reaction turn skip speaking, and let this persona
+                # proactively ask the board a question and wait for the answer mid-turn.
+                agent=Agent(
+                    instructions=persona.instructions,
+                    tools=[_file_issue_tool(persona, moderator), _pass_on_reacting, _ask_board_tool(persona, moderator)],
+                ),
+                room=room,
+                # No STT/VAD: this agent never listens for itself. The shared
+                # transcriber below is the room's only ears; the moderator feeds
+                # each agent the rolling transcript as text when granting the floor.
+                # close_on_disconnect=False (PER-84): LiveKit's default links this
+                # session's lifecycle to the first human participant and tears the
+                # whole AgentSession down the instant that participant disconnects
+                # for any reason, including a momentary blip. With N personas each
+                # independently linked to the same human, one blip closed all N
+                # sessions in lockstep on a live board call (all three "dropped"
+                # within milliseconds of each other) and there is no reconnect —
+                # a closed AgentSession never reopens even if the human rejoins.
+                # Moderator._speak already has its own per-turn try/except plus a
+                # hard timeout (see docs/ARCHITECTURE.md M2 note 6/7) that
+                # degrades one persona at a time and tolerates a hung/absent
+                # human — that is the intended failure-isolation boundary, not
+                # this SDK default, which defeats it by acting on all sessions at
+                # once before the moderator ever gets a chance to isolate one.
+                room_options=room_io.RoomOptions(audio_input=False, text_input=False, close_on_disconnect=False),
             ),
-            room=room,
-            # No STT/VAD: this agent never listens for itself. The shared
-            # transcriber below is the room's only ears; the moderator feeds
-            # each agent the rolling transcript as text when granting the floor.
-            # close_on_disconnect=False (PER-84): LiveKit's default links this
-            # session's lifecycle to the first human participant and tears the
-            # whole AgentSession down the instant that participant disconnects
-            # for any reason, including a momentary blip. With N personas each
-            # independently linked to the same human, one blip closed all N
-            # sessions in lockstep on a live board call (all three "dropped"
-            # within milliseconds of each other) and there is no reconnect —
-            # a closed AgentSession never reopens even if the human rejoins.
-            # Moderator._speak already has its own per-turn try/except plus a
-            # hard timeout (see docs/ARCHITECTURE.md M2 note 6/7) that
-            # degrades one persona at a time and tolerates a hung/absent
-            # human — that is the intended failure-isolation boundary, not
-            # this SDK default, which defeats it by acting on all sessions at
-            # once before the moderator ever gets a chance to isolate one.
-            room_options=room_io.RoomOptions(audio_input=False, text_input=False, close_on_disconnect=False),
+            timeout=20.0,
         )
     except Exception:
         # room.connect() above already put this identity in the room as a
@@ -419,7 +422,7 @@ async def _connect_transcriber(
 ) -> tuple[AgentSession, rtc.Room]:
     token = lk_vendor.mint_join_token(TRANSCRIBER_IDENTITY, room_name, ttl_hours=1, agent=True)
     room = rtc.Room()
-    await room.connect(os.environ["LIVEKIT_URL"], token)
+    await asyncio.wait_for(room.connect(os.environ["LIVEKIT_URL"], token), timeout=15.0)
     # ElevenLabs Scribe doesn't support streaming STT; VAD segments the human
     # audio into utterances so each one can be sent as a single batch call.
     session = AgentSession(stt=el_vendor.plugin_stt(), vad=silero.VAD.load())
@@ -622,7 +625,7 @@ async def run_direct_call(
 
     token = lk_vendor.mint_join_token(persona.identity, room_name, ttl_hours=1, agent=True)
     room = rtc.Room()
-    await room.connect(os.environ["LIVEKIT_URL"], token)
+    await asyncio.wait_for(room.connect(os.environ["LIVEKIT_URL"], token), timeout=15.0)
 
     done = asyncio.Event()
     human_kinds = {rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD, rtc.ParticipantKind.PARTICIPANT_KIND_SIP}
@@ -705,9 +708,12 @@ async def run_standup(
     rooms: list[rtc.Room] = []
     completed: list[str] = []
     try:
-        transcriber_session, transcriber_room = await _connect_transcriber(room_name, moderator, roster)
-        sessions.append(transcriber_session)
-        rooms.append(transcriber_room)
+        try:
+            transcriber_session, transcriber_room = await _connect_transcriber(room_name, moderator, roster)
+            sessions.append(transcriber_session)
+            rooms.append(transcriber_room)
+        except Exception:
+            logger.exception("transcriber failed to join; call will proceed without STT/barge-in")
 
         for persona in roster:
             try:
@@ -733,10 +739,15 @@ async def run_standup(
             completed,
             moderator.full_transcript_text() or "(no transcript recorded)",
         )
-        for session in sessions:
-            await session.aclose()
-        for room in rooms:
-            await room.disconnect()
+        async def _teardown() -> None:
+            for session in sessions:
+                await session.aclose()
+            for room in rooms:
+                await room.disconnect()
+        try:
+            await asyncio.wait_for(_teardown(), timeout=10.0)
+        except asyncio.TimeoutError:
+            logger.warning("standup teardown timed out after 10s; connections may not have closed cleanly")
         if summary_issue_id:
             try:
                 await asyncio.to_thread(
