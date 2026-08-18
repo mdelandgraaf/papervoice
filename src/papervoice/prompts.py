@@ -1,15 +1,20 @@
 """Papervoice prompt configuration — loads from Paperclip plugin config at call start.
 
-Four configurable prompt levels:
-  1. promptModerator  — system-level instructions for the standup moderator agent.
-  2. promptParticipant — system-level instructions for participant (non-moderator) agents.
-  3. promptAgendaOpening — the moderator's opening turn instructions (replaces the
-     instance-specific "say this is the milestone-X test call" text). Use {next_speaker}
-     where the first update speaker's name should appear.
-  4. promptDirectCall — system-level instructions for an agent on a 1:1 direct call.
-     Use {agent_name} where the agent's display name should appear.
+Seven configurable prompt levels:
+  1. promptModerator     — system-level instructions for the standup moderator agent.
+  2. promptParticipant   — system-level instructions for participant (non-moderator) agents.
+  3. promptAgendaOpening — the moderator's opening turn. Use {next_speaker} where the first
+                           update speaker's name should appear.
+  4. promptStatusUpdate  — per-participant status update turn. Use {briefing} where the
+                           agent's live Paperclip issue state should appear (empty when
+                           offline). The handoff to the next speaker is always appended.
+  5. promptReaction      — the brief cross-talk turn before each status update. Use
+                           {prev_speaker} where the previous speaker's name should appear.
+  6. promptClosing       — the moderator's closing turn at the end of the standup.
+  7. promptDirectCall    — system-level instructions for an agent on a 1:1 direct call.
+                           Use {agent_name} where the agent's display name should appear.
 
-All four fall back to built-in defaults when not configured.
+All seven fall back to built-in defaults when not configured.
 """
 
 import logging
@@ -63,6 +68,31 @@ DEFAULT_AGENDA_OPENING = (
     " and hand it to {next_speaker} for their update."
 )
 
+# Use {briefing} where the agent's live Paperclip issue state should appear.
+# Expands to " Your current Paperclip status: {value}" when a briefing is available, or
+# "" when offline. The handoff to the next speaker is always appended by the boardroom.
+DEFAULT_STATUS_UPDATE = (
+    "Give a brief status update based on your real Paperclip issue state below."
+    "{briefing}"
+    " If something needs a follow-up ticket, file it with the file_followup_issue tool."
+)
+
+# Use {prev_speaker} where the previous speaker's name should appear.
+DEFAULT_REACTION = (
+    "Before your own update: {prev_speaker} just gave theirs. If you have a"
+    " genuinely useful reaction — advice, a question, encouragement — say one brief"
+    " sentence. If not, call the pass_on_reacting tool and don't say anything else;"
+    " don't force a comment just to fill air time."
+)
+
+DEFAULT_CLOSING = (
+    "Close the standup: briefly recap any decisions or action items from this meeting"
+    " that don't already have a follow-up ticket, and file each one now with the"
+    " file_followup_issue tool before wrapping up — don't rely on whoever made the"
+    " decision to have filed it themselves. Then ask if anyone has final questions"
+    " before wrapping up, and thank everyone."
+)
+
 # Use {agent_name} where the agent's display name should appear.
 # The agent's current open Paperclip issues are appended automatically when available.
 DEFAULT_DIRECT_CALL_INSTRUCTIONS = (
@@ -79,6 +109,9 @@ class PromptConfig:
     moderator_instructions: str = field(default=DEFAULT_MODERATOR_INSTRUCTIONS)
     participant_instructions: str = field(default=DEFAULT_PARTICIPANT_INSTRUCTIONS)
     agenda_opening: str = field(default=DEFAULT_AGENDA_OPENING)
+    status_update: str = field(default=DEFAULT_STATUS_UPDATE)
+    reaction: str = field(default=DEFAULT_REACTION)
+    closing: str = field(default=DEFAULT_CLOSING)
     direct_call_instructions: str = field(default=DEFAULT_DIRECT_CALL_INSTRUCTIONS)
 
 
@@ -96,6 +129,9 @@ def load_prompt_config() -> PromptConfig:
             moderator_instructions=config.get("promptModerator") or DEFAULT_MODERATOR_INSTRUCTIONS,
             participant_instructions=config.get("promptParticipant") or DEFAULT_PARTICIPANT_INSTRUCTIONS,
             agenda_opening=config.get("promptAgendaOpening") or DEFAULT_AGENDA_OPENING,
+            status_update=config.get("promptStatusUpdate") or DEFAULT_STATUS_UPDATE,
+            reaction=config.get("promptReaction") or DEFAULT_REACTION,
+            closing=config.get("promptClosing") or DEFAULT_CLOSING,
             direct_call_instructions=config.get("promptDirectCall") or DEFAULT_DIRECT_CALL_INSTRUCTIONS,
         )
     except Exception:

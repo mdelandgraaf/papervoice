@@ -201,35 +201,21 @@ def _standup_agenda(
             items.append(
                 AgendaItem(
                     persona.identity,
-                    f"Before your own update: {prev.display_name} just gave theirs. If you have a"
-                    " genuinely useful reaction — advice, a question, encouragement — say one brief"
-                    " sentence. If not, call the pass_on_reacting tool and don't say anything else;"
-                    " don't force a comment just to fill air time.",
+                    cfg.reaction.replace("{prev_speaker}", prev.display_name),
                     kind="reaction",
                 )
             )
         nxt = rest[i + 1].display_name if i + 1 < len(rest) else None
         handoff = f" Then hand off to {nxt}." if nxt else f" Then hand back to {opener.display_name} to close."
         briefing = context.get(persona.identity)
-        state = f" Your current Paperclip status: {briefing}" if briefing else ""
+        briefing_text = f" Your current Paperclip status: {briefing}" if briefing else ""
         items.append(
             AgendaItem(
                 persona.identity,
-                f"Give a brief status update based on your real Paperclip issue state below."
-                f"{state} If something needs a follow-up ticket, file it with the"
-                f" file_followup_issue tool.{handoff}",
+                cfg.status_update.replace("{briefing}", briefing_text) + handoff,
             )
         )
-    items.append(
-        AgendaItem(
-            opener.identity,
-            "Close the standup: briefly recap any decisions or action items from this meeting"
-            " that don't already have a follow-up ticket, and file each one now with the"
-            " file_followup_issue tool before wrapping up — don't rely on whoever made the"
-            " decision to have filed it themselves. Then ask if anyone has final questions"
-            " before wrapping up, and thank everyone.",
-        )
-    )
+    items.append(AgendaItem(opener.identity, cfg.closing))
     return items
 
 

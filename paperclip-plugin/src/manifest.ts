@@ -60,6 +60,26 @@ const manifest: PaperclipPluginManifestV1 = {
         title: "Opening agenda prompt",
         description: "Instructions for the moderator's opening turn. Use {next_speaker} where the first update speaker's name should appear. Leave blank to use the built-in default.",
       },
+      promptStatusUpdate: {
+        type: "string",
+        title: "Status update prompt",
+        description: "Instructions for each participant's status update turn. Use {briefing} where the agent's live Paperclip issue state should appear. The handoff to the next speaker is appended automatically. Leave blank to use the built-in default.",
+      },
+      promptReaction: {
+        type: "string",
+        title: "Reaction prompt",
+        description: "Instructions for the brief cross-talk turn before each status update. Use {prev_speaker} where the previous speaker's name should appear. Leave blank to use the built-in default.",
+      },
+      promptClosing: {
+        type: "string",
+        title: "Closing prompt",
+        description: "Instructions for the moderator's closing turn at the end of the standup. Leave blank to use the built-in default.",
+      },
+      promptDirectCall: {
+        type: "string",
+        title: "One-on-one call prompt",
+        description: "System-level instructions for an agent on a 1:1 direct call. Use {agent_name} where the agent's display name should appear. Leave blank to use the built-in default.",
+      },
     },
     required: ["liveKitUrl", "liveKitApiKeyRef", "liveKitApiSecretRef"],
     additionalProperties: false,

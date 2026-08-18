@@ -798,11 +798,17 @@ function JoinLinkSection({ companyId }) {
 var DEFAULT_MODERATOR = `This is a daily standup, and you are the moderator. You open the standup, keep it on time, and close it. Be concise and conversational \u2014 one or two sentences per turn, no lists, no markdown. This is a live multi-party voice call. Report what Paperclip issues on your name you have done recently, what's still pending, what needs decisions from the board, and any blockers. After your update, give the floor to another agent. If you have a genuinely useful reaction \u2014 advice, a question \u2014 give it. If not, call the pass_on_reacting tool and don't say anything else; don't force a comment just to fill air time. If a human starts talking while you're mid-sentence, stop immediately. If you need the board's steering or a decision before you can continue, ask the question out loud and then call the ask_board tool with that same question to wait for their answer \u2014 don't just guess or wait for the human to bring it up on their own.`;
 var DEFAULT_PARTICIPANT = `This is a live multi-party voice call daily standup, and you are a participant. Your role is to update the moderator and board with the latest status of your recent Paperclip issues, and to ask questions if there are blockers or decisions that need to be taken. Be concise and conversational \u2014 one or two sentences per issue, no lists, no markdown. Report what Paperclip issues on your name you have done recently, what's still pending, what needs decisions from the board, and any blockers. After your update, give the floor to another agent. If you have a genuinely useful reaction \u2014 advice, a question \u2014 give it. If not, call the pass_on_reacting tool and don't say anything else; don't force a comment just to fill air time. If a human starts talking while you're mid-sentence, stop immediately. If you need the board's steering or a decision before you can continue, ask the question out loud and then call the ask_board tool with that same question to wait for their answer \u2014 don't just guess or wait for the human to bring it up on their own.`;
 var DEFAULT_AGENDA_OPENING = `Open the standup: greet everyone, introduce this as a Papervoice voice standup, and hand it to {next_speaker} for their update.`;
+var DEFAULT_STATUS_UPDATE = `Give a brief status update based on your real Paperclip issue state below.{briefing} If something needs a follow-up ticket, file it with the file_followup_issue tool.`;
+var DEFAULT_REACTION = `Before your own update: {prev_speaker} just gave theirs. If you have a genuinely useful reaction \u2014 advice, a question, encouragement \u2014 say one brief sentence. If not, call the pass_on_reacting tool and don't say anything else; don't force a comment just to fill air time.`;
+var DEFAULT_CLOSING = `Close the standup: briefly recap any decisions or action items from this meeting that don't already have a follow-up ticket, and file each one now with the file_followup_issue tool before wrapping up \u2014 don't rely on whoever made the decision to have filed it themselves. Then ask if anyone has final questions before wrapping up, and thank everyone.`;
 var DEFAULT_DIRECT_CALL = `You are {agent_name} on a one-on-one voice call with a board member. Treat this like calling a colleague to discuss work \u2014 speak naturally and conversationally. Keep your responses concise (one to three sentences) and leave space for the other person to reply. You can discuss your work, answer questions about your issues, and file follow-up Paperclip issues with the file_followup_issue tool when something needs tracking.`;
 function PromptsSection({ companyId }) {
   const [promptModerator, setPromptModerator] = useState(DEFAULT_MODERATOR);
   const [promptParticipant, setPromptParticipant] = useState(DEFAULT_PARTICIPANT);
   const [promptAgendaOpening, setPromptAgendaOpening] = useState(DEFAULT_AGENDA_OPENING);
+  const [promptStatusUpdate, setPromptStatusUpdate] = useState(DEFAULT_STATUS_UPDATE);
+  const [promptReaction, setPromptReaction] = useState(DEFAULT_REACTION);
+  const [promptClosing, setPromptClosing] = useState(DEFAULT_CLOSING);
   const [promptDirectCall, setPromptDirectCall] = useState(DEFAULT_DIRECT_CALL);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(null);
@@ -814,6 +820,9 @@ function PromptsSection({ companyId }) {
       setPromptModerator(values.promptModerator ?? DEFAULT_MODERATOR);
       setPromptParticipant(values.promptParticipant ?? DEFAULT_PARTICIPANT);
       setPromptAgendaOpening(values.promptAgendaOpening ?? DEFAULT_AGENDA_OPENING);
+      setPromptStatusUpdate(values.promptStatusUpdate ?? DEFAULT_STATUS_UPDATE);
+      setPromptReaction(values.promptReaction ?? DEFAULT_REACTION);
+      setPromptClosing(values.promptClosing ?? DEFAULT_CLOSING);
       setPromptDirectCall(values.promptDirectCall ?? DEFAULT_DIRECT_CALL);
     }).catch(() => {
     }).finally(() => setLoading(false));
@@ -833,6 +842,9 @@ function PromptsSection({ companyId }) {
           promptModerator: promptModerator.trim() || null,
           promptParticipant: promptParticipant.trim() || null,
           promptAgendaOpening: promptAgendaOpening.trim() || null,
+          promptStatusUpdate: promptStatusUpdate.trim() || null,
+          promptReaction: promptReaction.trim() || null,
+          promptClosing: promptClosing.trim() || null,
           promptDirectCall: promptDirectCall.trim() || null
         }
       })
@@ -882,6 +894,36 @@ function PromptsSection({ companyId }) {
       rows: 3
     },
     {
+      label: "Status update prompt",
+      hint: /* @__PURE__ */ jsxs(Fragment, { children: [
+        "Instructions for each participant's status update turn. Use ",
+        /* @__PURE__ */ jsx("code", { children: "{briefing}" }),
+        " where the agent's live Paperclip issue state should appear (replaced automatically; empty when offline). The handoff to the next speaker is always appended."
+      ] }),
+      value: promptStatusUpdate,
+      onChange: setPromptStatusUpdate,
+      rows: 4
+    },
+    {
+      label: "Reaction prompt",
+      hint: /* @__PURE__ */ jsxs(Fragment, { children: [
+        "Instructions for the brief cross-talk turn before each status update. Use ",
+        /* @__PURE__ */ jsx("code", { children: "{prev_speaker}" }),
+        " ",
+        "where the previous speaker's name should appear. Leave blank to use the built-in default."
+      ] }),
+      value: promptReaction,
+      onChange: setPromptReaction,
+      rows: 4
+    },
+    {
+      label: "Closing prompt",
+      hint: "Instructions for the moderator's closing turn at the end of the standup.",
+      value: promptClosing,
+      onChange: setPromptClosing,
+      rows: 4
+    },
+    {
       label: "One-on-one call prompt",
       hint: /* @__PURE__ */ jsxs(Fragment, { children: [
         "System-level instructions for an agent on a 1:1 direct call. Use ",
@@ -920,6 +962,9 @@ function PromptsSection({ companyId }) {
               setPromptModerator(DEFAULT_MODERATOR);
               setPromptParticipant(DEFAULT_PARTICIPANT);
               setPromptAgendaOpening(DEFAULT_AGENDA_OPENING);
+              setPromptStatusUpdate(DEFAULT_STATUS_UPDATE);
+              setPromptReaction(DEFAULT_REACTION);
+              setPromptClosing(DEFAULT_CLOSING);
               setPromptDirectCall(DEFAULT_DIRECT_CALL);
             },
             style: btnGhost,
