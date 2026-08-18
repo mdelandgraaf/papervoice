@@ -2,6 +2,7 @@ import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
 import type { EnvSecretRefBinding } from "@paperclipai/plugin-sdk";
 import { createHmac, createHash } from "node:crypto";
 import { execSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 
 function isSecretRef(value: unknown): value is EnvSecretRefBinding {
   return Boolean(
@@ -38,6 +39,33 @@ function mintLiveKitToken(
   return `${header}.${payload}.${sig}`;
 }
 
+const MAX_PRESET_NAME = 80;
+type RoomPreset = { id: string; name: string; agentIds: string[] };
+function readRoomPresets(config: Record<string, unknown>): RoomPreset[] {
+  if (config.roomPresetsVersion !== undefined && config.roomPresetsVersion !== 1) throw new Error("Unsupported room preset version");
+  const raw = config.roomPresets ?? [];
+  if (!Array.isArray(raw) || raw.length > 100) throw new Error("Invalid room presets");
+  const names = new Set<string>();
+  return raw.map((item: any) => {
+    if (!item || typeof item.id !== "string" || !/^[A-Za-z0-9_-]{8,128}$/.test(item.id)) throw new Error("Invalid preset id");
+    const name = String(item.name ?? "").trim().replace(/\s+/g, " ");
+    if (!name || name.length > MAX_PRESET_NAME || names.has(name.toLowerCase())) throw new Error("Preset names must be unique and 1-80 characters");
+    names.add(name.toLowerCase());
+    if (!Array.isArray(item.agentIds) || item.agentIds.length === 0 || item.agentIds.some((id: unknown) => typeof id !== "string" || !id)) throw new Error("Preset needs at least one agent");
+    return { id: item.id, name, agentIds: [...new Set(item.agentIds)] };
+  });
+}
+function normalizePresetInput(params: any, existing: RoomPreset[] = []): RoomPreset {
+  const name = String(params.name ?? "").trim().replace(/\s+/g, " ");
+  if (!name || name.length > MAX_PRESET_NAME) throw new Error("Preset name must be 1-80 characters");
+  const agentIds = Array.isArray(params.agentIds) ? [...new Set(params.agentIds)] : [];
+  if (!agentIds.length || agentIds.some((id: unknown) => typeof id !== "string" || !id)) throw new Error("Select at least one agent");
+  const id = params.id || randomBytes(16).toString("base64url");
+  const duplicate = existing.find((p) => p.id !== id && p.name.toLowerCase() === name.toLowerCase());
+  if (duplicate) throw new Error("A preset with that name already exists");
+  return { id, name, agentIds };
+}
+
 function isBoardroomRunning(): boolean {
   try {
     execSync("pgrep -f boardroom.py", { stdio: "ignore" });
@@ -68,6 +96,16 @@ const plugin = definePlugin({
         }));
       },
     );
+
+    ctx.data.register("room-presets", async (params: { companyId: string }) => {
+      const config = await ctx.config.get(params.companyId);
+      return readRoomPresets(config);
+    });
+    ctx.actions.register("validate-room-preset", async (params: any) => {
+      const config = await ctx.config.get(params.companyId);
+      const existing = readRoomPresets(config);
+      return normalizePresetInput(params, existing);
+    });
 
     ctx.actions.register(
       "mint-join-link",

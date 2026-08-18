@@ -43,6 +43,8 @@ const manifest: PaperclipPluginManifestV1 = {
         title: "Default room",
         default: "papervoice-boardroom",
       },
+      roomPresetsVersion: { type: "number", title: "Room presets version", default: 1 },
+      roomPresets: { type: "array", title: "Named room presets", items: { type: "object" } },
       promptModerator: {
         type: "string",
         title: "Moderator system prompt",

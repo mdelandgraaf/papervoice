@@ -86,36 +86,92 @@ function PapervoiceLinksWidget({ context }) {
   ] });
 }
 function CustomRoomSection({ companyId, agents }) {
-  const available = [...agents].filter((agent) => agent.enabled && agent.identity.trim()).sort((a, b) => a.order - b.order);
-  const [selected, setSelected] = useState([]);
-  const room = "papervoice-room-" + selected.join(".");
-  const toggle = (identity) => setSelected((current) => current.includes(identity) ? current.filter((item) => item !== identity) : [...current, identity]);
+  const { data: loaded, loading, error } = usePluginData("room-presets", { companyId });
+  const validate = usePluginAction("validate-room-preset");
+  const [presets, setPresets] = useState([]), [name, setName] = useState(""), [selected, setSelected] = useState([]), [editing, setEditing] = useState(null), [message, setMessage] = useState(null);
+  useEffect(() => setPresets(loaded ?? []), [loaded]);
+  const byId = new Map(agents.map((a) => [a.id, a]));
+  async function write(next) {
+    const response = await fetch("/api/plugins/papervoice/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ companyId, configJson: await currentConfig(companyId, { roomPresetsVersion: 1, roomPresets: next }) }) });
+    if (!response.ok) throw new Error("Save failed");
+    setPresets(next);
+  }
+  async function save() {
+    try {
+      const preset = await validate({ companyId, id: editing ?? void 0, name, agentIds: selected });
+      await write(editing ? presets.map((p) => p.id === editing ? preset : p) : [...presets, preset]);
+      setName("");
+      setSelected([]);
+      setEditing(null);
+      setMessage("Preset saved.");
+    } catch (e) {
+      setMessage(e?.message ?? "Save failed");
+    }
+  }
+  async function remove(id) {
+    if (!window.confirm("Delete this room preset?")) return;
+    await write(presets.filter((p) => p.id !== id));
+  }
   return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 12 }, children: [
     /* @__PURE__ */ jsxs("div", { children: [
-      /* @__PURE__ */ jsx("h2", { style: { fontSize: 16, fontWeight: 600, color: "#0f172a", marginBottom: 4 }, children: "Create a room" }),
-      /* @__PURE__ */ jsx("p", { style: { fontSize: 13, color: "#64748b" }, children: "Choose exactly which enabled voice agents should join this call." })
+      /* @__PURE__ */ jsx("h2", { style: { fontSize: 16, fontWeight: 600 }, children: "Rooms" }),
+      /* @__PURE__ */ jsx("p", { style: { fontSize: 13, color: "#64748b" }, children: "Saved presets persist across reloads; calls remain ephemeral." })
     ] }),
-    /* @__PURE__ */ jsxs("div", { style: { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 16, display: "flex", flexDirection: "column", gap: 10 }, children: [
-      available.map((agent) => /* @__PURE__ */ jsxs("label", { style: { display: "flex", alignItems: "center", gap: 9, cursor: "pointer", fontSize: 13 }, children: [
-        /* @__PURE__ */ jsx("input", { type: "checkbox", checked: selected.includes(agent.identity), onChange: () => toggle(agent.identity) }),
-        /* @__PURE__ */ jsx("span", { style: { fontWeight: 500 }, children: agent.displayName || agent.name }),
-        /* @__PURE__ */ jsx("code", { style: { marginLeft: "auto", fontSize: 10, color: "#94a3b8" }, children: agent.identity })
-      ] }, agent.id)),
-      available.length === 0 && /* @__PURE__ */ jsx("div", { style: { color: "#94a3b8", fontSize: 12 }, children: "Enable at least one agent with a LiveKit identity first." }),
-      selected.length > 0 && /* @__PURE__ */ jsxs("div", { style: { borderTop: "1px solid #e2e8f0", paddingTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }, children: [
+    /* @__PURE__ */ jsxs("div", { style: { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 16 }, children: [
+      /* @__PURE__ */ jsx("b", { children: "Boardroom" }),
+      /* @__PURE__ */ jsx("span", { style: { marginLeft: 12 }, children: /* @__PURE__ */ jsx(LinkButton, { companyId, room: "papervoice-boardroom", label: "Join room" }) })
+    ] }),
+    loading && /* @__PURE__ */ jsx(Spinner, {}),
+    error && /* @__PURE__ */ jsxs("div", { style: { color: "#dc2626" }, children: [
+      "Failed to load presets: ",
+      error.message
+    ] }),
+    presets.map((p) => {
+      const stale = p.agentIds.filter((id) => !byId.get(id)?.enabled), valid = p.agentIds.filter((id) => byId.get(id)?.enabled);
+      return /* @__PURE__ */ jsxs("div", { style: { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 14, display: "flex", justifyContent: "space-between", gap: 12 }, children: [
         /* @__PURE__ */ jsxs("div", { children: [
-          /* @__PURE__ */ jsxs("div", { style: { fontSize: 12, color: "#475569" }, children: [
-            selected.length,
-            " agent",
-            selected.length === 1 ? "" : "s",
-            " selected"
-          ] }),
-          /* @__PURE__ */ jsx("code", { style: { fontSize: 10, color: "#94a3b8" }, children: room })
+          /* @__PURE__ */ jsx("b", { children: p.name }),
+          /* @__PURE__ */ jsx("div", { style: { fontSize: 12, color: "#64748b" }, children: p.agentIds.map((id) => byId.get(id)?.displayName || id).join(", ") }),
+          stale.length > 0 && /* @__PURE__ */ jsxs("div", { style: { color: "#b45309", fontSize: 12 }, children: [
+            "Needs repair: ",
+            stale.length,
+            " stale selection",
+            stale.length === 1 ? "" : "s"
+          ] })
         ] }),
-        /* @__PURE__ */ jsx(LinkButton, { companyId, room, label: "Start room" })
-      ] })
+        /* @__PURE__ */ jsxs("div", { style: { display: "flex", gap: 6 }, children: [
+          /* @__PURE__ */ jsx(LinkButton, { companyId, room: `papervoice-preset-${p.id}`, label: valid.length ? "Join room" : "No valid agents" }),
+          /* @__PURE__ */ jsx("button", { disabled: !valid.length, onClick: () => {
+            setEditing(p.id);
+            setName(p.name);
+            setSelected(p.agentIds);
+          }, children: "Edit" }),
+          /* @__PURE__ */ jsx("button", { onClick: () => remove(p.id), children: "Delete" })
+        ] })
+      ] }, p.id);
+    }),
+    /* @__PURE__ */ jsxs("div", { style: { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 16, display: "flex", flexDirection: "column", gap: 10 }, children: [
+      /* @__PURE__ */ jsx("b", { children: editing ? "Edit preset" : "Create preset" }),
+      /* @__PURE__ */ jsx("input", { value: name, onChange: (e) => setName(e.target.value), placeholder: "Marketing", maxLength: 80 }),
+      agents.filter((a) => a.enabled).map((a) => /* @__PURE__ */ jsxs("label", { children: [
+        /* @__PURE__ */ jsx("input", { type: "checkbox", checked: selected.includes(a.id), onChange: () => setSelected((x) => x.includes(a.id) ? x.filter((i) => i !== a.id) : [...x, a.id]) }),
+        " ",
+        a.displayName || a.name
+      ] }, a.id)),
+      /* @__PURE__ */ jsx("button", { onClick: save, disabled: !name.trim() || !selected.length, children: editing ? "Save changes" : "Create room" }),
+      editing && /* @__PURE__ */ jsx("button", { onClick: () => {
+        setEditing(null);
+        setName("");
+        setSelected([]);
+      }, children: "Cancel" }),
+      message && /* @__PURE__ */ jsx("div", { style: { fontSize: 12 }, children: message })
     ] })
   ] });
+}
+async function currentConfig(companyId, changes) {
+  const response = await fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`);
+  const body = response.ok ? await response.json().catch(() => ({})) : {};
+  return { ...body.configJson ?? body, ...changes };
 }
 function useWorkerStatus(companyId) {
   const [running, setRunning] = useState(null);

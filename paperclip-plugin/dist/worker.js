@@ -12892,6 +12892,7 @@ function startWorkerRpcHost(options) {
 // src/worker.ts
 import { createHmac, createHash } from "node:crypto";
 import { execSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 function isSecretRef(value) {
   return Boolean(
     value && typeof value === "object" && value.type === "secret_ref" && typeof value.secretId === "string"
@@ -12913,6 +12914,31 @@ function mintLiveKitToken(apiKey, apiSecret, identity, room, ttlHours) {
   ).toString("base64url");
   const sig = createHmac("sha256", apiSecret).update(`${header}.${payload}`).digest("base64url");
   return `${header}.${payload}.${sig}`;
+}
+var MAX_PRESET_NAME = 80;
+function readRoomPresets(config) {
+  if (config.roomPresetsVersion !== void 0 && config.roomPresetsVersion !== 1) throw new Error("Unsupported room preset version");
+  const raw = config.roomPresets ?? [];
+  if (!Array.isArray(raw) || raw.length > 100) throw new Error("Invalid room presets");
+  const names = /* @__PURE__ */ new Set();
+  return raw.map((item) => {
+    if (!item || typeof item.id !== "string" || !/^[A-Za-z0-9_-]{8,128}$/.test(item.id)) throw new Error("Invalid preset id");
+    const name = String(item.name ?? "").trim().replace(/\s+/g, " ");
+    if (!name || name.length > MAX_PRESET_NAME || names.has(name.toLowerCase())) throw new Error("Preset names must be unique and 1-80 characters");
+    names.add(name.toLowerCase());
+    if (!Array.isArray(item.agentIds) || item.agentIds.length === 0 || item.agentIds.some((id) => typeof id !== "string" || !id)) throw new Error("Preset needs at least one agent");
+    return { id: item.id, name, agentIds: [...new Set(item.agentIds)] };
+  });
+}
+function normalizePresetInput(params, existing = []) {
+  const name = String(params.name ?? "").trim().replace(/\s+/g, " ");
+  if (!name || name.length > MAX_PRESET_NAME) throw new Error("Preset name must be 1-80 characters");
+  const agentIds = Array.isArray(params.agentIds) ? [...new Set(params.agentIds)] : [];
+  if (!agentIds.length || agentIds.some((id2) => typeof id2 !== "string" || !id2)) throw new Error("Select at least one agent");
+  const id = params.id || randomBytes(16).toString("base64url");
+  const duplicate = existing.find((p) => p.id !== id && p.name.toLowerCase() === name.toLowerCase());
+  if (duplicate) throw new Error("A preset with that name already exists");
+  return { id, name, agentIds };
 }
 function isBoardroomRunning() {
   try {
@@ -12942,6 +12968,15 @@ var plugin = definePlugin({
         }));
       }
     );
+    ctx.data.register("room-presets", async (params) => {
+      const config = await ctx.config.get(params.companyId);
+      return readRoomPresets(config);
+    });
+    ctx.actions.register("validate-room-preset", async (params) => {
+      const config = await ctx.config.get(params.companyId);
+      const existing = readRoomPresets(config);
+      return normalizePresetInput(params, existing);
+    });
     ctx.actions.register(
       "mint-join-link",
       async (params) => {

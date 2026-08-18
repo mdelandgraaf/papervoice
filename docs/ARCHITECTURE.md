@@ -72,6 +72,10 @@ ElevenLabs churns fast — the product was renamed twice (Conversational AI → 
 
 Implementation note: LiveKit Cloud's room API is eventually consistent and dedups room creation by name for a short cooldown after deletion — reusing a fixed room name back-to-back (e.g. always `papervoice-healthcheck`) intermittently 404s on delete. `scripts/healthcheck` uses a fresh UUID-suffixed room name per run to avoid this.
 
+## Durable named room presets (PER-323)
+
+The plugin persists version-1 `roomPresets` and `roomPresetsVersion` alongside its existing company configuration. Presets contain an opaque stable id, a normalized case-insensitive unique name, and deduplicated Paperclip agent IDs; writes read-modify-write the full config so LiveKit references and prompt overrides survive. A preset is not a persistent LiveKit room: the UI mints `papervoice-preset-<id>` links and the worker resolves that id against the current enabled voice roster at job start. Unknown or deleted ids and presets with zero valid agents fail closed; stale members are shown in the dashboard and valid members may proceed. The legacy `papervoice-room-<identity>...` parser remains for already-issued links.
+
 ## Required accounts & secrets (env vars only, never committed)
 
 - `ELEVENLABS_API_KEY` — TTS (and optionally hosted agent for fallback path)

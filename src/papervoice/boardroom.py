@@ -52,6 +52,7 @@ from papervoice.personas import (
     load_roster_from_paperclip,
     parse_custom_room_identities,
     persona_by_identity,
+    resolve_named_preset,
 )
 from papervoice.prompts import PromptConfig, load_prompt_config
 from papervoice.vendors import elevenlabs as el_vendor
@@ -778,6 +779,15 @@ async def entrypoint(ctx) -> None:
         logger.info("starting custom room %s with agents %s", ctx.room.name, [p.identity for p in roster])
         summary_issue_id = os.environ.get("PAPERCLIP_STANDUP_SUMMARY_ISSUE_ID")
         await run_standup(ctx.room.name, summary_issue_id=summary_issue_id, roster=roster)
+    elif ctx.room.name.startswith("papervoice-preset-"):
+        live_roster = await asyncio.to_thread(load_roster_from_paperclip)
+        try:
+            roster = resolve_named_preset(ctx.room.name, await asyncio.to_thread(pc_vendor.get_plugin_config), live_roster)
+        except ValueError:
+            logger.exception("invalid named preset %s; closing", ctx.room.name); return
+        if not roster:
+            logger.error("named preset %s is unknown or has no valid enabled agents; closing", ctx.room.name); return
+        await run_standup(ctx.room.name, summary_issue_id=os.environ.get("PAPERCLIP_STANDUP_SUMMARY_ISSUE_ID"), roster=roster)
     else:
         # Full boardroom standup.
         summary_issue_id = os.environ.get("PAPERCLIP_STANDUP_SUMMARY_ISSUE_ID")

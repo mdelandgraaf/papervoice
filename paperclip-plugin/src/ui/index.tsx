@@ -109,32 +109,18 @@ export function PapervoiceLinksWidget({ context }: PluginWidgetProps) {
 }
 
 function CustomRoomSection({ companyId, agents }: { companyId: string; agents: VoiceAgent[] }) {
-  const available = [...agents].filter((agent) => agent.enabled && agent.identity.trim()).sort((a, b) => a.order - b.order);
-  const [selected, setSelected] = useState<string[]>([]);
-  const room = "papervoice-room-" + selected.join(".");
-  const toggle = (identity: string) => setSelected((current) => current.includes(identity) ? current.filter((item) => item !== identity) : [...current, identity]);
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div><h2 style={{ fontSize: 16, fontWeight: 600, color: "#0f172a", marginBottom: 4 }}>Create a room</h2>
-        <p style={{ fontSize: 13, color: "#64748b" }}>Choose exactly which enabled voice agents should join this call.</p></div>
-      <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
-        {available.map((agent) => (
-          <label key={agent.id} style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", fontSize: 13 }}>
-            <input type="checkbox" checked={selected.includes(agent.identity)} onChange={() => toggle(agent.identity)} />
-            <span style={{ fontWeight: 500 }}>{agent.displayName || agent.name}</span>
-            <code style={{ marginLeft: "auto", fontSize: 10, color: "#94a3b8" }}>{agent.identity}</code>
-          </label>
-        ))}
-        {available.length === 0 && <div style={{ color: "#94a3b8", fontSize: 12 }}>Enable at least one agent with a LiveKit identity first.</div>}
-        {selected.length > 0 && <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <div><div style={{ fontSize: 12, color: "#475569" }}>{selected.length} agent{selected.length === 1 ? "" : "s"} selected</div>
-            <code style={{ fontSize: 10, color: "#94a3b8" }}>{room}</code></div>
-          <LinkButton companyId={companyId} room={room} label="Start room" />
-        </div>}
-      </div>
-    </div>
-  );
+  type Preset = { id: string; name: string; agentIds: string[] };
+  const { data: loaded, loading, error } = usePluginData<Preset[]>("room-presets", { companyId });
+  const validate = usePluginAction("validate-room-preset");
+  const [presets, setPresets] = useState<Preset[]>([]), [name, setName] = useState(""), [selected, setSelected] = useState<string[]>([]), [editing, setEditing] = useState<string | null>(null), [message, setMessage] = useState<string | null>(null);
+  useEffect(() => setPresets(loaded ?? []), [loaded]);
+  const byId = new Map(agents.map((a) => [a.id, a]));
+  async function write(next: Preset[]) { const response = await fetch("/api/plugins/papervoice/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ companyId, configJson: await currentConfig(companyId, { roomPresetsVersion: 1, roomPresets: next }) }) }); if (!response.ok) throw new Error("Save failed"); setPresets(next); }
+  async function save() { try { const preset = await validate({ companyId, id: editing ?? undefined, name, agentIds: selected }) as Preset; await write(editing ? presets.map((p) => p.id === editing ? preset : p) : [...presets, preset]); setName(""); setSelected([]); setEditing(null); setMessage("Preset saved."); } catch (e: any) { setMessage(e?.message ?? "Save failed"); } }
+  async function remove(id: string) { if (!window.confirm("Delete this room preset?")) return; await write(presets.filter((p) => p.id !== id)); }
+  return <div style={{ display: "flex", flexDirection: "column", gap: 12 }}><div><h2 style={{ fontSize: 16, fontWeight: 600 }}>Rooms</h2><p style={{ fontSize: 13, color: "#64748b" }}>Saved presets persist across reloads; calls remain ephemeral.</p></div><div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 16 }}><b>Boardroom</b><span style={{ marginLeft: 12 }}><LinkButton companyId={companyId} room="papervoice-boardroom" label="Join room" /></span></div>{loading && <Spinner />}{error && <div style={{ color: "#dc2626" }}>Failed to load presets: {error.message}</div>}{presets.map((p) => { const stale = p.agentIds.filter((id) => !byId.get(id)?.enabled), valid = p.agentIds.filter((id) => byId.get(id)?.enabled); return <div key={p.id} style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 14, display: "flex", justifyContent: "space-between", gap: 12 }}><div><b>{p.name}</b><div style={{ fontSize: 12, color: "#64748b" }}>{p.agentIds.map((id) => byId.get(id)?.displayName || id).join(", ")}</div>{stale.length > 0 && <div style={{ color: "#b45309", fontSize: 12 }}>Needs repair: {stale.length} stale selection{stale.length === 1 ? "" : "s"}</div>}</div><div style={{ display: "flex", gap: 6 }}><LinkButton companyId={companyId} room={`papervoice-preset-${p.id}`} label={valid.length ? "Join room" : "No valid agents"} /><button disabled={!valid.length} onClick={() => { setEditing(p.id); setName(p.name); setSelected(p.agentIds); }}>Edit</button><button onClick={() => remove(p.id)}>Delete</button></div></div>; })}<div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}><b>{editing ? "Edit preset" : "Create preset"}</b><input value={name} onChange={(e) => setName(e.target.value)} placeholder="Marketing" maxLength={80} />{agents.filter((a) => a.enabled).map((a) => <label key={a.id}><input type="checkbox" checked={selected.includes(a.id)} onChange={() => setSelected((x) => x.includes(a.id) ? x.filter((i) => i !== a.id) : [...x, a.id])} /> {a.displayName || a.name}</label>)}<button onClick={save} disabled={!name.trim() || !selected.length}>{editing ? "Save changes" : "Create room"}</button>{editing && <button onClick={() => { setEditing(null); setName(""); setSelected([]); }}>Cancel</button>}{message && <div style={{ fontSize: 12 }}>{message}</div>}</div></div>;
 }
+async function currentConfig(companyId: string, changes: Record<string, unknown>) { const response = await fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`); const body = response.ok ? await response.json().catch(() => ({})) : {}; return { ...(body.configJson ?? body), ...changes }; }
 
 function useWorkerStatus(companyId: string) {
   const [running, setRunning] = useState<boolean | null>(null);

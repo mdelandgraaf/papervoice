@@ -24,6 +24,7 @@ PATCH /api/agents/:id (requires agents:configure on that agent).
 
 import logging
 from dataclasses import dataclass
+from papervoice.room_presets import PRESET_ROOM_PREFIX, project_preset, read_presets
 
 BOARDROOM_ROOM = "papervoice-boardroom"
 DIRECT_ROOM_PREFIX = "papervoice-direct-"
@@ -112,6 +113,14 @@ def parse_custom_room_identities(room_name: str) -> tuple[str, ...] | None:
     identities = tuple(part for part in encoded.split(".") if part)
     return identities or None
 
+
+def resolve_named_preset(room_name: str, config: dict, roster: tuple[Persona, ...]) -> tuple[Persona, ...] | None:
+    if not room_name.startswith(PRESET_ROOM_PREFIX): return None
+    preset=next((p for p in read_presets(config) if p["id"]==room_name[len(PRESET_ROOM_PREFIX):]),None)
+    if preset is None: return ()
+    projection=project_preset(preset,(p.paperclip_agent_id for p in roster if p.paperclip_agent_id))
+    wanted=set(projection.valid_agent_ids)
+    return tuple(p for p in roster if p.paperclip_agent_id in wanted)
 
 def filter_roster(roster: tuple[Persona, ...], identities: tuple[str, ...]) -> tuple[Persona, ...]:
     """Keep only the personas whose identity is in `identities`, preserving roster order.
