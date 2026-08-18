@@ -7,6 +7,84 @@ import {
   Spinner
 } from "@paperclipai/plugin-sdk/ui";
 import { jsx, jsxs } from "react/jsx-runtime";
+function LinkButton({ companyId, room, label }) {
+  const mintJoinLink = usePluginAction("mint-join-link");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  async function openLink() {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await mintJoinLink({ companyId, identity: "human-guest", room, ttlHours: 48 });
+      window.open(result.joinUrl, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setError(err?.message ?? "Failed to generate link");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }, children: [
+    /* @__PURE__ */ jsx(
+      "button",
+      {
+        onClick: openLink,
+        disabled: busy,
+        title: `Open ${room}`,
+        style: {
+          background: "#2563eb",
+          border: "none",
+          borderRadius: 6,
+          padding: "5px 10px",
+          color: "#fff",
+          fontSize: 12,
+          fontWeight: 600,
+          cursor: busy ? "not-allowed" : "pointer",
+          opacity: busy ? 0.6 : 1,
+          whiteSpace: "nowrap"
+        },
+        children: busy ? "Opening\u2026" : label
+      }
+    ),
+    error && /* @__PURE__ */ jsx("span", { style: { color: "#dc2626", fontSize: 10, maxWidth: 180 }, children: error })
+  ] });
+}
+function PapervoiceLinksWidget({ context }) {
+  const companyId = context.companyId ?? "";
+  const { data: agents, loading, error } = usePluginData("agents", { companyId });
+  const linkedAgents = [...agents ?? []].filter((agent) => agent.identity.trim()).sort((a, b) => a.order - b.order);
+  return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 10 }, children: [
+    /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }, children: [
+      /* @__PURE__ */ jsxs("div", { children: [
+        /* @__PURE__ */ jsx("div", { style: { fontWeight: 600, color: "#0f172a" }, children: "Boardroom" }),
+        /* @__PURE__ */ jsx("code", { style: { fontSize: 11, color: "#64748b" }, children: "papervoice-boardroom" })
+      ] }),
+      /* @__PURE__ */ jsx(LinkButton, { companyId, room: "papervoice-boardroom", label: "Join room" })
+    ] }),
+    loading && /* @__PURE__ */ jsx(Spinner, {}),
+    error && /* @__PURE__ */ jsxs("div", { style: { color: "#dc2626", fontSize: 12 }, children: [
+      "Failed to load agents: ",
+      error.message
+    ] }),
+    linkedAgents.map((agent) => /* @__PURE__ */ jsxs("div", { style: {
+      borderTop: "1px solid #e2e8f0",
+      paddingTop: 8,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 12
+    }, children: [
+      /* @__PURE__ */ jsxs("div", { style: { minWidth: 0 }, children: [
+        /* @__PURE__ */ jsx("div", { style: { fontSize: 13, fontWeight: 500, color: "#1e293b" }, children: agent.displayName || agent.name }),
+        /* @__PURE__ */ jsxs("code", { style: { display: "block", overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: "#94a3b8" }, children: [
+          "papervoice-direct-",
+          agent.identity
+        ] })
+      ] }),
+      /* @__PURE__ */ jsx(LinkButton, { companyId, room: `papervoice-direct-${agent.identity}`, label: "Call agent" })
+    ] }, agent.id)),
+    !loading && !error && linkedAgents.length === 0 && /* @__PURE__ */ jsx("div", { style: { color: "#94a3b8", fontSize: 12 }, children: "No agents have a LiveKit identity configured." })
+  ] });
+}
 function useWorkerStatus(companyId) {
   const [running, setRunning] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1035,5 +1113,6 @@ function PapervoicePage({ context }) {
   );
 }
 export {
+  PapervoiceLinksWidget,
   PapervoicePage
 };

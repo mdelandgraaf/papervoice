@@ -7,7 +7,7 @@ import {
   Spinner,
   ActionBar,
 } from "@paperclipai/plugin-sdk/ui";
-import type { PluginCompanySettingsPageProps } from "@paperclipai/plugin-sdk/ui";
+import type { PluginCompanySettingsPageProps, PluginWidgetProps } from "@paperclipai/plugin-sdk/ui";
 
 interface VoiceAgent {
   id: string;
@@ -30,6 +30,82 @@ interface CompanySecretSummary {
   name: string;
   key?: string;
   status?: string;
+}
+
+function LinkButton({ companyId, room, label }: { companyId: string; room: string; label: string }) {
+  const mintJoinLink = usePluginAction("mint-join-link");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function openLink() {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = (await mintJoinLink({ companyId, identity: "human-guest", room, ttlHours: 48 })) as { joinUrl: string };
+      window.open(result.joinUrl, "_blank", "noopener,noreferrer");
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to generate link");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
+      <button
+        onClick={openLink}
+        disabled={busy}
+        title={`Open ${room}`}
+        style={{
+          background: "#2563eb", border: "none", borderRadius: 6, padding: "5px 10px",
+          color: "#fff", fontSize: 12, fontWeight: 600,
+          cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1, whiteSpace: "nowrap",
+        }}
+      >
+        {busy ? "Opening…" : label}
+      </button>
+      {error && <span style={{ color: "#dc2626", fontSize: 10, maxWidth: 180 }}>{error}</span>}
+    </div>
+  );
+}
+
+export function PapervoiceLinksWidget({ context }: PluginWidgetProps) {
+  const companyId = context.companyId ?? "";
+  const { data: agents, loading, error } = usePluginData<VoiceAgent[]>("agents", { companyId });
+  const linkedAgents = [...(agents ?? [])]
+    .filter((agent) => agent.identity.trim())
+    .sort((a, b) => a.order - b.order);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div>
+          <div style={{ fontWeight: 600, color: "#0f172a" }}>Boardroom</div>
+          <code style={{ fontSize: 11, color: "#64748b" }}>papervoice-boardroom</code>
+        </div>
+        <LinkButton companyId={companyId} room="papervoice-boardroom" label="Join room" />
+      </div>
+      {loading && <Spinner />}
+      {error && <div style={{ color: "#dc2626", fontSize: 12 }}>Failed to load agents: {error.message}</div>}
+      {linkedAgents.map((agent) => (
+        <div key={agent.id} style={{
+          borderTop: "1px solid #e2e8f0", paddingTop: 8, display: "flex",
+          alignItems: "center", justifyContent: "space-between", gap: 12,
+        }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 500, color: "#1e293b" }}>{agent.displayName || agent.name}</div>
+            <code style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: "#94a3b8" }}>
+              papervoice-direct-{agent.identity}
+            </code>
+          </div>
+          <LinkButton companyId={companyId} room={`papervoice-direct-${agent.identity}`} label="Call agent" />
+        </div>
+      ))}
+      {!loading && !error && linkedAgents.length === 0 && (
+        <div style={{ color: "#94a3b8", fontSize: 12 }}>No agents have a LiveKit identity configured.</div>
+      )}
+    </div>
+  );
 }
 
 function useWorkerStatus(companyId: string) {

@@ -14,6 +14,7 @@ const manifest: PaperclipPluginManifestV1 = {
     "api.routes.register",
     "instance.settings.register",
     "secrets.read-ref",
+    "ui.dashboardWidget.register",
   ],
   entrypoints: {
     worker: "dist/worker.js",
@@ -72,6 +73,13 @@ const manifest: PaperclipPluginManifestV1 = {
   ],
   ui: {
     slots: [
+      {
+        type: "dashboardWidget",
+        id: "papervoice-links",
+        displayName: "Papervoice Links",
+        exportName: "PapervoiceLinksWidget",
+        order: 40,
+      },
       {
         type: "companySettingsPage",
         id: "papervoice-settings",

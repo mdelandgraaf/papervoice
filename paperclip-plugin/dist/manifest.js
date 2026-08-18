@@ -11,7 +11,8 @@ var manifest = {
     "agents.read",
     "api.routes.register",
     "instance.settings.register",
-    "secrets.read-ref"
+    "secrets.read-ref",
+    "ui.dashboardWidget.register"
   ],
   entrypoints: {
     worker: "dist/worker.js",
@@ -70,6 +71,13 @@ var manifest = {
   ],
   ui: {
     slots: [
+      {
+        type: "dashboardWidget",
+        id: "papervoice-links",
+        displayName: "Papervoice Links",
+        exportName: "PapervoiceLinksWidget",
+        order: 40
+      },
       {
         type: "companySettingsPage",
         id: "papervoice-settings",
