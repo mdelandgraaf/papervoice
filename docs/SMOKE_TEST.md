@@ -36,7 +36,8 @@ system depends on against the **live** APIs, not mocks:
 | LiveKit room lifecycle | room create/delete API still works |
 | LiveKit room join | a real WebRTC participant can join a room (not just the server-side registry) |
 | LiveKit SIP trunk status | the SIP API is reachable (0 trunks is fine — telephony isn't provisioned yet) |
-| Boardroom voice roster | every persona's `voice_id` still exists on the ElevenLabs account |
+| Boardroom voice roster | every static-fallback persona's `voice_id` still exists on the ElevenLabs account |
+| Live roster voices | every live Paperclip-configured persona `voice_id` will actually **stream** on this tier — category × subscription entitlement, not just library presence (PER-311) |
 
 A `FAIL` line names the exact surface that broke — that's where to start
 debugging, not a re-run.

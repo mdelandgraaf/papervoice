@@ -33,8 +33,14 @@ class ElevenLabsAdapterTest(unittest.TestCase):
         os.environ["ELEVENLABS_API_KEY"] = "sk-test"
         self.assertEqual(el._api_key(), "sk-test")
 
-    def test_voice_id_defaults_to_rachel(self):
+    def test_voice_id_defaults_to_default_premade(self):
         self.assertEqual(el.voice_id(), el.DEFAULT_VOICE_ID)
+
+    def test_default_voice_is_a_present_premade_not_rachel(self):
+        # PER-311: DEFAULT_VOICE_ID must be a premade voice actually on this account.
+        # Rachel (21m00Tcm4TlvDq8ikWAM) is NOT on it; Sarah is the fallback target.
+        self.assertEqual(el.DEFAULT_VOICE_ID, "EXAVITQu4vr4xnSDxMaL")  # Sarah
+        self.assertNotEqual(el.DEFAULT_VOICE_ID, "21m00Tcm4TlvDq8ikWAM")  # Rachel
 
     def test_voice_id_override(self):
         os.environ["ELEVENLABS_VOICE_ID"] = "custom-voice"
@@ -95,50 +101,158 @@ class ElevenLabsAdapterTest(unittest.TestCase):
                 el.stt_roundtrip(b"fake-audio-bytes")
 
 
+class IsStreamableCategoryTest(unittest.TestCase):
+    """PER-311: streamability is category x subscription entitlement, not library presence."""
+
+    PRO = {"can_use_professional_voice_cloning": True, "can_use_instant_voice_cloning": True}
+    NONE = {"can_use_professional_voice_cloning": False, "can_use_instant_voice_cloning": False}
+    INSTANT_ONLY = {"can_use_professional_voice_cloning": False, "can_use_instant_voice_cloning": True}
+
+    def test_premade_always_streams_regardless_of_entitlements(self):
+        for cat in ("premade", "high_quality", "famous", "PREMADE"):
+            self.assertTrue(el._is_streamable_category(cat, self.NONE), cat)
+
+    def test_professional_needs_professional_entitlement(self):
+        self.assertFalse(el._is_streamable_category("professional", self.NONE))
+        self.assertFalse(el._is_streamable_category("professional", self.INSTANT_ONLY))
+        self.assertTrue(el._is_streamable_category("professional", self.PRO))
+
+    def test_cloned_and_generated_need_instant_entitlement(self):
+        for cat in ("cloned", "generated"):
+            self.assertFalse(el._is_streamable_category(cat, self.NONE), cat)
+            self.assertTrue(el._is_streamable_category(cat, self.INSTANT_ONLY), cat)
+
+    def test_unknown_category_biases_strict(self):
+        # An unrecognized custom category must not stream without the instant entitlement.
+        self.assertFalse(el._is_streamable_category("some-future-category", self.NONE))
+        self.assertFalse(el._is_streamable_category("", self.NONE))
+        self.assertFalse(el._is_streamable_category(None, self.NONE))
+        self.assertTrue(el._is_streamable_category("some-future-category", self.INSTANT_ONLY))
+
+
 class ResolveVoiceIdTest(unittest.TestCase):
-    """PER-306: a voice_id that has drifted off the account must fall back to a
-    voice the account actually lists, so an agent is never left silent."""
+    """PER-306/PER-311: a voice_id that won't STREAM on this tier (absent from the
+    account, or a professional/cloned voice the tier can't stream) must fall back to a
+    voice that does stream, so an agent is never left silent."""
+
+    # PER-311's exact failure: "Andy C" is a professional voice, present in the library
+    # and REST-synthesizable, that the payg tier cannot stream.
+    ANDY_C = "P4DhdyNCB4Nl6MA0sL45"
+    NO_CLONING = {"can_use_professional_voice_cloning": False, "can_use_instant_voice_cloning": False}
+    PRO_CLONING = {"can_use_professional_voice_cloning": True, "can_use_instant_voice_cloning": True}
 
     def setUp(self):
         self._env = mock.patch.dict(os.environ, {}, clear=False)
         self._env.start()
         os.environ.pop("ELEVENLABS_VOICE_ID", None)  # voice_id() -> DEFAULT_VOICE_ID
-        el._account_voice_ids.cache_clear()
+        el._streamable_voice_ids.cache_clear()
 
     def tearDown(self):
-        el._account_voice_ids.cache_clear()
+        el._streamable_voice_ids.cache_clear()
         self._env.stop()
 
-    def test_valid_voice_passes_through(self):
-        with mock.patch.object(el, "list_voice_ids", return_value={"good-1", "good-2"}):
+    def _account(self, voices: dict, subscription: dict):
+        """Patch the two /voices + /subscription surfaces resolve_voice_id gates on."""
+        return (
+            mock.patch.object(el, "list_voices", return_value=voices),
+            mock.patch.object(el, "get_subscription", return_value=subscription),
+        )
+
+    def test_valid_premade_passes_through(self):
+        voices = {"good-1": "premade", "good-2": "premade"}
+        v, s = self._account(voices, self.NO_CLONING)
+        with v, s:
             self.assertEqual(el.resolve_voice_id("good-1"), "good-1")
 
-    def test_invalid_voice_falls_back_to_default_when_present(self):
-        available = {el.DEFAULT_VOICE_ID, "other"}
-        with mock.patch.object(el, "list_voice_ids", return_value=available):
-            self.assertEqual(el.resolve_voice_id("P4DhdyNCB4Nl6MA0sL45"), el.DEFAULT_VOICE_ID)
+    def test_professional_voice_falls_back_when_tier_cannot_stream_it(self):
+        # The live outage: Andy C is present + REST-fine, but not streamable on payg.
+        voices = {self.ANDY_C: "professional", el.DEFAULT_VOICE_ID: "premade"}
+        v, s = self._account(voices, self.NO_CLONING)
+        with v, s:
+            self.assertEqual(el.resolve_voice_id(self.ANDY_C), el.DEFAULT_VOICE_ID)
 
-    def test_invalid_voice_falls_back_to_candidate_when_default_absent(self):
-        # PER-306's actual account: DEFAULT_VOICE_ID absent, but Sarah present.
-        available = {"EXAVITQu4vr4xnSDxMaL", "JBFqnCBsd6RMkjVDRZzb"}
-        with mock.patch.object(el, "list_voice_ids", return_value=available):
-            self.assertEqual(el.resolve_voice_id("P4DhdyNCB4Nl6MA0sL45"), "EXAVITQu4vr4xnSDxMaL")
+    def test_professional_voice_passes_through_when_tier_can_stream_it(self):
+        voices = {self.ANDY_C: "professional", el.DEFAULT_VOICE_ID: "premade"}
+        v, s = self._account(voices, self.PRO_CLONING)
+        with v, s:
+            self.assertEqual(el.resolve_voice_id(self.ANDY_C), self.ANDY_C)
 
-    def test_invalid_voice_falls_back_to_any_available_as_last_resort(self):
-        available = {"zzz-only-voice"}
-        with mock.patch.object(el, "list_voice_ids", return_value=available):
+    def test_absent_voice_falls_back_to_default_when_present(self):
+        voices = {el.DEFAULT_VOICE_ID: "premade", "other": "premade"}
+        v, s = self._account(voices, self.NO_CLONING)
+        with v, s:
+            self.assertEqual(el.resolve_voice_id("not-on-account"), el.DEFAULT_VOICE_ID)
+
+    def test_falls_back_to_candidate_when_default_absent(self):
+        # DEFAULT_VOICE_ID absent, but George present (Sarah IS the default here).
+        voices = {"JBFqnCBsd6RMkjVDRZzb": "premade"}
+        v, s = self._account(voices, self.NO_CLONING)
+        with v, s:
+            self.assertEqual(el.resolve_voice_id(self.ANDY_C), "JBFqnCBsd6RMkjVDRZzb")
+
+    def test_falls_back_to_any_streamable_as_last_resort(self):
+        voices = {"zzz-only-voice": "premade"}
+        v, s = self._account(voices, self.NO_CLONING)
+        with v, s:
             self.assertEqual(el.resolve_voice_id("nope"), "zzz-only-voice")
 
+    def test_no_streamable_voices_trusts_caller(self):
+        # Library exists but nothing streams (all professional, no entitlement).
+        voices = {"pro-1": "professional", "pro-2": "professional"}
+        v, s = self._account(voices, self.NO_CLONING)
+        with v, s:
+            self.assertEqual(el.resolve_voice_id("nope"), "nope")
+
     def test_empty_request_uses_env_default_then_validates(self):
-        os.environ.pop("ELEVENLABS_VOICE_ID", None)  # -> DEFAULT_VOICE_ID
-        available = {"EXAVITQu4vr4xnSDxMaL"}  # DEFAULT_VOICE_ID absent
-        with mock.patch.object(el, "list_voice_ids", return_value=available):
-            self.assertEqual(el.resolve_voice_id(""), "EXAVITQu4vr4xnSDxMaL")
-            self.assertEqual(el.resolve_voice_id(None), "EXAVITQu4vr4xnSDxMaL")
+        os.environ.pop("ELEVENLABS_VOICE_ID", None)  # -> DEFAULT_VOICE_ID (Sarah, premade)
+        voices = {el.DEFAULT_VOICE_ID: "premade"}
+        v, s = self._account(voices, self.NO_CLONING)
+        with v, s:
+            self.assertEqual(el.resolve_voice_id(""), el.DEFAULT_VOICE_ID)
+            self.assertEqual(el.resolve_voice_id(None), el.DEFAULT_VOICE_ID)
+
+    def test_subscription_unreachable_degrades_to_premade_only(self):
+        # Voices list succeeds, subscription fails: only premade is trusted to stream,
+        # so a professional configured voice still falls back rather than risking silence.
+        voices = {self.ANDY_C: "professional", el.DEFAULT_VOICE_ID: "premade"}
+        with mock.patch.object(el, "list_voices", return_value=voices):
+            with mock.patch.object(el, "get_subscription", side_effect=RuntimeError("sub down")):
+                self.assertEqual(el.resolve_voice_id(self.ANDY_C), el.DEFAULT_VOICE_ID)
 
     def test_unreachable_account_trusts_caller(self):
-        with mock.patch.object(el, "list_voice_ids", side_effect=RuntimeError("api down")):
+        with mock.patch.object(el, "list_voices", side_effect=RuntimeError("api down")):
             self.assertEqual(el.resolve_voice_id("whatever"), "whatever")
+
+
+class StreamabilityReportTest(unittest.TestCase):
+    """The healthcheck's streaming-path gate for the live roster (PER-311)."""
+
+    def setUp(self):
+        self._env = mock.patch.dict(os.environ, {}, clear=False)
+        self._env.start()
+
+    def tearDown(self):
+        self._env.stop()
+
+    def test_reports_category_and_streamability_per_voice(self):
+        voices = {"premade-1": "premade", "pro-1": "professional"}
+        sub = {"can_use_professional_voice_cloning": False, "can_use_instant_voice_cloning": False}
+        with mock.patch.object(el, "list_voices", return_value=voices):
+            with mock.patch.object(el, "get_subscription", return_value=sub):
+                report = el.streamability_report(["premade-1", "pro-1", "absent-1"])
+        self.assertEqual(report, [
+            ("premade-1", "premade", True),
+            ("pro-1", "professional", False),
+            ("absent-1", None, False),
+        ])
+
+    def test_subscription_failure_treats_only_premade_as_streamable(self):
+        voices = {"premade-1": "premade", "pro-1": "professional"}
+        with mock.patch.object(el, "list_voices", return_value=voices):
+            with mock.patch.object(el, "get_subscription", side_effect=RuntimeError("down")):
+                report = dict((vid, ok) for vid, _cat, ok in el.streamability_report(["premade-1", "pro-1"]))
+        self.assertTrue(report["premade-1"])
+        self.assertFalse(report["pro-1"])
 
 
 class LiveKitAdapterTest(unittest.IsolatedAsyncioTestCase):

@@ -13,8 +13,10 @@ the system depends on:
      this only catches the SIP API itself going unreachable or the SDK surface breaking.
   6. Boardroom voice roster: every static-fallback persona's voice_id still exists on the account.
   7. Live roster voices: every LIVE Paperclip-configured persona voice_id (metadata.papervoice.voice_id)
-     still exists on the account — the voices real calls actually use (PER-306). Catches a
-     configured voice drifting off the account, which otherwise leaves the agent silent on a call.
+     will actually STREAM on this tier — the voices real calls use (PER-306/PER-311). Gates on
+     streamability (category x subscription entitlement), not library presence or a REST synth:
+     a professional/cloned voice can be listed and pass a REST roundtrip yet be rejected by the
+     realtime WebSocket, leaving the agent silent on the call.
   8. Paperclip API reachability: a real authenticated call (Milestone 3), so a bad/expired
      PAPERCLIP_API_KEY or URL drift is caught here instead of during a call.
   9. Paperclip persona roster: every persona's bound paperclip_agent_id (personas.py)
@@ -96,14 +98,19 @@ def check_boardroom_voices() -> str:
 
 
 def check_live_roster_voices() -> str:
-    """Every LIVE Paperclip-configured persona voice_id still exists on the account.
+    """Every LIVE Paperclip-configured persona voice_id will actually STREAM on this tier.
 
     check_boardroom_voices above only covers the static BOARDROOM_ROSTER fallback;
     real calls use the live roster built from each agent's metadata.papervoice.voice_id
-    (personas.load_roster_from_paperclip / _resolve_direct_persona). A voice_id that
-    drifted off the account there makes the agent silent on a real call while the
-    static check stays green — exactly PER-306. Catch it here, in the check, not in a
-    failed board meeting.
+    (personas.load_roster_from_paperclip / _resolve_direct_persona). A voice that won't
+    stream there makes the agent silent on a real call while the static check stays green.
+
+    Crucially this gates on **streamability**, not library presence or a REST roundtrip.
+    PER-306's P4Dhdy… ("Andy C", professional) is present in /voices AND synthesizes over
+    REST (tts_roundtrip stays green), yet the realtime WebSocket rejects it with
+    voice_id_does_not_exist because this payg tier can't stream professional voices
+    (PER-311). streamability_report gates on category × subscription entitlement, so it
+    catches exactly that here — in the check, not in a failed board meeting.
     """
     try:
         configs = pc.get_voice_enabled_agents()
@@ -111,18 +118,19 @@ def check_live_roster_voices() -> str:
         return f"skipped — Paperclip roster unreachable ({type(exc).__name__})"
     if not configs:
         return "no voice-enabled agents configured in Paperclip (nothing to check)"
-    # Check against list_voice_ids() (the account voice *library*). This is the signal
-    # that tracks the streaming WebSocket TTS live calls use: it rejected PER-306's
-    # unlisted P4Dhdy… placeholder, while the lenient REST synth path did not — so a
-    # REST roundtrip is NOT a valid check here, library membership is.
-    available = el.list_voice_ids()
-    bad = [(c.display_name, c.voice_id) for c in configs if c.voice_id not in available]
+    report = {vid: (category, streamable) for vid, category, streamable in el.streamability_report([c.voice_id for c in configs])}
+    bad = []
+    for c in configs:
+        category, streamable = report[c.voice_id]
+        if not streamable:
+            reason = "not in account library" if category is None else f"category {category!r} not streamable on this tier"
+            bad.append(f"{c.display_name} ({c.voice_id}: {reason})")
     if bad:
         raise RuntimeError(
-            "live roster voice_id not in ElevenLabs library (streaming TTS will reject) for: "
-            + ", ".join(f"{name} ({vid})" for name, vid in bad)
+            "live roster voice_id will not stream on the current ElevenLabs tier "
+            "(realtime WebSocket TTS will reject; PER-311) for: " + ", ".join(bad)
         )
-    return f"{len(configs)} live persona voice(s) in library ({', '.join(c.display_name for c in configs)})"
+    return f"{len(configs)} live persona voice(s) streamable ({', '.join(c.display_name for c in configs)})"
 
 
 def check_paperclip_api() -> str:
