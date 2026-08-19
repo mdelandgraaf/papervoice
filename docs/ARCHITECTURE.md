@@ -139,6 +139,15 @@ company can be onboarded without any host restart or `.env` edit:
    `500`, so the operator gets an actionable error.
 3. Rate-limited (60 req/min per companyId) and every attempt is audit-logged
    with `outcome`, `companyId`, `roomName`, and `exp`.
+4. On the worker side (PER-411), `PaperclipClient.load_from_plugin` reads the
+   token from the parsed LiveKit room metadata, calls the route, and returns a
+   ready `PaperclipClient` plus a `LiveKitCreds` triple. `boardroom.entrypoint`
+   applies those creds to `LIVEKIT_URL/API_KEY/API_SECRET` for the rest of the
+   call. Any plugin failure — missing token, token past its stamped expiry,
+   non-2xx response, network error, malformed body — logs and falls back to
+   the env-var lookup order (`PAPERCLIP_BOARDROOM_API_KEY_<UUID>` /
+   `PAPERCLIP_BOARDROOM_KEYS_JSON` / `PAPERCLIP_BOARDROOM_API_KEY`) so
+   pre-PER-410 join links and single-tenant deployments keep working.
 
 **Attack-surface bounds:**
 

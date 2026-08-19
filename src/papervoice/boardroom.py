@@ -975,13 +975,13 @@ async def run_standup(
                 logger.exception("failed to post or queue standup summary to %s", summary_issue_id)
 
 
-def _company_id_from_room(ctx) -> str | None:
-    """Extract the Paperclip companyId this room belongs to from LiveKit metadata (PER-405).
+def _room_metadata_dict(ctx) -> dict | None:
+    """Parse the LiveKit room metadata into a dict, or None on any failure.
 
-    The plugin stamps ``{companyId, presetId?, agentIds?}`` into room metadata when
-    minting a join link. Returns None when the field is absent or the metadata is
-    unparseable — the caller then falls back to the env-configured default
-    company, preserving the single-tenant path.
+    The plugin's mint-join-link stamps ``{companyId, presetId?, agentIds?,
+    boardroomConfigToken?, boardroomConfigTokenExpiresAt?}`` here (PER-405 for
+    companyId, PER-410 for the config token). Best-effort: any parse failure
+    just means "no metadata", callers degrade gracefully.
     """
     raw_meta = getattr(getattr(ctx, "room", None), "metadata", None)
     if not raw_meta:
@@ -990,22 +990,78 @@ def _company_id_from_room(ctx) -> str | None:
         meta = json.loads(raw_meta)
     except (TypeError, ValueError):
         return None
-    company_id = meta.get("companyId") if isinstance(meta, dict) else None
+    return meta if isinstance(meta, dict) else None
+
+
+def _company_id_from_room(ctx) -> str | None:
+    """Extract the Paperclip companyId this room belongs to from LiveKit metadata (PER-405).
+
+    Returns None when the field is absent or the metadata is unparseable —
+    the caller then falls back to the env-configured default company,
+    preserving the single-tenant path.
+    """
+    meta = _room_metadata_dict(ctx)
+    if meta is None:
+        return None
+    company_id = meta.get("companyId")
     if isinstance(company_id, str) and company_id:
         return company_id
     return None
 
 
-def _client_for_ctx(ctx) -> PaperclipClient:
-    """Pick the Paperclip client for this job's room (PER-405).
+def _apply_livekit_creds(creds: pc_vendor.LiveKitCreds) -> None:
+    """Override the process env with plugin-served LiveKit credentials (PER-411).
 
-    Prefer room-metadata companyId (multi-tenant deployments); fall back to the
-    env-configured default when metadata has no company (single-tenant, old
-    join links, or the boardroom's own dev/smoke-test paths). If the room says
-    a companyId we don't have a key for, log and re-raise — the call cannot
-    proceed with the wrong company's credential.
+    ``lk_vendor.mint_join_token`` and every ``room.connect`` in this file read
+    ``LIVEKIT_URL`` / ``LIVEKIT_API_KEY`` / ``LIVEKIT_API_SECRET`` from
+    ``os.environ`` at call time, so overriding the env for the rest of the
+    process makes the whole call use the plugin-served values without threading
+    them through every helper. The worker serves one call at a time
+    (load_threshold=1.0, see the __main__ block), so a next dispatch will
+    re-enter ``entrypoint`` and re-apply the correct creds for its own room.
     """
-    company_id = _company_id_from_room(ctx)
+    os.environ["LIVEKIT_URL"] = creds.url
+    os.environ["LIVEKIT_API_KEY"] = creds.api_key
+    os.environ["LIVEKIT_API_SECRET"] = creds.api_secret
+
+
+def _client_for_ctx(ctx) -> PaperclipClient:
+    """Pick the Paperclip client for this job's room (PER-405 + PER-411).
+
+    Prefer the plugin's ``/boardroom-config`` route when the room metadata
+    carries a fresh ``boardroomConfigToken`` (PER-411): that returns the
+    per-company pcp_ key and LiveKit creds resolved from Paperclip secrets, so
+    zero per-company ``.env`` entries are needed. On any plugin-fetch failure
+    (missing token, expired, non-2xx, unreachable) fall back to the
+    env-configured key lookup (PER-405): per-company env var, keys JSON, or
+    the process default. If the room says a companyId we can't serve, log and
+    re-raise — the call cannot proceed with the wrong company's credential.
+    """
+    metadata = _room_metadata_dict(ctx)
+    company_id = None
+    if metadata is not None:
+        cid = metadata.get("companyId")
+        if isinstance(cid, str) and cid:
+            company_id = cid
+
+    if company_id and metadata is not None:
+        plugin = PaperclipClient.load_from_plugin(company_id, metadata)
+        if plugin is not None:
+            _apply_livekit_creds(plugin.livekit)
+            logger.info(
+                "boardroom serving room %s via plugin-served config for companyId=%s "
+                "(zero-.env path, PER-411)",
+                ctx.room.name,
+                company_id,
+            )
+            return plugin.client
+        logger.info(
+            "plugin-served config unavailable for room %s (companyId=%s); "
+            "falling back to env-configured credentials",
+            ctx.room.name,
+            company_id,
+        )
+
     try:
         return pc_vendor.client_for_company(company_id)
     except KeyError:

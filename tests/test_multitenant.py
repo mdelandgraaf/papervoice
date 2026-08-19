@@ -408,5 +408,267 @@ class ClientForCtxTest(unittest.TestCase):
             boardroom._client_for_ctx(ctx)
 
 
+class LoadFromPluginTest(unittest.TestCase):
+    """PER-411: PaperclipClient.load_from_plugin reads the HMAC token from
+    room metadata and swaps env-based credentials for plugin-served config."""
+
+    def setUp(self):
+        self._env = mock.patch.dict(os.environ, {}, clear=True)
+        self._env.start()
+        os.environ["PAPERCLIP_API_URL"] = "https://paperclip.example.com"
+
+    def tearDown(self):
+        self._env.stop()
+
+    def _ok_response(self):
+        body = {
+            "boardroomApiKey": "pcp_from_plugin",
+            "liveKitUrl": "wss://lk.example.com",
+            "liveKitApiKey": "lk_key",
+            "liveKitApiSecret": "lk_secret",
+        }
+        fake_resp = mock.Mock()
+        fake_resp.status_code = 200
+        fake_resp.raise_for_status = mock.Mock()
+        fake_resp.json = mock.Mock(return_value=body)
+        return fake_resp
+
+    def test_returns_client_and_livekit_creds_on_success(self):
+        metadata = {
+            "companyId": "co-bvc",
+            "boardroomConfigToken": "token.sig",
+            "boardroomConfigTokenExpiresAt": "2099-01-01T00:00:00Z",
+        }
+        with mock.patch("httpx.get", return_value=self._ok_response()) as get:
+            result = pc.PaperclipClient.load_from_plugin("co-bvc", metadata)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.client.company_id, "co-bvc")
+        self.assertEqual(result.client.api_key, "pcp_from_plugin")
+        self.assertEqual(result.livekit.url, "wss://lk.example.com")
+        self.assertEqual(result.livekit.api_key, "lk_key")
+        self.assertEqual(result.livekit.api_secret, "lk_secret")
+        args, kwargs = get.call_args
+        self.assertIn("/api/plugins/papervoice/api/boardroom-config", args[0])
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer token.sig")
+        self.assertEqual(kwargs["params"]["companyId"], "co-bvc")
+
+    def test_returns_none_when_metadata_has_no_token(self):
+        # Old join links / HMAC secret not yet provisioned: no token stamped.
+        # Must degrade to None so client_for_company falls back to env.
+        with mock.patch("httpx.get") as get:
+            self.assertIsNone(
+                pc.PaperclipClient.load_from_plugin("co-bvc", {"companyId": "co-bvc"})
+            )
+        get.assert_not_called()
+
+    def test_returns_none_on_non_2xx(self):
+        # A 403 (bad HMAC / expired token) or 409 (secret not provisioned) must
+        # not raise — the caller falls back to the env-var lookup.
+        fake_resp = mock.Mock()
+        fake_resp.status_code = 403
+        fake_resp.json = mock.Mock(return_value={"error": "token_expired"})
+        with mock.patch("httpx.get", return_value=fake_resp):
+            self.assertIsNone(
+                pc.PaperclipClient.load_from_plugin(
+                    "co-bvc",
+                    {"boardroomConfigToken": "token.sig"},
+                )
+            )
+
+    def test_returns_none_on_network_failure(self):
+        # Any exception from httpx (route unreachable, DNS, timeout) must be
+        # swallowed and logged, not propagated — the call still needs to run
+        # via env-configured credentials.
+        with mock.patch("httpx.get", side_effect=RuntimeError("boom")):
+            self.assertIsNone(
+                pc.PaperclipClient.load_from_plugin(
+                    "co-bvc",
+                    {"boardroomConfigToken": "token.sig"},
+                )
+            )
+
+    def test_returns_none_when_response_missing_fields(self):
+        # A malformed plugin response (e.g. missing liveKitApiSecret) is drift
+        # to catch, not credentials to trust. Fall back and log.
+        fake_resp = mock.Mock()
+        fake_resp.status_code = 200
+        fake_resp.json = mock.Mock(
+            return_value={
+                "boardroomApiKey": "pcp_from_plugin",
+                "liveKitUrl": "wss://lk.example.com",
+                "liveKitApiKey": "lk_key",
+                # liveKitApiSecret missing
+            }
+        )
+        with mock.patch("httpx.get", return_value=fake_resp):
+            self.assertIsNone(
+                pc.PaperclipClient.load_from_plugin(
+                    "co-bvc",
+                    {"boardroomConfigToken": "token.sig"},
+                )
+            )
+
+    def test_returns_none_when_token_expired_locally(self):
+        # Short-circuit: an already-past `boardroomConfigTokenExpiresAt` means
+        # the server will 403, don't waste the round-trip.
+        with mock.patch("httpx.get") as get:
+            self.assertIsNone(
+                pc.PaperclipClient.load_from_plugin(
+                    "co-bvc",
+                    {
+                        "boardroomConfigToken": "token.sig",
+                        "boardroomConfigTokenExpiresAt": "1970-01-01T00:00:00Z",
+                    },
+                )
+            )
+        get.assert_not_called()
+
+    def test_ignores_unparseable_expiry_and_defers_to_server(self):
+        # A stamped-but-unparseable expiry is a producer bug, not our call to
+        # reject — send the request and let the server verify.
+        metadata = {
+            "boardroomConfigToken": "token.sig",
+            "boardroomConfigTokenExpiresAt": "not-a-date",
+        }
+        with mock.patch("httpx.get", return_value=self._ok_response()) as get:
+            result = pc.PaperclipClient.load_from_plugin("co-bvc", metadata)
+        self.assertIsNotNone(result)
+        get.assert_called_once()
+
+    def test_returns_none_on_missing_company_id_or_bad_metadata(self):
+        self.assertIsNone(pc.PaperclipClient.load_from_plugin("", {"boardroomConfigToken": "t"}))
+        self.assertIsNone(pc.PaperclipClient.load_from_plugin("co-bvc", None))
+        self.assertIsNone(pc.PaperclipClient.load_from_plugin("co-bvc", "not-a-dict"))
+
+
+class ClientForCompanyPluginFirstTest(unittest.TestCase):
+    """PER-411: client_for_company tries the plugin route when room metadata
+    carries a config token, and falls back cleanly on any plugin failure."""
+
+    def setUp(self):
+        self._env = mock.patch.dict(os.environ, {}, clear=True)
+        self._env.start()
+        os.environ["PAPERCLIP_API_URL"] = "https://paperclip.example.com"
+        os.environ["PAPERCLIP_COMPANY_ID"] = "co-primary"
+        os.environ["PAPERCLIP_BOARDROOM_API_KEY"] = "pcp_primary"
+
+    def tearDown(self):
+        self._env.stop()
+
+    def test_plugin_success_returns_plugin_client_without_env_key(self):
+        # Zero-.env path: no per-company env var set for co-new, but the
+        # plugin serves it. Client must come from the plugin response.
+        metadata = {"companyId": "co-new", "boardroomConfigToken": "token.sig"}
+        fake_resp = mock.Mock()
+        fake_resp.status_code = 200
+        fake_resp.json = mock.Mock(
+            return_value={
+                "boardroomApiKey": "pcp_new",
+                "liveKitUrl": "wss://lk",
+                "liveKitApiKey": "lk_key",
+                "liveKitApiSecret": "lk_secret",
+            }
+        )
+        with mock.patch("httpx.get", return_value=fake_resp):
+            client = pc.client_for_company("co-new", room_metadata=metadata)
+        self.assertEqual(client.company_id, "co-new")
+        self.assertEqual(client.api_key, "pcp_new")
+
+    def test_plugin_failure_falls_back_to_env_key(self):
+        # Plugin unavailable (409/403/network) but the per-company env var is
+        # set — the worker must still serve the call from env.
+        os.environ["PAPERCLIP_BOARDROOM_API_KEY_CO_BVC"] = "pcp_bvc_env"
+        metadata = {"companyId": "co-bvc", "boardroomConfigToken": "token.sig"}
+        fake_resp = mock.Mock()
+        fake_resp.status_code = 409
+        fake_resp.json = mock.Mock(return_value={"error": "hmac_secret_missing"})
+        with mock.patch("httpx.get", return_value=fake_resp):
+            client = pc.client_for_company("co-bvc", room_metadata=metadata)
+        self.assertEqual(client.api_key, "pcp_bvc_env")
+
+    def test_no_metadata_uses_env_only_path(self):
+        # No metadata (single-tenant / dev shell / smoke test) => existing
+        # env-var path, no plugin call attempted.
+        with mock.patch("httpx.get") as get:
+            client = pc.client_for_company("co-primary")
+        get.assert_not_called()
+        self.assertEqual(client.api_key, "pcp_primary")
+
+
+class ClientForCtxPluginPathTest(unittest.TestCase):
+    """PER-411: boardroom._client_for_ctx wires the plugin config into the
+    LiveKit env for the rest of the call, then returns the plugin client."""
+
+    def setUp(self):
+        self._env = mock.patch.dict(os.environ, {}, clear=True)
+        self._env.start()
+        os.environ["PAPERCLIP_API_URL"] = "https://paperclip.example.com"
+        # Deliberately DO NOT set any per-company env for co-new — the plugin
+        # is the only source. Old LiveKit env carries the "wrong" values so a
+        # regression that skipped _apply_livekit_creds would be visible.
+        os.environ["LIVEKIT_URL"] = "wss://old.example.com"
+        os.environ["LIVEKIT_API_KEY"] = "old_key"
+        os.environ["LIVEKIT_API_SECRET"] = "old_secret"
+
+    def tearDown(self):
+        self._env.stop()
+
+    def _ctx(self, metadata):
+        ctx = mock.MagicMock()
+        ctx.room.name = "papervoice-preset-morning"
+        ctx.room.metadata = metadata
+        return ctx
+
+    def test_plugin_success_applies_livekit_env_and_returns_plugin_client(self):
+        metadata = json.dumps(
+            {
+                "companyId": "co-new",
+                "boardroomConfigToken": "token.sig",
+                "boardroomConfigTokenExpiresAt": "2099-01-01T00:00:00Z",
+            }
+        )
+        fake_resp = mock.Mock()
+        fake_resp.status_code = 200
+        fake_resp.json = mock.Mock(
+            return_value={
+                "boardroomApiKey": "pcp_from_plugin",
+                "liveKitUrl": "wss://lk.plugin.example.com",
+                "liveKitApiKey": "plugin_key",
+                "liveKitApiSecret": "plugin_secret",
+            }
+        )
+        with mock.patch("httpx.get", return_value=fake_resp):
+            client = boardroom._client_for_ctx(self._ctx(metadata))
+        self.assertEqual(client.company_id, "co-new")
+        self.assertEqual(client.api_key, "pcp_from_plugin")
+        self.assertEqual(os.environ["LIVEKIT_URL"], "wss://lk.plugin.example.com")
+        self.assertEqual(os.environ["LIVEKIT_API_KEY"], "plugin_key")
+        self.assertEqual(os.environ["LIVEKIT_API_SECRET"], "plugin_secret")
+
+    def test_plugin_failure_leaves_livekit_env_untouched_and_uses_env_key(self):
+        os.environ["PAPERCLIP_BOARDROOM_API_KEY_CO_NEW"] = "pcp_env_key"
+        metadata = json.dumps({"companyId": "co-new", "boardroomConfigToken": "token.sig"})
+        fake_resp = mock.Mock()
+        fake_resp.status_code = 403
+        fake_resp.json = mock.Mock(return_value={"error": "token_bad_signature"})
+        with mock.patch("httpx.get", return_value=fake_resp):
+            client = boardroom._client_for_ctx(self._ctx(metadata))
+        self.assertEqual(client.api_key, "pcp_env_key")
+        # env untouched by the failed plugin path
+        self.assertEqual(os.environ["LIVEKIT_URL"], "wss://old.example.com")
+        self.assertEqual(os.environ["LIVEKIT_API_KEY"], "old_key")
+        self.assertEqual(os.environ["LIVEKIT_API_SECRET"], "old_secret")
+
+    def test_no_token_in_metadata_skips_plugin_call(self):
+        # PER-405 legacy metadata (just companyId): the env-based path still
+        # works and no HTTP request is made.
+        os.environ["PAPERCLIP_BOARDROOM_API_KEY_CO_NEW"] = "pcp_env_key"
+        metadata = json.dumps({"companyId": "co-new"})
+        with mock.patch("httpx.get") as get:
+            client = boardroom._client_for_ctx(self._ctx(metadata))
+        get.assert_not_called()
+        self.assertEqual(client.api_key, "pcp_env_key")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -139,6 +139,28 @@ class PapervoiceAgentConfig:
 
 
 @dataclass(frozen=True)
+class LiveKitCreds:
+    """LiveKit URL/key/secret returned by the plugin's /boardroom-config route (PER-411)."""
+
+    url: str
+    api_key: str
+    api_secret: str
+
+
+@dataclass(frozen=True)
+class PluginConfigResult:
+    """Plugin-served per-company config: a ready PaperclipClient + LiveKit creds.
+
+    Returned by :meth:`PaperclipClient.load_from_plugin` so the boardroom
+    entrypoint can override the process-wide LiveKit env before dispatching
+    the call without threading three separate values around.
+    """
+
+    client: "PaperclipClient"
+    livekit: LiveKitCreds
+
+
+@dataclass(frozen=True)
 class PaperclipClient:
     """Company-scoped Paperclip API client.
 
@@ -153,6 +175,108 @@ class PaperclipClient:
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"}
+
+    @classmethod
+    def load_from_plugin(
+        cls,
+        company_id: str,
+        room_metadata: dict | None,
+    ) -> PluginConfigResult | None:
+        """Fetch per-company boardroom config from the Papervoice plugin (PER-411).
+
+        The plugin's ``mint-join-link`` (PER-410) stamps a short-lived HMAC
+        bearer into LiveKit room metadata as ``boardroomConfigToken``. With
+        that token in hand the worker calls
+        ``GET /api/plugins/papervoice/api/boardroom-config?companyId=…`` and gets
+        back ``{boardroomApiKey, liveKitUrl, liveKitApiKey, liveKitApiSecret}``
+        resolved from the company's Paperclip secrets. This lets one worker
+        serve any number of companies with zero per-company ``.env`` entries
+        and no restart when a company's config changes.
+
+        Returns ``None`` when the room metadata carries no token (old link /
+        HMAC secret not provisioned), the token is expired per the stamped
+        expiry, or the plugin route returns any non-2xx — the caller then
+        falls back to the env-var based key lookup path so single-tenant and
+        pre-PER-410 deployments keep working. All failures are logged so
+        drift is visible.
+        """
+        if not company_id or not isinstance(room_metadata, dict):
+            return None
+        token = room_metadata.get("boardroomConfigToken")
+        if not isinstance(token, str) or not token:
+            return None
+        # Server verifies exp itself; still short-circuit on a token that's
+        # already past its stamped expiry so we never burn a plugin call on a
+        # guaranteed 403. `boardroomConfigTokenExpiresAt` is an ISO-8601
+        # timestamp; treat any parse failure as "unknown, let the server decide."
+        expires_at = room_metadata.get("boardroomConfigTokenExpiresAt")
+        if isinstance(expires_at, str) and expires_at:
+            try:
+                from datetime import datetime, timezone
+
+                exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                if exp <= datetime.now(timezone.utc):
+                    logger.warning(
+                        "boardroom-config token in room metadata is expired (exp=%s); "
+                        "falling back to env-configured credentials",
+                        expires_at,
+                    )
+                    return None
+            except ValueError:
+                pass
+        try:
+            resp = httpx.get(
+                # apiRoutes are mounted at /api/plugins/:pluginId/api/<path>
+                # per the plugin SDK; do NOT confuse this with the
+                # ctx.data.register("config", ...) endpoint at
+                # /api/plugins/papervoice/config used by the Settings page.
+                f"{_api_base()}/api/plugins/papervoice/api/boardroom-config",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"companyId": company_id},
+                timeout=_TIMEOUT,
+            )
+        except Exception:
+            logger.exception(
+                "boardroom-config plugin fetch failed for companyId=%s; falling back to env",
+                company_id,
+            )
+            return None
+        if resp.status_code >= 300:
+            logger.warning(
+                "boardroom-config plugin fetch returned status=%s for companyId=%s; "
+                "falling back to env-configured credentials",
+                resp.status_code,
+                company_id,
+            )
+            return None
+        try:
+            body = resp.json()
+        except ValueError:
+            logger.error(
+                "boardroom-config plugin fetch returned non-JSON body for companyId=%s; "
+                "falling back to env-configured credentials",
+                company_id,
+            )
+            return None
+        api_key = body.get("boardroomApiKey")
+        livekit_url = body.get("liveKitUrl")
+        livekit_api_key = body.get("liveKitApiKey")
+        livekit_api_secret = body.get("liveKitApiSecret")
+        if not all(isinstance(v, str) and v for v in (api_key, livekit_url, livekit_api_key, livekit_api_secret)):
+            logger.error(
+                "boardroom-config plugin response for companyId=%s is missing fields; "
+                "falling back to env-configured credentials",
+                company_id,
+            )
+            return None
+        return PluginConfigResult(
+            client=cls(company_id=company_id, api_key=api_key),
+            livekit=LiveKitCreds(
+                url=livekit_url,
+                api_key=livekit_api_key,
+                api_secret=livekit_api_secret,
+            ),
+        )
 
     def agent_context(self, agent_id: str, limit: int = 5) -> list[dict]:
         """Compact open-issue list (identifier/title/status/priority) assigned to `agent_id`."""
@@ -518,14 +642,36 @@ def default_client() -> PaperclipClient:
     return PaperclipClient(company_id=_default_env_company_id(), api_key=_default_env_api_key())
 
 
-def client_for_company(company_id: str | None) -> PaperclipClient:
+def client_for_company(
+    company_id: str | None,
+    room_metadata: dict | None = None,
+) -> PaperclipClient:
     """Client for the given companyId, picking the right per-company key.
 
     ``company_id=None`` (or absent from the key map when it equals the default
     env company) returns ``default_client()`` — preserves the single-tenant path.
     Raises ``KeyError`` when a non-default companyId has no configured key, so
     the boardroom entrypoint fails fast at job start rather than mid-call.
+
+    ``room_metadata`` (PER-411): when present and carrying a
+    ``boardroomConfigToken``, this call tries the plugin's
+    ``/boardroom-config`` route first so a company that never had a
+    per-worker ``.env`` entry can still be served. Any plugin failure logs
+    and falls through to the env-var lookup order below — see
+    :meth:`PaperclipClient.load_from_plugin`. The plugin path also returns
+    LiveKit credentials, but this shim discards them; callers that need
+    those (the boardroom entrypoint) should use
+    :meth:`PaperclipClient.load_from_plugin` directly.
     """
+    if company_id and isinstance(room_metadata, dict):
+        plugin = PaperclipClient.load_from_plugin(company_id, room_metadata)
+        if plugin is not None:
+            return plugin.client
+        logger.info(
+            "boardroom-config plugin fetch unavailable for companyId=%s; "
+            "falling back to env-configured credentials",
+            company_id,
+        )
     if not company_id:
         return default_client()
     key_map = load_boardroom_key_map()
