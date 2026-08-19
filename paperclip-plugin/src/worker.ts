@@ -257,30 +257,35 @@ const plugin = definePlugin({
           params.room ||
           (typeof config.room === "string" ? config.room : "papervoice-boardroom");
 
-        // For preset rooms, stamp the agent list into the LiveKit room metadata before
-        // returning the token. The boardroom Python worker uses an agent token which
-        // cannot access the plugin-config endpoint (403), so it reads ctx.room.metadata
-        // instead to resolve which agents should join. This is best-effort: if the
-        // Room Service call fails the link is still returned and the boardroom falls back.
+        // Always stamp companyId (PER-405) so the boardroom worker — which may
+        // serve multiple Paperclip companies from one LiveKit project — can look up
+        // the right per-company API key at job start. Preset rooms additionally
+        // carry {presetId, agentIds} so the worker can resolve the roster without
+        // hitting the plugin-config endpoint (which its agent token cannot read).
+        // This is best-effort: if the Room Service call fails the link is still
+        // returned and the boardroom falls back to env-configured defaults.
+        const metadata: Record<string, unknown> = { companyId: params.companyId };
         if (room.startsWith("papervoice-preset-")) {
           const presetId = room.slice("papervoice-preset-".length);
-          try {
-            const presets = readRoomPresets(config);
-            const preset = presets.find((p) => p.id === presetId);
-            if (preset) {
-              await stampLiveKitRoomMetadata(
-                liveKitUrl,
-                liveKitApiKey,
-                liveKitApiSecret,
-                room,
-                JSON.stringify({ presetId: preset.id, agentIds: preset.agentIds }),
-              );
-            } else {
-              console.warn(`mint-join-link: preset ${presetId} not found in config; skipping metadata stamp`);
-            }
-          } catch (e) {
-            console.error("mint-join-link: failed to stamp LiveKit room metadata for preset:", e);
+          const presets = readRoomPresets(config);
+          const preset = presets.find((p) => p.id === presetId);
+          if (preset) {
+            metadata.presetId = preset.id;
+            metadata.agentIds = preset.agentIds;
+          } else {
+            console.warn(`mint-join-link: preset ${presetId} not found in config; stamping companyId only`);
           }
+        }
+        try {
+          await stampLiveKitRoomMetadata(
+            liveKitUrl,
+            liveKitApiKey,
+            liveKitApiSecret,
+            room,
+            JSON.stringify(metadata),
+          );
+        } catch (e) {
+          console.error("mint-join-link: failed to stamp LiveKit room metadata:", e);
         }
 
         const token = mintLiveKitToken(

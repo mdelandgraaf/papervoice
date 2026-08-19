@@ -76,6 +76,41 @@ Implementation note: LiveKit Cloud's room API is eventually consistent and dedup
 
 The plugin persists version-1 `roomPresets` and `roomPresetsVersion` alongside its existing company configuration. Presets contain an opaque stable id, a normalized case-insensitive unique name, and deduplicated Paperclip agent IDs; writes read-modify-write the full config so LiveKit references and prompt overrides survive. A preset is not a persistent LiveKit room: the UI mints `papervoice-preset-<id>` links and the worker resolves that id against the current enabled voice roster at job start. Unknown or deleted ids and presets with zero valid agents fail closed; stale members are shown in the dashboard and valid members may proceed. The legacy `papervoice-room-<identity>...` parser remains for already-issued links.
 
+## Multi-tenant worker — one process, N companies (PER-405)
+
+One boardroom worker can serve calls for multiple Paperclip companies at once.
+The plugin stamps `companyId` into LiveKit room metadata when minting a join
+link; the worker builds a per-job `PaperclipClient` from that value and
+threads it through the roster, live lookup, follow-up filing, and post-call
+summary. There is no shared process-level "current company" any more.
+
+Two moving parts:
+
+1. **Per-job companyId in room metadata.** `paperclip-plugin/src/worker.ts`'s
+   `mint-join-link` action always includes `companyId` in the metadata JSON
+   it stamps on the LiveKit room, alongside the preset's `presetId`/`agentIds`
+   when applicable. The boardroom's `entrypoint(ctx)` reads it via
+   `_company_id_from_room(ctx)` and falls back to the env default when
+   absent (keeps single-tenant deployments and old join links working).
+2. **Per-company boardroom credential.** Each participating company needs its
+   own Papervoice-engineer identity (or an existing engineer) with a durable
+   `pcp_*` API key. Load the key map with either
+   `PAPERCLIP_BOARDROOM_API_KEY_<UUID>` env vars (one per company) or
+   `PAPERCLIP_BOARDROOM_KEYS_JSON` pointing at a JSON `{companyId: key}`
+   file. `PAPERCLIP_COMPANY_ID` + `PAPERCLIP_BOARDROOM_API_KEY` remain the
+   default-company fallback so a single-tenant deployment needs no config
+   changes.
+
+`PaperclipClient.client_for_company(company_id)` picks the right key or fails
+fast at job start (`KeyError`) — the boardroom refuses to serve a call for a
+company whose credential is missing rather than borrowing another company's
+credential.
+
+Queued-comment drain (`drain_pending_comments`) records the owning
+`company_id` in each pending file so a drainer in a multi-tenant worker picks
+the right per-company client. Files written by pre-PER-405 workers lack that
+field and fall through to the default client.
+
 ## Required accounts & secrets (env vars only, never committed)
 
 - `ELEVENLABS_API_KEY` — TTS (and optionally hosted agent for fallback path)

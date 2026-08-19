@@ -193,13 +193,21 @@ def build_persona_from_agent(
     )
 
 
-def load_roster_from_paperclip(prompt_cfg: "PromptConfig | None" = None) -> tuple[Persona, ...]:
+def load_roster_from_paperclip(
+    prompt_cfg: "PromptConfig | None" = None,
+    client: "PaperclipClient | None" = None,
+) -> tuple[Persona, ...]:
     """Build the boardroom roster from Paperclip agents with metadata.papervoice.enabled.
 
     Agents are ordered by their metadata.papervoice.roster_order value; the first
     agent in that order becomes the opener/closer. Falls back to the static
     BOARDROOM_ROSTER if the Paperclip API is unreachable or no agents are enabled —
     the call must keep working even if Paperclip is down at call start.
+
+    `client` (PER-405): when the multi-tenant boardroom passes a per-company
+    ``PaperclipClient`` (built from the LiveKit room-metadata companyId), the
+    roster is loaded from that company. When absent, falls back to the
+    env-configured default client so the single-tenant/dev path is unchanged.
 
     Enable an agent for papervoice by PATCHing its metadata (requires agents:configure):
       {"metadata": {"papervoice": {"enabled": true, "voice_id": "...",
@@ -209,7 +217,9 @@ def load_roster_from_paperclip(prompt_cfg: "PromptConfig | None" = None) -> tupl
     from papervoice.vendors import paperclip as pc_vendor  # deferred to avoid top-level env check
 
     try:
-        configs = pc_vendor.get_voice_enabled_agents()
+        # No client => module-level shim so existing tests that monkey-patch
+        # pc_vendor.get_voice_enabled_agents continue to intercept.
+        configs = client.get_voice_enabled_agents() if client else pc_vendor.get_voice_enabled_agents()
     except Exception:
         _logger.warning("failed to load papervoice roster from Paperclip API; using static fallback")
         return _configured_fallback_roster(prompt_cfg)
@@ -240,5 +250,5 @@ def load_roster_from_paperclip(prompt_cfg: "PromptConfig | None" = None) -> tupl
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from papervoice.vendors.paperclip import PapervoiceAgentConfig
+    from papervoice.vendors.paperclip import PapervoiceAgentConfig, PaperclipClient
     from papervoice.prompts import PromptConfig

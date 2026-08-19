@@ -858,7 +858,7 @@ class WebRTCTimeoutIsolationTest(unittest.IsolatedAsyncioTestCase):
             orig_init(self, *args, **kwargs)
             captured["moderator"] = self
 
-        async def fake_connect_agent(room_name, persona, moderator):
+        async def fake_connect_agent(room_name, persona, moderator, client=None):
             if persona.identity == "agent-b":
                 raise asyncio.TimeoutError("ICE stalled")
             return mock.AsyncMock(), mock.AsyncMock()
@@ -889,7 +889,7 @@ class WebRTCTimeoutIsolationTest(unittest.IsolatedAsyncioTestCase):
         async def fake_connect_transcriber(*a, **kw):
             raise asyncio.TimeoutError("DTLS stalled")
 
-        async def fake_connect_agent(room_name, persona, moderator):
+        async def fake_connect_agent(room_name, persona, moderator, client=None):
             return mock.AsyncMock(), mock.AsyncMock()
 
         with mock.patch.object(_boardroom_module, "_connect_transcriber",

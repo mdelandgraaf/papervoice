@@ -59,6 +59,7 @@ from papervoice.prompts import PromptConfig, load_prompt_config
 from papervoice.vendors import elevenlabs as el_vendor
 from papervoice.vendors import livekit as lk_vendor
 from papervoice.vendors import paperclip as pc_vendor
+from papervoice.vendors.paperclip import PaperclipClient
 
 logger = logging.getLogger("papervoice.boardroom")
 
@@ -275,12 +276,18 @@ def _standup_agenda(
     return items
 
 
-async def _load_context(roster: tuple[Persona, ...]) -> tuple[dict[str, str], bool]:
+async def _load_context(
+    roster: tuple[Persona, ...],
+    client: PaperclipClient | None = None,
+) -> tuple[dict[str, str], bool]:
     """Fetch each persona's live Paperclip briefing at call start (Milestone 3).
 
     A failed fetch (API down, bad credentials) never blocks the call — it just
     leaves that persona speaking without live context, logged loudly so it's
     caught before the next call rather than silently every time.
+
+    `client` (PER-405): per-job Paperclip client scoped to this room's company.
+    Absent means fall back to the env-configured default client.
 
     Returns `(context, offline)`. `offline` is True only when *every* persona's
     fetch failed on a 401/403 — i.e. PAPERCLIP_API_KEY itself is expired/invalid
@@ -290,10 +297,13 @@ async def _load_context(roster: tuple[Persona, ...]) -> tuple[dict[str, str], bo
     """
     context: dict[str, str] = {}
     auth_failures = 0
+    # No client => module-level shim so single-tenant paths and existing tests
+    # that monkey-patch pc_vendor.context_briefing continue to intercept.
+    fetch = client.context_briefing if client else pc_vendor.context_briefing
     for persona in roster:
         try:
             context[persona.identity] = await asyncio.to_thread(
-                pc_vendor.context_briefing, persona.paperclip_agent_id
+                fetch, persona.paperclip_agent_id
             )
         except Exception as exc:
             if pc_vendor.is_auth_error(exc):
@@ -326,10 +336,13 @@ def _build_summary(moderator: Moderator, completed: list[str]) -> str:
     return "\n".join(lines)
 
 
-def _file_issue_tool(persona: Persona, moderator: Moderator):
+def _file_issue_tool(persona: Persona, moderator: Moderator, client: PaperclipClient | None = None):
     """A per-persona LiveKit function tool (Milestone 3): lets the LLM file a real Paperclip
     issue mid-conversation when the board decides something needs tracking. Defaults the
     assignee to the speaking persona's own bound Paperclip agent, if it has one.
+
+    `client` (PER-405): per-job Paperclip client so the filed issue lands in the
+    same company that owns this call. When absent, uses the env-configured default.
     """
 
     @function_tool
@@ -342,9 +355,13 @@ def _file_issue_tool(persona: Persona, moderator: Moderator):
             title: Short issue title.
             description: Optional extra detail — what was decided and why.
         """
+        # Late-bind the callable so tests that monkey-patch pc_vendor.create_issue
+        # after the tool is constructed continue to intercept (single-tenant path).
+        # Multi-tenant: bind to the per-job client.
+        create = client.create_issue if client else pc_vendor.create_issue
         try:
             issue = await asyncio.to_thread(
-                pc_vendor.create_issue,
+                create,
                 title=title,
                 description=description,
                 assignee_agent_id=persona.paperclip_agent_id,
@@ -387,7 +404,7 @@ def _format_issues_for_speech(issues: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _lookup_tool(persona: Persona):
+def _lookup_tool(persona: Persona, client: PaperclipClient | None = None):
     """A per-persona LiveKit function tool (PER-401): live Paperclip lookup during a call.
 
     The static call-start briefing only carries each agent's top few open issues by
@@ -395,6 +412,9 @@ def _lookup_tool(persona: Persona):
     outside that top slice, or anyone else's work, the agent had nothing to go on and
     would say "I don't know" or hallucinate. This tool lets the LLM read real issue
     state mid-turn instead: search by identifier/keyword, or list its own open issues.
+
+    `client` (PER-405): per-job Paperclip client, so lookups query the company
+    that owns this call. Absent means the env-configured default.
     """
 
     @function_tool
@@ -408,13 +428,20 @@ def _lookup_tool(persona: Persona):
                 search for across the whole company. Leave empty to list your own current
                 open issues.
         """
+        # Late-bind the callables so tests that monkey-patch
+        # pc_vendor.search_issues / .agent_context / .company_snapshot after the
+        # tool is constructed continue to intercept (single-tenant path).
+        # Multi-tenant: bind to the per-job client.
+        search = client.search_issues if client else pc_vendor.search_issues
+        by_agent = client.agent_context if client else pc_vendor.agent_context
+        by_company = client.company_snapshot if client else pc_vendor.company_snapshot
         try:
             if query.strip():
-                issues = await asyncio.to_thread(pc_vendor.search_issues, query.strip())
+                issues = await asyncio.to_thread(search, query.strip())
             elif persona.paperclip_agent_id:
-                issues = await asyncio.to_thread(pc_vendor.agent_context, persona.paperclip_agent_id, 12)
+                issues = await asyncio.to_thread(by_agent, persona.paperclip_agent_id, 12)
             else:
-                issues = await asyncio.to_thread(pc_vendor.company_snapshot, 12)
+                issues = await asyncio.to_thread(by_company, 12)
         except Exception as exc:
             if pc_vendor.is_auth_error(exc):
                 logger.error(
@@ -472,7 +499,12 @@ def _ask_board_tool(persona: Persona, moderator: Moderator):
     return ask_board
 
 
-async def _connect_agent(room_name: str, persona: Persona, moderator: Moderator) -> tuple[AgentSession, rtc.Room]:
+async def _connect_agent(
+    room_name: str,
+    persona: Persona,
+    moderator: Moderator,
+    client: PaperclipClient | None = None,
+) -> tuple[AgentSession, rtc.Room]:
     token = lk_vendor.mint_join_token(persona.identity, room_name, ttl_hours=1, agent=True)
     room = rtc.Room()
     await asyncio.wait_for(room.connect(os.environ["LIVEKIT_URL"], token), timeout=15.0)
@@ -492,10 +524,10 @@ async def _connect_agent(room_name: str, persona: Persona, moderator: Moderator)
                 agent=Agent(
                     instructions=persona.instructions,
                     tools=[
-                        _file_issue_tool(persona, moderator),
+                        _file_issue_tool(persona, moderator, client=client),
                         _pass_on_reacting,
                         _ask_board_tool(persona, moderator),
-                        _lookup_tool(persona),
+                        _lookup_tool(persona, client=client),
                     ],
                 ),
                 room=room,
@@ -657,7 +689,7 @@ def _direct_call_instructions(
     return f"{base}{context}"
 
 
-def _direct_file_issue_tool(persona: Persona, filed_issues: list):
+def _direct_file_issue_tool(persona: Persona, filed_issues: list, client: PaperclipClient | None = None):
     """A per-persona LiveKit function tool for 1:1 direct calls (no Moderator dependency)."""
 
     @function_tool
@@ -668,9 +700,13 @@ def _direct_file_issue_tool(persona: Persona, filed_issues: list):
             title: Short issue title.
             description: Optional extra detail — what was decided and why.
         """
+        # Late-bind the callable so tests that monkey-patch pc_vendor.create_issue
+        # after the tool is constructed continue to intercept (single-tenant path).
+        # Multi-tenant: bind to the per-job client.
+        create = client.create_issue if client else pc_vendor.create_issue
         try:
             issue = await asyncio.to_thread(
-                pc_vendor.create_issue,
+                create,
                 title=title,
                 description=description,
                 assignee_agent_id=persona.paperclip_agent_id,
@@ -687,7 +723,7 @@ def _direct_file_issue_tool(persona: Persona, filed_issues: list):
     return file_followup_issue
 
 
-def _resolve_direct_persona(livekit_identity: str) -> Persona | None:
+def _resolve_direct_persona(livekit_identity: str, client: PaperclipClient | None = None) -> Persona | None:
     """Find a Persona by livekit_identity for a direct 1:1 call.
 
     Checks Paperclip live roster first (agents with metadata.papervoice.enabled),
@@ -695,9 +731,15 @@ def _resolve_direct_persona(livekit_identity: str) -> Persona | None:
     `instructions` field is intentionally empty — run_direct_call builds fresh
     instructions via _direct_call_instructions so the agent doesn't receive
     standup-specific language.
+
+    `client` (PER-405): per-job Paperclip client so we resolve against the
+    company that owns this room. Absent means the env-configured default.
     """
     try:
-        for cfg in pc_vendor.get_voice_enabled_agents():
+        # No client => module-level shim so single-tenant paths and existing tests
+        # that monkey-patch pc_vendor.get_voice_enabled_agents continue to intercept.
+        configs = client.get_voice_enabled_agents() if client else pc_vendor.get_voice_enabled_agents()
+        for cfg in configs:
             if cfg.livekit_identity == livekit_identity:
                 return Persona(
                     identity=cfg.livekit_identity,
@@ -718,6 +760,7 @@ async def run_direct_call(
     room_name: str,
     persona: Persona,
     summary_issue_id: str | None = None,
+    client: PaperclipClient | None = None,
 ) -> None:
     """Run a 1:1 direct call between one human and one agent persona.
 
@@ -732,8 +775,11 @@ async def run_direct_call(
     """
     prompt_cfg = await asyncio.to_thread(load_prompt_config)
     briefing: str | None = None
+    # No client => module-level shim so single-tenant paths and existing tests
+    # that monkey-patch pc_vendor.context_briefing continue to intercept.
+    briefing_fn = client.context_briefing if client else pc_vendor.context_briefing
     try:
-        briefing = await asyncio.to_thread(pc_vendor.context_briefing, persona.paperclip_agent_id)
+        briefing = await asyncio.to_thread(briefing_fn, persona.paperclip_agent_id)
     except Exception:
         logger.exception("failed to load Paperclip context for direct call with %s", persona.identity)
 
@@ -773,7 +819,7 @@ async def run_direct_call(
                 instructions=instructions,
                 # look_up_paperclip (PER-401): live issue lookup so a 1:1 call can answer
                 # detail questions from real state instead of the static call-start briefing.
-                tools=[_direct_file_issue_tool(persona, filed_issues), _lookup_tool(persona)],
+                tools=[_direct_file_issue_tool(persona, filed_issues, client=client), _lookup_tool(persona, client=client)],
             ),
             room=room,
             # close_on_disconnect=False: stay alive across human blips; done.set()
@@ -834,9 +880,10 @@ async def run_direct_call(
         if summary_issue_id and filed_issues:
             lines = [f"## Direct call — {persona.display_name}", "", "Issues filed during the call:"]
             lines.extend(f"- {identifier}: {title}" for identifier, title in filed_issues)
+            post = client.post_comment_or_queue if client else pc_vendor.post_comment_or_queue
             try:
                 await asyncio.to_thread(
-                    pc_vendor.post_comment_or_queue,
+                    post,
                     summary_issue_id,
                     "\n".join(lines),
                 )
@@ -848,6 +895,7 @@ async def run_standup(
     room_name: str = BOARDROOM_ROOM,
     summary_issue_id: str | None = None,
     roster: tuple[Persona, ...] | None = None,
+    client: PaperclipClient | None = None,
 ) -> list[str]:
     """Connect every persona + the shared transcriber, then run the agenda. Returns completed identities.
 
@@ -862,8 +910,8 @@ async def run_standup(
     """
     prompt_cfg = await asyncio.to_thread(load_prompt_config)
     if roster is None:
-        roster = await asyncio.to_thread(load_roster_from_paperclip, prompt_cfg)
-    context, paperclip_offline = await _load_context(roster)
+        roster = await asyncio.to_thread(load_roster_from_paperclip, prompt_cfg, client)
+    context, paperclip_offline = await _load_context(roster, client=client)
     moderator = Moderator(
         agenda=_standup_agenda(roster, context, paperclip_offline=paperclip_offline, prompt_cfg=prompt_cfg),
         speakers={},
@@ -884,7 +932,7 @@ async def run_standup(
 
         for persona in roster:
             try:
-                session, room = await _connect_agent(room_name, persona, moderator)
+                session, room = await _connect_agent(room_name, persona, moderator, client=client)
             except Exception:
                 logger.exception("agent %s failed to join, continuing without it", persona.identity)
                 moderator.dropped.add(persona.identity)
@@ -916,14 +964,57 @@ async def run_standup(
         except asyncio.TimeoutError:
             logger.warning("standup teardown timed out after 10s; connections may not have closed cleanly")
         if summary_issue_id:
+            post = client.post_comment_or_queue if client else pc_vendor.post_comment_or_queue
             try:
                 await asyncio.to_thread(
-                    pc_vendor.post_comment_or_queue,
+                    post,
                     summary_issue_id,
                     _build_summary(moderator, completed),
                 )
             except Exception:
                 logger.exception("failed to post or queue standup summary to %s", summary_issue_id)
+
+
+def _company_id_from_room(ctx) -> str | None:
+    """Extract the Paperclip companyId this room belongs to from LiveKit metadata (PER-405).
+
+    The plugin stamps ``{companyId, presetId?, agentIds?}`` into room metadata when
+    minting a join link. Returns None when the field is absent or the metadata is
+    unparseable — the caller then falls back to the env-configured default
+    company, preserving the single-tenant path.
+    """
+    raw_meta = getattr(getattr(ctx, "room", None), "metadata", None)
+    if not raw_meta:
+        return None
+    try:
+        meta = json.loads(raw_meta)
+    except (TypeError, ValueError):
+        return None
+    company_id = meta.get("companyId") if isinstance(meta, dict) else None
+    if isinstance(company_id, str) and company_id:
+        return company_id
+    return None
+
+
+def _client_for_ctx(ctx) -> PaperclipClient:
+    """Pick the Paperclip client for this job's room (PER-405).
+
+    Prefer room-metadata companyId (multi-tenant deployments); fall back to the
+    env-configured default when metadata has no company (single-tenant, old
+    join links, or the boardroom's own dev/smoke-test paths). If the room says
+    a companyId we don't have a key for, log and re-raise — the call cannot
+    proceed with the wrong company's credential.
+    """
+    company_id = _company_id_from_room(ctx)
+    try:
+        return pc_vendor.client_for_company(company_id)
+    except KeyError:
+        logger.exception(
+            "no boardroom API key configured for room companyId=%s; refusing to serve "
+            "this call with a different company's credential (see PER-405)",
+            company_id,
+        )
+        raise
 
 
 async def request_fnc(job_request) -> None:
@@ -964,10 +1055,24 @@ async def entrypoint(ctx) -> None:
     participant = await ctx.wait_for_participant()
     logger.info("%s joined room %s", participant.identity, ctx.room.name)
 
+    # Multi-tenant client resolution (PER-405): the plugin stamps companyId into
+    # LiveKit room metadata when minting the join link; we build a per-job
+    # Paperclip client bound to that company. Falls back to the env default so
+    # single-tenant deployments and older links keep working.
+    try:
+        api = _client_for_ctx(ctx)
+    except KeyError:
+        return
+    logger.info(
+        "boardroom serving room %s as Paperclip companyId=%s",
+        ctx.room.name,
+        api.company_id,
+    )
+
     if ctx.room.name.startswith(DIRECT_ROOM_PREFIX):
         # Direct 1:1 call: room name encodes the target agent identity.
         livekit_identity = ctx.room.name[len(DIRECT_ROOM_PREFIX):]
-        persona = await asyncio.to_thread(_resolve_direct_persona, livekit_identity)
+        persona = await asyncio.to_thread(_resolve_direct_persona, livekit_identity, api)
         if persona is None:
             logger.error(
                 "no voice-enabled persona found for direct room %s (identity: %s); closing",
@@ -977,19 +1082,19 @@ async def entrypoint(ctx) -> None:
             return
         logger.info("starting direct call with %s in room %s", livekit_identity, ctx.room.name)
         summary_issue_id = os.environ.get("PAPERCLIP_STANDUP_SUMMARY_ISSUE_ID")
-        await run_direct_call(ctx.room.name, persona, summary_issue_id=summary_issue_id)
+        await run_direct_call(ctx.room.name, persona, summary_issue_id=summary_issue_id, client=api)
     elif ctx.room.name.startswith(CUSTOM_ROOM_PREFIX):
         identities = parse_custom_room_identities(ctx.room.name)
-        live_roster = await asyncio.to_thread(load_roster_from_paperclip)
+        live_roster = await asyncio.to_thread(load_roster_from_paperclip, None, api)
         roster = filter_roster(live_roster, identities or ())
         if not roster:
             logger.error("custom room %s has no enabled matching agents; closing", ctx.room.name)
             return
         logger.info("starting custom room %s with agents %s", ctx.room.name, [p.identity for p in roster])
         summary_issue_id = os.environ.get("PAPERCLIP_STANDUP_SUMMARY_ISSUE_ID")
-        await run_standup(ctx.room.name, summary_issue_id=summary_issue_id, roster=roster)
+        await run_standup(ctx.room.name, summary_issue_id=summary_issue_id, roster=roster, client=api)
     elif ctx.room.name.startswith("papervoice-preset-"):
-        live_roster = await asyncio.to_thread(load_roster_from_paperclip)
+        live_roster = await asyncio.to_thread(load_roster_from_paperclip, None, api)
         roster: tuple[Persona, ...] | None = None
 
         # Primary path: agent IDs are encoded in the LiveKit room metadata, which
@@ -1028,7 +1133,7 @@ async def entrypoint(ctx) -> None:
             try:
                 roster = resolve_named_preset(
                     ctx.room.name,
-                    await asyncio.to_thread(pc_vendor.get_plugin_config),
+                    await asyncio.to_thread(api.get_plugin_config),
                     live_roster,
                 )
             except Exception:
@@ -1043,11 +1148,16 @@ async def entrypoint(ctx) -> None:
                 ctx.room.name,
             )
             return
-        await run_standup(ctx.room.name, summary_issue_id=os.environ.get("PAPERCLIP_STANDUP_SUMMARY_ISSUE_ID"), roster=roster)
+        await run_standup(
+            ctx.room.name,
+            summary_issue_id=os.environ.get("PAPERCLIP_STANDUP_SUMMARY_ISSUE_ID"),
+            roster=roster,
+            client=api,
+        )
     else:
         # Full boardroom standup.
         summary_issue_id = os.environ.get("PAPERCLIP_STANDUP_SUMMARY_ISSUE_ID")
-        await run_standup(ctx.room.name, summary_issue_id=summary_issue_id)
+        await run_standup(ctx.room.name, summary_issue_id=summary_issue_id, client=api)
 
 
 if __name__ == "__main__":
