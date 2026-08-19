@@ -1,17 +1,14 @@
 import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
-import type { EnvSecretRefBinding } from "@paperclipai/plugin-sdk";
 import { createHmac, createHash } from "node:crypto";
 import { execSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-
-function isSecretRef(value: unknown): value is EnvSecretRefBinding {
-  return Boolean(
-    value &&
-      typeof value === "object" &&
-      (value as { type?: unknown }).type === "secret_ref" &&
-      typeof (value as { secretId?: unknown }).secretId === "string",
-  );
-}
+import {
+  CONFIG_KEY_HMAC_SECRET,
+  handleBoardroomConfigRequest,
+  isSecretRef,
+  resolveBoardroomConfigTokenTtlSeconds,
+  stampBoardroomConfigToken,
+} from "./config.js";
 
 function mintLiveKitToken(
   apiKey: string,
@@ -136,8 +133,18 @@ function isBoardroomRunning(): boolean {
   }
 }
 
+// PER-410: reference to the plugin context so `onApiRequest` (which is called
+// with only the request input) can resolve config and secrets. Set exactly
+// once in setup().
+let pluginContextRef: Parameters<Parameters<typeof definePlugin>[0]["setup"]>[0] | null = null;
+function requirePluginContext() {
+  if (!pluginContextRef) throw new Error("Plugin context not initialized");
+  return pluginContextRef;
+}
+
 const plugin = definePlugin({
   async setup(ctx) {
+    pluginContextRef = ctx;
     ctx.data.register("health", async () => ({ status: "ok" }));
 
     ctx.data.register(
@@ -276,6 +283,35 @@ const plugin = definePlugin({
             console.warn(`mint-join-link: preset ${presetId} not found in config; stamping companyId only`);
           }
         }
+
+        // PER-410: stamp a short-lived HMAC token so the boardroom worker can
+        // fetch its per-company config via /api/plugins/papervoice/api/boardroom-config
+        // without any per-company .env entries. We do NOT put the pcp_ value
+        // itself in metadata — only the auth token that grants config-fetch.
+        const ttlHours = params.ttlHours || 48;
+        const livekitTokenTtlSeconds = ttlHours * 3600;
+        const hmacSecret = typeof config[CONFIG_KEY_HMAC_SECRET] === "string"
+          ? String(config[CONFIG_KEY_HMAC_SECRET])
+          : "";
+        if (hmacSecret) {
+          const tokenTtlSeconds = resolveBoardroomConfigTokenTtlSeconds(config, livekitTokenTtlSeconds);
+          const nowSec = Math.floor(Date.now() / 1000);
+          const exp = nowSec + tokenTtlSeconds;
+          const configToken = stampBoardroomConfigToken(hmacSecret, {
+            companyId: params.companyId,
+            roomName: room,
+            exp,
+          });
+          metadata.boardroomConfigToken = configToken;
+          metadata.boardroomConfigTokenExpiresAt = new Date(exp * 1000).toISOString();
+        } else {
+          console.warn(
+            "mint-join-link: boardroomConfigHmacSecret is not set on this plugin config; " +
+              "the boardroom worker will fall back to env-configured defaults. Open the " +
+              "Papervoice Settings page once to auto-provision the secret.",
+          );
+        }
+
         try {
           await stampLiveKitRoomMetadata(
             liveKitUrl,
@@ -293,7 +329,7 @@ const plugin = definePlugin({
           liveKitApiSecret,
           params.identity || "human-guest",
           room,
-          params.ttlHours || 48,
+          ttlHours,
         );
         const joinUrl = `https://meet.livekit.io/custom?liveKitUrl=${encodeURIComponent(liveKitUrl)}&token=${token}`;
         return { joinUrl, token, room };
@@ -311,6 +347,12 @@ const plugin = definePlugin({
         status: 200,
         body: { running: isBoardroomRunning() },
       };
+    }
+    if (input.routeKey === "boardroom-config") {
+      return handleBoardroomConfigRequest(requirePluginContext(), {
+        query: input.query,
+        headers: input.headers,
+      });
     }
     return { status: 404, body: { error: "Not found" } };
   },

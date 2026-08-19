@@ -115,6 +115,13 @@ function validateBoardroomKey(raw) {
 
 // src/ui/index.tsx
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
+function generateBoardroomConfigHmacSecret() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
 var C = {
   bg: "#fff",
   bgMuted: "#f8fafc",
@@ -1487,16 +1494,41 @@ function SettingsSection({
   const [message, setMessage] = useState(null);
   const [boardroomModalOpen, setBoardroomModalOpen] = useState(false);
   useEffect(() => {
-    fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`).then(async (response) => {
-      if (!response.ok) throw new Error(`Could not load settings (${response.status})`);
-      const body = await response.json();
-      const values = body.configJson ?? body;
-      setLiveKitUrl(values.liveKitUrl ?? "");
-      setApiKeySecretId(values.liveKitApiKeyRef?.secretId ?? "");
-      setApiSecretSecretId(values.liveKitApiSecretRef?.secretId ?? "");
-      setBoardroomSecretId(values.boardroomApiKeyRef?.secretId ?? "");
-      setRoom(values.room ?? "papervoice-boardroom");
-    }).catch((error) => setMessage(error.message));
+    (async () => {
+      try {
+        const response = await fetch(
+          `/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`
+        );
+        if (!response.ok) throw new Error(`Could not load settings (${response.status})`);
+        const body = await response.json();
+        const values = body.configJson ?? body;
+        setLiveKitUrl(values.liveKitUrl ?? "");
+        setApiKeySecretId(values.liveKitApiKeyRef?.secretId ?? "");
+        setApiSecretSecretId(values.liveKitApiSecretRef?.secretId ?? "");
+        setBoardroomSecretId(values.boardroomApiKeyRef?.secretId ?? "");
+        setRoom(values.room ?? "papervoice-boardroom");
+        if (typeof values.boardroomConfigHmacSecret !== "string" || !values.boardroomConfigHmacSecret) {
+          try {
+            const secret = generateBoardroomConfigHmacSecret();
+            const nextConfig = { ...values, boardroomConfigHmacSecret: secret };
+            const saveResp = await fetch("/api/plugins/papervoice/config", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ companyId, configJson: nextConfig })
+            });
+            if (!saveResp.ok) {
+              console.warn(
+                `Papervoice: could not auto-provision boardroomConfigHmacSecret (${saveResp.status}); boardroom-config fetches will 409 until Save LiveKit settings is clicked.`
+              );
+            }
+          } catch (err) {
+            console.warn("Papervoice: failed to auto-provision HMAC secret", err);
+          }
+        }
+      } catch (error) {
+        setMessage(error.message);
+      }
+    })();
   }, [companyId]);
   const loadCompanySecrets = useCallback(async () => {
     setSecretsLoading(true);

@@ -49,6 +49,26 @@ test("instanceConfigSchema still forbids additional properties", async () => {
   assert.equal(manifest.instanceConfigSchema.additionalProperties, false);
 });
 
+// ── PER-410: HMAC secret + boardroom-config route declaration ────────────
+
+test("manifest declares boardroomConfigHmacSecret as a string field", async () => {
+  const { default: manifest } = await importTs("./manifest.ts");
+  const props = manifest.instanceConfigSchema.properties;
+  assert.ok(props.boardroomConfigHmacSecret, "boardroomConfigHmacSecret missing");
+  assert.equal(props.boardroomConfigHmacSecret.type, "string");
+});
+
+test("manifest declares the boardroom-config API route with webhook auth", async () => {
+  const { default: manifest } = await importTs("./manifest.ts");
+  const route = manifest.apiRoutes.find((r) => r.routeKey === "boardroom-config");
+  assert.ok(route, "boardroom-config route missing from manifest.apiRoutes");
+  assert.equal(route.method, "GET");
+  assert.equal(route.path, "/boardroom-config");
+  // Auth is done inside the plugin via HMAC — no Paperclip actor identity.
+  assert.equal(route.auth, "webhook");
+  assert.deepEqual(route.companyResolution, { from: "query", key: "companyId" });
+});
+
 // ── UI pcp_ token validator (co-located with the modal that uses it) ─────────
 
 test("validateBoardroomKey accepts a well-formed pcp_ token", async () => {

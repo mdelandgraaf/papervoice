@@ -47,6 +47,18 @@ const manifest: PaperclipPluginManifestV1 = {
         description:
           "A Paperclip company secret reference for the boardroom worker's per-company pcp_* key. Provisioned via the Settings page; never displayed after save. Falls back to PAPERCLIP_BOARDROOM_API_KEY_<UUID> / PAPERCLIP_BOARDROOM_KEYS_JSON / PAPERCLIP_BOARDROOM_API_KEY env vars when unset.",
       },
+      boardroomConfigHmacSecret: {
+        type: "string",
+        title: "Boardroom config HMAC secret",
+        description:
+          "Symmetric secret used to sign the short-lived room-metadata token that lets the Python boardroom worker fetch its per-company config via /api/plugins/papervoice/api/boardroom-config. Auto-provisioned by the Papervoice Settings page on first open; rotate it there if you suspect exposure. Do not paste this anywhere else.",
+      },
+      boardroomConfigTokenTtlSeconds: {
+        type: "number",
+        title: "Boardroom config token TTL (seconds)",
+        description:
+          "Optional override for the short-lived room-metadata config token TTL. Defaults to the join-link TTL (min 30 min). Capped by the join link's TTL so the config token never outlives its link.",
+      },
       room: {
         type: "string",
         title: "Default room",
@@ -99,6 +111,17 @@ const manifest: PaperclipPluginManifestV1 = {
       path: "/worker-status",
       auth: "board",
       capability: "api.routes.register",
+    },
+    {
+      // Called by the Python boardroom worker (no Paperclip actor identity).
+      // Auth is a short-lived HMAC bearer minted into LiveKit room metadata by
+      // mint-join-link. `webhook` mode means the plugin verifies the header itself.
+      routeKey: "boardroom-config",
+      method: "GET",
+      path: "/boardroom-config",
+      auth: "webhook",
+      capability: "api.routes.register",
+      companyResolution: { from: "query", key: "companyId" },
     },
   ],
   ui: {

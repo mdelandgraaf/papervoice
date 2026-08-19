@@ -12890,14 +12890,221 @@ function startWorkerRpcHost(options) {
 }
 
 // src/worker.ts
-import { createHmac, createHash } from "node:crypto";
+import { createHmac as createHmac2, createHash } from "node:crypto";
 import { execSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes as randomBytes2 } from "node:crypto";
+
+// src/config.ts
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 function isSecretRef(value) {
   return Boolean(
     value && typeof value === "object" && value.type === "secret_ref" && typeof value.secretId === "string"
   );
 }
+var CONFIG_KEY_HMAC_SECRET = "boardroomConfigHmacSecret";
+var CONFIG_KEY_TOKEN_TTL_SECONDS = "boardroomConfigTokenTtlSeconds";
+var BoardroomConfigTokenInvalid = class extends Error {
+  constructor(code, message) {
+    super(message ?? code);
+    this.code = code;
+    this.name = "BoardroomConfigTokenInvalid";
+  }
+};
+function stampBoardroomConfigToken(secret, claims) {
+  if (!secret) throw new Error("boardroomConfigHmacSecret missing");
+  const payload = `${claims.companyId}|${claims.roomName}|${claims.exp}`;
+  const payloadB64 = Buffer.from(payload, "utf8").toString("base64url");
+  const sig = createHmac("sha256", secret).update(payloadB64).digest("base64url");
+  return `${payloadB64}.${sig}`;
+}
+function verifyBoardroomConfigToken(secret, token, nowUnixSeconds) {
+  if (!token) throw new BoardroomConfigTokenInvalid("token_missing");
+  const parts = token.split(".");
+  if (parts.length !== 2) throw new BoardroomConfigTokenInvalid("token_malformed");
+  const [payloadB64, sig] = parts;
+  if (!payloadB64 || !sig) throw new BoardroomConfigTokenInvalid("token_malformed");
+  let expectedBuf;
+  let sigBuf;
+  try {
+    expectedBuf = Buffer.from(
+      createHmac("sha256", secret).update(payloadB64).digest("base64url"),
+      "utf8"
+    );
+    sigBuf = Buffer.from(sig, "utf8");
+  } catch {
+    throw new BoardroomConfigTokenInvalid("token_malformed");
+  }
+  if (sigBuf.length !== expectedBuf.length || !timingSafeEqual(sigBuf, expectedBuf)) {
+    throw new BoardroomConfigTokenInvalid("token_bad_signature");
+  }
+  const payload = Buffer.from(payloadB64, "base64url").toString("utf8");
+  const [companyId, roomName, expStr, ...extra] = payload.split("|");
+  if (!companyId || !roomName || !expStr || extra.length > 0) {
+    throw new BoardroomConfigTokenInvalid("token_malformed");
+  }
+  const exp = Number(expStr);
+  if (!Number.isFinite(exp) || !Number.isInteger(exp)) {
+    throw new BoardroomConfigTokenInvalid("token_malformed");
+  }
+  if (nowUnixSeconds >= exp) throw new BoardroomConfigTokenInvalid("token_expired");
+  return { companyId, roomName, exp };
+}
+function resolveBoardroomConfigTokenTtlSeconds(config, livekitTokenTtlSeconds) {
+  const raw = config[CONFIG_KEY_TOKEN_TTL_SECONDS];
+  const configured = typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : null;
+  if (configured !== null) {
+    return Math.min(configured, livekitTokenTtlSeconds);
+  }
+  return Math.max(livekitTokenTtlSeconds, 30 * 60);
+}
+var SlidingWindowLimiter = class {
+  constructor(limit, windowMs) {
+    this.limit = limit;
+    this.windowMs = windowMs;
+  }
+  hits = /* @__PURE__ */ new Map();
+  allow(key, nowMs) {
+    const cutoff = nowMs - this.windowMs;
+    const bucket = this.hits.get(key) ?? [];
+    const kept = bucket.filter((t) => t > cutoff);
+    if (kept.length >= this.limit) {
+      this.hits.set(key, kept);
+      return false;
+    }
+    kept.push(nowMs);
+    this.hits.set(key, kept);
+    return true;
+  }
+};
+var defaultBoardroomConfigLimiter = new SlidingWindowLimiter(60, 6e4);
+function auditBoardroomConfig(fields) {
+  console.info(
+    "[papervoice audit] boardroom-config",
+    JSON.stringify({ event: "boardroom_config_fetch", ...fields, ts: (/* @__PURE__ */ new Date()).toISOString() })
+  );
+}
+async function handleBoardroomConfigRequest(ctx, input, options = {}) {
+  const nowFn = options.now ?? Date.now;
+  const limiter = options.limiter ?? defaultBoardroomConfigLimiter;
+  const env = options.env ?? process.env;
+  const nowMs = nowFn();
+  const nowSec = Math.floor(nowMs / 1e3);
+  const queryCompanyIdRaw = input.query.companyId;
+  const queryCompanyId = Array.isArray(queryCompanyIdRaw) ? queryCompanyIdRaw[0] : queryCompanyIdRaw;
+  if (!queryCompanyId) {
+    auditBoardroomConfig({ outcome: "reject_missing_company_id", companyId: null });
+    return { status: 400, body: { error: "companyId query parameter is required" } };
+  }
+  if (!limiter.allow(queryCompanyId, nowMs)) {
+    auditBoardroomConfig({ outcome: "reject_rate_limited", companyId: queryCompanyId });
+    return { status: 429, body: { error: "rate_limited" } };
+  }
+  const authHeader = input.headers.authorization ?? input.headers.Authorization ?? "";
+  const bearerMatch = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
+  if (!bearerMatch) {
+    auditBoardroomConfig({ outcome: "reject_missing_bearer", companyId: queryCompanyId });
+    return { status: 401, body: { error: "missing_bearer_token" } };
+  }
+  const token = bearerMatch[1].trim();
+  const config = await ctx.config.get(queryCompanyId);
+  const hmacSecret = typeof config[CONFIG_KEY_HMAC_SECRET] === "string" ? String(config[CONFIG_KEY_HMAC_SECRET]) : "";
+  if (!hmacSecret) {
+    auditBoardroomConfig({ outcome: "reject_hmac_secret_unset", companyId: queryCompanyId });
+    return {
+      status: 409,
+      body: {
+        error: "boardroom_config_hmac_secret_missing",
+        message: "boardroomConfigHmacSecret is not set on this plugin config. Open the Papervoice Settings page once to auto-provision it."
+      }
+    };
+  }
+  let claims;
+  try {
+    claims = verifyBoardroomConfigToken(hmacSecret, token, nowSec);
+  } catch (e) {
+    const code = e instanceof BoardroomConfigTokenInvalid ? e.code : "token_error";
+    auditBoardroomConfig({ outcome: `reject_${code}`, companyId: queryCompanyId, error: code });
+    return { status: 403, body: { error: code } };
+  }
+  if (claims.companyId !== queryCompanyId) {
+    auditBoardroomConfig({
+      outcome: "reject_token_wrong_company",
+      companyId: queryCompanyId,
+      roomName: claims.roomName,
+      exp: claims.exp,
+      error: "token_wrong_company"
+    });
+    return { status: 403, body: { error: "token_wrong_company" } };
+  }
+  const boardroomRef = config.boardroomApiKeyRef;
+  if (!isSecretRef(boardroomRef)) {
+    auditBoardroomConfig({
+      outcome: "reject_boardroom_ref_missing",
+      companyId: queryCompanyId,
+      roomName: claims.roomName,
+      exp: claims.exp,
+      error: "boardroom_api_key_ref_missing"
+    });
+    return {
+      status: 409,
+      body: {
+        error: "boardroom_api_key_ref_missing",
+        message: "This company has no boardroomApiKeyRef configured. Provision it from the Papervoice Settings page."
+      }
+    };
+  }
+  const liveKitUrl = (typeof config.liveKitUrl === "string" ? config.liveKitUrl : null) ?? env.LIVEKIT_URL ?? null;
+  const liveKitApiKeyRef = config.liveKitApiKeyRef;
+  const liveKitApiSecretRef = config.liveKitApiSecretRef;
+  try {
+    const [boardroomApiKey, liveKitApiKey, liveKitApiSecret] = await Promise.all([
+      ctx.secrets.resolve(boardroomRef, { companyId: queryCompanyId, configPath: "boardroomApiKeyRef" }),
+      isSecretRef(liveKitApiKeyRef) ? ctx.secrets.resolve(liveKitApiKeyRef, { companyId: queryCompanyId, configPath: "liveKitApiKeyRef" }) : Promise.resolve(env.LIVEKIT_API_KEY ?? null),
+      isSecretRef(liveKitApiSecretRef) ? ctx.secrets.resolve(liveKitApiSecretRef, { companyId: queryCompanyId, configPath: "liveKitApiSecretRef" }) : Promise.resolve(env.LIVEKIT_API_SECRET ?? null)
+    ]);
+    if (!boardroomApiKey || !liveKitUrl || !liveKitApiKey || !liveKitApiSecret) {
+      auditBoardroomConfig({
+        outcome: "reject_config_incomplete",
+        companyId: queryCompanyId,
+        roomName: claims.roomName,
+        exp: claims.exp,
+        error: "config_incomplete"
+      });
+      return {
+        status: 409,
+        body: {
+          error: "boardroom_config_incomplete",
+          message: "One or more of boardroomApiKey / liveKitUrl / liveKitApiKey / liveKitApiSecret could not be resolved."
+        }
+      };
+    }
+    auditBoardroomConfig({
+      outcome: "ok",
+      companyId: queryCompanyId,
+      roomName: claims.roomName,
+      exp: claims.exp
+    });
+    return {
+      status: 200,
+      body: { boardroomApiKey, liveKitUrl, liveKitApiKey, liveKitApiSecret }
+    };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    auditBoardroomConfig({
+      outcome: "reject_secret_resolve_failed",
+      companyId: queryCompanyId,
+      roomName: claims.roomName,
+      exp: claims.exp,
+      error: message
+    });
+    return {
+      status: 500,
+      body: { error: "secret_resolve_failed" }
+    };
+  }
+}
+
+// src/worker.ts
 function mintLiveKitToken(apiKey, apiSecret, identity, room, ttlHours) {
   const now = Math.floor(Date.now() / 1e3);
   const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
@@ -12912,7 +13119,7 @@ function mintLiveKitToken(apiKey, apiSecret, identity, room, ttlHours) {
       sha256: createHash("sha256").update("").digest("hex")
     })
   ).toString("base64url");
-  const sig = createHmac("sha256", apiSecret).update(`${header}.${payload}`).digest("base64url");
+  const sig = createHmac2("sha256", apiSecret).update(`${header}.${payload}`).digest("base64url");
   return `${header}.${payload}.${sig}`;
 }
 var MAX_PRESET_NAME = 80;
@@ -12935,7 +13142,7 @@ function normalizePresetInput(params, existing = []) {
   if (!name || name.length > MAX_PRESET_NAME) throw new Error("Preset name must be 1-80 characters");
   const agentIds = Array.isArray(params.agentIds) ? [...new Set(params.agentIds)] : [];
   if (!agentIds.length || agentIds.some((id2) => typeof id2 !== "string" || !id2)) throw new Error("Select at least one agent");
-  const id = params.id || randomBytes(16).toString("base64url");
+  const id = params.id || randomBytes2(16).toString("base64url");
   const duplicate = existing.find((p) => p.id !== id && p.name.toLowerCase() === name.toLowerCase());
   if (duplicate) throw new Error("A preset with that name already exists");
   return { id, name, agentIds };
@@ -12953,7 +13160,7 @@ async function stampLiveKitRoomMetadata(liveKitUrl, apiKey, apiSecret, roomName,
       video: { room: roomName, roomCreate: true, roomAdmin: true }
     })
   ).toString("base64url");
-  const sig = createHmac("sha256", apiSecret).update(`${header}.${payload}`).digest("base64url");
+  const sig = createHmac2("sha256", apiSecret).update(`${header}.${payload}`).digest("base64url");
   const adminToken = `${header}.${payload}.${sig}`;
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` };
   await fetch(`${httpUrl}/twirp/livekit.RoomService/CreateRoom`, {
@@ -12979,8 +13186,14 @@ function isBoardroomRunning() {
     return false;
   }
 }
+var pluginContextRef = null;
+function requirePluginContext() {
+  if (!pluginContextRef) throw new Error("Plugin context not initialized");
+  return pluginContextRef;
+}
 var plugin = definePlugin({
   async setup(ctx) {
+    pluginContextRef = ctx;
     ctx.data.register("health", async () => ({ status: "ok" }));
     ctx.data.register(
       "agents",
@@ -13021,7 +13234,7 @@ var plugin = definePlugin({
           video: { roomList: true }
         })
       ).toString("base64url");
-      const sig = createHmac("sha256", liveKitApiSecret).update(`${header}.${payload}`).digest("base64url");
+      const sig = createHmac2("sha256", liveKitApiSecret).update(`${header}.${payload}`).digest("base64url");
       const adminToken = `${header}.${payload}.${sig}`;
       const resp = await fetch(`${httpUrl}/twirp/livekit.RoomService/ListRooms`, {
         method: "POST",
@@ -13086,6 +13299,25 @@ var plugin = definePlugin({
             console.warn(`mint-join-link: preset ${presetId} not found in config; stamping companyId only`);
           }
         }
+        const ttlHours = params.ttlHours || 48;
+        const livekitTokenTtlSeconds = ttlHours * 3600;
+        const hmacSecret = typeof config[CONFIG_KEY_HMAC_SECRET] === "string" ? String(config[CONFIG_KEY_HMAC_SECRET]) : "";
+        if (hmacSecret) {
+          const tokenTtlSeconds = resolveBoardroomConfigTokenTtlSeconds(config, livekitTokenTtlSeconds);
+          const nowSec = Math.floor(Date.now() / 1e3);
+          const exp = nowSec + tokenTtlSeconds;
+          const configToken = stampBoardroomConfigToken(hmacSecret, {
+            companyId: params.companyId,
+            roomName: room,
+            exp
+          });
+          metadata.boardroomConfigToken = configToken;
+          metadata.boardroomConfigTokenExpiresAt = new Date(exp * 1e3).toISOString();
+        } else {
+          console.warn(
+            "mint-join-link: boardroomConfigHmacSecret is not set on this plugin config; the boardroom worker will fall back to env-configured defaults. Open the Papervoice Settings page once to auto-provision the secret."
+          );
+        }
         try {
           await stampLiveKitRoomMetadata(
             liveKitUrl,
@@ -13102,7 +13334,7 @@ var plugin = definePlugin({
           liveKitApiSecret,
           params.identity || "human-guest",
           room,
-          params.ttlHours || 48
+          ttlHours
         );
         const joinUrl = `https://meet.livekit.io/custom?liveKitUrl=${encodeURIComponent(liveKitUrl)}&token=${token}`;
         return { joinUrl, token, room };
@@ -13118,6 +13350,12 @@ var plugin = definePlugin({
         status: 200,
         body: { running: isBoardroomRunning() }
       };
+    }
+    if (input.routeKey === "boardroom-config") {
+      return handleBoardroomConfigRequest(requirePluginContext(), {
+        query: input.query,
+        headers: input.headers
+      });
     }
     return { status: 404, body: { error: "Not found" } };
   }

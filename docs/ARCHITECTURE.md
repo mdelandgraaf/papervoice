@@ -116,6 +116,53 @@ Queued-comment drain (`drain_pending_comments`) records the owning
 the right per-company client. Files written by pre-PER-405 workers lack that
 field and fall through to the default client.
 
+### Zero-`.env` per-company config (PER-410)
+
+The multi-tenant path above still lets an operator plumb per-company keys via
+environment variables (`PAPERCLIP_BOARDROOM_API_KEY_<UUID>` /
+`PAPERCLIP_BOARDROOM_KEYS_JSON`). PER-410 adds a plugin-mediated path so a new
+company can be onboarded without any host restart or `.env` edit:
+
+1. `mint-join-link` stamps a **short-lived HMAC bearer token** into LiveKit
+   room metadata alongside the existing `companyId`/`presetId`/`agentIds`.
+   The token is HMAC-SHA256 over `${companyId}|${roomName}|${exp}` using a
+   per-plugin-instance secret (`boardroomConfigHmacSecret`, auto-provisioned
+   by the Papervoice Settings page on first open). The raw `pcp_*` value is
+   never stamped into metadata.
+2. The Python worker calls
+   `GET /api/plugins/papervoice/api/boardroom-config?companyId=…` with the
+   token as `Authorization: Bearer …`. The plugin verifies HMAC + exp +
+   companyId-matches-query and returns
+   `{ boardroomApiKey, liveKitUrl, liveKitApiKey, liveKitApiSecret }`,
+   resolved from company secrets via the plugin's normal secret-resolution
+   path. Missing HMAC secret or `boardroomApiKeyRef` returns `409`, never
+   `500`, so the operator gets an actionable error.
+3. Rate-limited (60 req/min per companyId) and every attempt is audit-logged
+   with `outcome`, `companyId`, `roomName`, and `exp`.
+
+**Attack-surface bounds:**
+
+- **Single company, single room.** A stolen token authorizes exactly one
+  company's config fetch, scoped to the room it was minted for; a token
+  cannot be replayed against a different company or a different room even
+  when signed by the same secret (the route re-checks
+  `claims.companyId === query.companyId`).
+- **TTL-bound.** Default TTL matches the join-link TTL (min 30 min) and is
+  capped by it — the config-fetch window never outlives the LiveKit token
+  that carried it. Configurable via `boardroomConfigTokenTtlSeconds`.
+- **No board-user identity granted.** The token unlocks *this specific
+  route only*; it is not a Paperclip session and cannot be exchanged for
+  one. Route auth mode is `webhook` (plugin handles auth), not `board` or
+  `agent`.
+- **Secret containment.** `boardroomConfigHmacSecret` is stored only in the
+  plugin instance config; it is not derivable from anything on the wire.
+  Rotating it invalidates all outstanding tokens immediately.
+- **Blast radius on secret disclosure.** If the HMAC secret leaks, an
+  attacker can mint tokens and pull that company's config values from the
+  route as long as the referenced company secrets remain valid. The
+  boardroom API key (`pcp_*`) is the highest-value item; rotating it in
+  Company Settings invalidates prior tokens' usefulness immediately.
+
 ## Required accounts & secrets (env vars only, never committed)
 
 - `ELEVENLABS_API_KEY` — TTS (and optionally hosted agent for fallback path)

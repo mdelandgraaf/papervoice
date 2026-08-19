@@ -14,6 +14,17 @@ import {
   type SetupStatus,
 } from "./setup-status";
 
+// PER-410: browser-side generator matching the format of the node-side helper
+// in src/config.ts (32 bytes, base64url, no padding). Kept inline here to
+// avoid pulling node:crypto into the UI bundle.
+function generateBoardroomConfigHmacSecret(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 interface VoiceAgent {
   id: string;
   name: string;
@@ -1665,8 +1676,11 @@ function SettingsSection({
   const [boardroomModalOpen, setBoardroomModalOpen] = useState(false);
 
   useEffect(() => {
-    fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`)
-      .then(async (response) => {
+    (async () => {
+      try {
+        const response = await fetch(
+          `/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`,
+        );
         if (!response.ok) throw new Error(`Could not load settings (${response.status})`);
         const body = await response.json();
         const values = body.configJson ?? body;
@@ -1675,8 +1689,35 @@ function SettingsSection({
         setApiSecretSecretId(values.liveKitApiSecretRef?.secretId ?? "");
         setBoardroomSecretId(values.boardroomApiKeyRef?.secretId ?? "");
         setRoom(values.room ?? "papervoice-boardroom");
-      })
-      .catch((error) => setMessage(error.message));
+
+        // PER-410: auto-provision the HMAC secret used to sign the room-metadata
+        // token that lets the boardroom worker fetch its config. Generated
+        // client-side (crypto.getRandomValues is safe in the browser) and
+        // written back to plugin config alongside the values we just loaded.
+        // Silent on failure — Save LiveKit settings can heal it later.
+        if (typeof values.boardroomConfigHmacSecret !== "string" || !values.boardroomConfigHmacSecret) {
+          try {
+            const secret = generateBoardroomConfigHmacSecret();
+            const nextConfig = { ...values, boardroomConfigHmacSecret: secret };
+            const saveResp = await fetch("/api/plugins/papervoice/config", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ companyId, configJson: nextConfig }),
+            });
+            if (!saveResp.ok) {
+              console.warn(
+                `Papervoice: could not auto-provision boardroomConfigHmacSecret (${saveResp.status}); ` +
+                  "boardroom-config fetches will 409 until Save LiveKit settings is clicked.",
+              );
+            }
+          } catch (err) {
+            console.warn("Papervoice: failed to auto-provision HMAC secret", err);
+          }
+        }
+      } catch (error: any) {
+        setMessage(error.message);
+      }
+    })();
   }, [companyId]);
 
   const loadCompanySecrets = useCallback(async () => {
