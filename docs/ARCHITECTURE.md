@@ -172,16 +172,25 @@ company can be onboarded without any host restart or `.env` edit:
   boardroom API key (`pcp_*`) is the highest-value item; rotating it in
   Company Settings invalidates prior tokens' usefulness immediately.
 
-## Required accounts & secrets (env vars only, never committed)
+## Required accounts & secrets
 
+Two tiers of configuration since PER-406 collapsed the setup story:
+
+**Instance-wide, in the boardroom worker's shared `.env`** (never committed):
 - `ELEVENLABS_API_KEY` — TTS (and optionally hosted agent for fallback path)
-- LiveKit: cloud project (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`) — or self-hosted
-- STT provider key (e.g. `DEEPGRAM_API_KEY`) unless ElevenLabs Scribe is used
-- LLM key(s) for agent personas (e.g. `ANTHROPIC_API_KEY`)
-- Twilio/SIP trunk credentials for phone dial-in (Milestone 1–2, optional if browser-only first)
-- `PAPERCLIP_API_KEY` — a long-lived Paperclip API key for the VoiceEngineer agent's own identity,
-  used by the standalone standup process to load live issue context, file follow-up issues, and post
-  the post-call summary (Milestone 3). Not a new vendor account — see M3 implementation notes.
+- `ELEVENLABS_VOICE_ID` — premade default for the M1/direct-call fallback
+- `ANTHROPIC_API_KEY` — LLM key for agent personas
+- `PAPERCLIP_API_URL` — instance control-plane URL
+- Optional `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` — cloud project (or self-hosted) used as the fallback when a company has no LiveKit row filled in its Setup panel; blank when every company is separate-tenant
+- Optional STT provider key (e.g. `DEEPGRAM_API_KEY`) unless ElevenLabs Scribe is used
+- Optional Twilio/SIP trunk credentials for phone dial-in
+
+**Per company, in the plugin's own secret store and config** (provisioned via **Company → Settings → Papervoice** — the Setup panel):
+- Boardroom `pcp_*` agent key — stored as company secret `papervoice.boardroom_api_key`, referenced from plugin config, served to the worker per job via `/boardroom-config`. Never touches `.env`.
+- LiveKit URL + API key/secret refs — same secret-ref pattern, overriding the instance-wide env vars.
+- Agent `metadata.papervoice` (enabled, moderator, voice_id, roster_order, …) — PATCHed by the plugin UI using the current board session.
+
+Env-var-only per-company setup remains supported as the air-gapped fallback (`PAPERCLIP_BOARDROOM_API_KEY_<UUID>` / `PAPERCLIP_BOARDROOM_KEYS_JSON` / `PAPERCLIP_BOARDROOM_API_KEYS` / legacy `PAPERCLIP_COMPANY_ID` + `PAPERCLIP_BOARDROOM_API_KEY`) — see `docs/MULTI_COMPANY.md`. The worker prefers the plugin path and falls back automatically.
 
 The board (via CEO) provisions accounts and spending; the VoiceEngineer never creates paid accounts on their own.
 
@@ -410,13 +419,12 @@ name. The dynamic roster is built at call start from `personas.load_roster_from_
 4. **Vendor call lives in one place.** `vendors/paperclip.py::get_voice_enabled_agents()`
    is the only place that reads agent metadata for roster-building — same one-module-touches-
    the-API rule as every other vendor surface.
-5. **Current state (2026-08-14).** VoiceEngineer has `metadata.papervoice` set (roster_order 1).
-   Aissistent (CEO) does not yet — the PATCH requires `agents:configure` on that agent, which
-   VoiceEngineer does not hold; a subtask (PER-90) is assigned to Aissistent to self-configure.
-   Until that lands, the Paperclip API returns one enabled agent (VoiceEngineer only), which
-   triggers the fallback to `BOARDROOM_ROSTER` (< 2 agents is treated as unconfigured), so the
-   call still uses the static 3-persona roster. Once Aissistent enables themselves, the dynamic
-   2-persona roster (CEO + Eng, with real Paperclip profile instructions) takes over.
+5. **Enablement now runs in the plugin UI (PER-406).** The Setup panel's Agents row PATCHes
+   `metadata.papervoice` on each toggled agent using the current board session, so `agents:configure`
+   is held by the operator opening the page rather than by any individual agent. The raw
+   `PATCH /api/agents/:id` path documented above still works for air-gapped setups; the plugin UI
+   uses exactly the same shape. Static `BOARDROOM_ROSTER` remains the fallback when fewer than 2
+   agents are enabled or the Paperclip API is unreachable.
 
 ## M3 implementation notes (PER-76)
 

@@ -35,20 +35,23 @@ src/papervoice/personas.py   — the board persona roster (identity, ElevenLabs 
 src/papervoice/vendors/      — thin adapters; only these modules touch vendor SDKs/APIs (ElevenLabs, LiveKit, Paperclip)
 ```
 
-## Setup (once)
+## Setup
+
+**Instance-wide, once** — install the code and put the shared vendor keys in one `.env`:
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 PYTHONPATH=src python -m unittest discover -s tests   # unit tests, no credentials needed
-cp .env.example .env   # then fill in the keys — see .env.example comments
+cp .env.example .env   # ELEVENLABS_API_KEY, ANTHROPIC_API_KEY, PAPERCLIP_API_URL, …
 scripts/healthcheck    # must print ALL GREEN before any call
 ```
 
+**Per-company** — for each Paperclip company that runs a standup, open **Company → Settings → Papervoice** and walk through the **Setup** panel's three rows (LiveKit credentials, boardroom identity, enabled agents). The plugin owns per-company state; the boardroom worker fetches it per job from a plugin route and needs no restart when you add or rotate a company. Full walkthrough and air-gapped fallback in [`docs/MULTI_COMPANY.md`](docs/MULTI_COMPANY.md).
+
 Run `docs/SMOKE_TEST.md` after any dependency bump or ElevenLabs/LiveKit platform change — that's the durability net this system relies on to keep working after vendor updates.
 
-Secrets live only in `.env` (gitignored). The board/CEO provisions the ElevenLabs and
-LiveKit accounts; the VoiceEngineer never creates paid accounts on their own.
+Secrets live only in `.env` (gitignored) or in Paperclip's per-company secret store. The board/CEO provisions the ElevenLabs and LiveKit accounts; the VoiceEngineer never creates paid accounts on their own.
 
 ## How to join a test call (board members)
 
@@ -91,10 +94,12 @@ LiveKit accounts; the VoiceEngineer never creates paid accounts on their own.
 
 ## Milestone 3 — Paperclip context & actions
 
-Requires `PAPERCLIP_API_URL`, `PAPERCLIP_API_KEY`, `PAPERCLIP_COMPANY_ID` in `.env` (see
-`.env.example`) — a long-lived key for this process's own Paperclip agent identity, not a new
-vendor account. Without it the standup still runs (M2 behavior), it just skips the Paperclip
-pieces below and `scripts/healthcheck`'s two Paperclip checks show red.
+Requires `PAPERCLIP_API_URL` in `.env` (instance-wide) plus a per-company boardroom `pcp_*` key
+provisioned through the Setup panel — see [`docs/MULTI_COMPANY.md`](docs/MULTI_COMPANY.md). The
+worker fetches the per-company key from the plugin per job; air-gapped deployments can supply it
+via env vars (see the appendix in the same doc). Without a resolvable key for the calling company
+the standup still runs (M2 behavior), it just skips the Paperclip pieces below and
+`scripts/healthcheck`'s two Paperclip checks show red.
 
 - **Call start:** each persona bound to a real Paperclip agent (`personas.py`) loads its own
   open issues; unbound personas (currently Ops) get a company-wide snapshot instead. This is
