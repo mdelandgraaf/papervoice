@@ -167,7 +167,20 @@ def _addressed_target(text: str, roster: tuple[Persona, ...]) -> str | None:
             # punctuation/whitespace only), so a comma-less, question-mark-less
             # STT line like "go ahead eng" still resolves.
             trailing = rf"\b{n}[\s?!.,]*\Z"
-            if re.search(leading, normalized) or re.search(cued, normalized) or re.search(trailing, normalized):
+            # Interior vocative followed by a question boundary: "..., voice
+            # engineer? are you able to list the open tasks?" names the agent
+            # mid-utterance, which leading/cued/trailing all miss — yet it is an
+            # unambiguous direct address (PER-401 board test: a question aimed at
+            # VoiceEngineer fell through to the default responder and was
+            # deflected). Keyed on a '?' immediately after the name so it never
+            # fires on "what's Eng been working on" (talking *about* the agent).
+            interior_question = rf"\b{n}\s*\?"
+            if (
+                re.search(leading, normalized)
+                or re.search(cued, normalized)
+                or re.search(trailing, normalized)
+                or re.search(interior_question, normalized)
+            ):
                 return persona.identity
     return None
 
@@ -1018,4 +1031,21 @@ async def entrypoint(ctx) -> None:
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, request_fnc=request_fnc))
+    # load_threshold (PER-401): LiveKit's prod default is 0.7 — the worker marks
+    # itself UNAVAILABLE (and stops accepting dispatch) whenever its CPU-based
+    # load crosses that. On our shared single-box deploy ambient load already
+    # hovers 0.7–0.85, so the dedicated boardroom worker was flapping
+    # available/unavailable every ~30s and a human starting a call during an
+    # "unavailable" window got no agents at all ("the worker seems offline").
+    # This worker exists to host one boardroom/direct call at a time, so ambient
+    # host CPU must not make it refuse that call; raise the bar to near-saturation.
+    # Override with LIVEKIT_LOAD_THRESHOLD if a future multi-worker deploy needs
+    # real back-pressure.
+    load_threshold = float(os.environ.get("LIVEKIT_LOAD_THRESHOLD", "1.0"))
+    cli.run_app(
+        WorkerOptions(
+            entrypoint_fnc=entrypoint,
+            request_fnc=request_fnc,
+            load_threshold=load_threshold,
+        )
+    )

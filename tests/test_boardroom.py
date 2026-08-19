@@ -116,6 +116,23 @@ class AddressedTargetTest(unittest.TestCase):
         self.assertEqual(_addressed_target("can you tell us more Eng", BOARDROOM_ROSTER), "agent-eng")
         self.assertEqual(_addressed_target("why don't you take this one Eng", BOARDROOM_ROSTER), "agent-eng")
 
+    def test_interior_vocative_before_a_question_resolves_the_named_agent(self):
+        # PER-401 board test call: a human named the agent mid-utterance, right
+        # before the question ("..., <name>? are you able to list the open
+        # tasks?"). leading/cued/trailing all miss this, so it used to fall
+        # through to the default responder and get deflected. The '?' right after
+        # the name is an unambiguous direct address. (Live calls use the
+        # Paperclip-loaded display name "VoiceEngineer" → alias "voice engineer";
+        # the static fallback roster names the same persona "Eng".)
+        self.assertEqual(
+            _addressed_target(
+                "shall we test that at the moment eng? are you able to list the current open tasks?",
+                BOARDROOM_ROSTER,
+            ),
+            "agent-eng",
+        )
+        self.assertEqual(_addressed_target("CEO? can you recap", BOARDROOM_ROSTER), "agent-ceo")
+
     def test_no_name_returns_none(self):
         self.assertIsNone(_addressed_target("what's our runway?", BOARDROOM_ROSTER))
 

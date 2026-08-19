@@ -14,7 +14,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from papervoice.moderator import AgendaItem, Moderator as _Moderator, SpeakerHandle
+from papervoice.moderator import (
+    AgendaItem,
+    Moderator as _Moderator,
+    SpeakerHandle,
+    _barge_in_answer_prompt,
+)
 
 
 def Moderator(*args, **kwargs):
@@ -127,6 +132,19 @@ class ModeratorBargeInTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(moderator.current_speaker)
         self.assertEqual(log, [("ceo", "INTERRUPTED")])
 
+    def test_barge_in_answer_prompt_steers_toward_the_lookup_tool(self):
+        """PER-401 board rejection regression: the prompt that grants the floor
+        to answer a human's live question must tell the agent to use
+        look_up_paperclip and never to hand off/end the turn without answering —
+        otherwise the model deflects ('I'll hand it back to you, CEO')."""
+        prompt = _barge_in_answer_prompt("can you list the current open tasks?")
+        self.assertTrue(prompt.startswith("Someone just asked"))
+        self.assertIn("can you list the current open tasks?", prompt)
+        self.assertIn("look_up_paperclip", prompt)
+        # Must forbid the observed deflection and the "leave query empty" path.
+        self.assertRegex(prompt, r"do NOT hand the floor")
+        self.assertIn("leave the query empty", prompt)
+
     async def test_no_op_when_nobody_holds_the_floor(self):
         log = []
         moderator = Moderator([], {"ceo": make_speaker("ceo", log)})
@@ -156,7 +174,7 @@ class ModeratorBargeInResponseTest(unittest.IsolatedAsyncioTestCase):
 
         completed = await asyncio.wait_for(task, timeout=1)
 
-        answer_prompt = 'Someone just asked: "what\'s our runway?" Answer them directly and briefly, then continue.'
+        answer_prompt = _barge_in_answer_prompt("what's our runway?")
         self.assertEqual(completed, ["ceo", "eng"])
         self.assertIn(("ceo", answer_prompt), log)
         self.assertLess(log.index(("ceo", "open")), log.index(("ceo", answer_prompt)))
@@ -242,10 +260,7 @@ class ModeratorBargeInResponseTest(unittest.IsolatedAsyncioTestCase):
 
         completed = await asyncio.wait_for(task, timeout=1)
 
-        answer_prompt = (
-            'Someone just asked: "shall we, uh, list the, uh, open tasks?"'
-            " Answer them directly and briefly, then continue."
-        )
+        answer_prompt = _barge_in_answer_prompt("shall we, uh, list the, uh, open tasks?")
         self.assertEqual(completed, ["ceo", "eng"])
         self.assertIn(("ceo", answer_prompt), log)
         self.assertLess(log.index(("ceo", answer_prompt)), log.index(("eng", "update")))
@@ -499,7 +514,7 @@ class ModeratorOpenFloorTest(unittest.IsolatedAsyncioTestCase):
 
         completed = await asyncio.wait_for(task, timeout=1)
 
-        answer_prompt = 'Someone just asked: "one more thing before you go" Answer them directly and briefly, then continue.'
+        answer_prompt = _barge_in_answer_prompt("one more thing before you go")
         self.assertEqual(completed, ["ceo"])
         self.assertIn(("ceo", answer_prompt), log)
         self.assertIsNone(moderator.current_speaker)

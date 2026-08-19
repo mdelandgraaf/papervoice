@@ -28,6 +28,30 @@ DEFAULT_ASK_AND_WAIT_TIMEOUT_SECONDS = 20.0
 DEFAULT_SPEECH_END_GRACE_SECONDS: float = 1.0
 
 
+def _barge_in_answer_prompt(question: str) -> str:
+    """Prompt that grants an agent the floor to answer a human's live question.
+
+    PER-401 board rejection ("the agents don't respond to me at all"): a human
+    asked VoiceEngineer on a live call to "list the current open tasks". The
+    agent had the look_up_paperclip tool and was correctly given the floor, but
+    the old prompt just said "Answer them directly and briefly, then continue" —
+    so the model deflected ("I'll hand it back to you, CEO") instead of calling
+    the tool. This prompt makes the expected behavior explicit: answer the human
+    now, use look_up_paperclip for anything about task status/contents/lists when
+    unsure, and never hand off or end the turn without answering. Kept starting
+    with "Someone just asked:" so existing routing/transcript assertions hold.
+    """
+    return (
+        f'Someone just asked: "{question}"'
+        " Answer them directly and briefly right now — do NOT hand the floor to"
+        " anyone else and do NOT end your turn without answering. If they asked"
+        " about the status, contents, or a list of Paperclip tasks (yours or the"
+        " company's) and you are not certain, call the look_up_paperclip tool"
+        " first and answer from what it returns — leave the query empty to list"
+        " your own open issues. Never say you don't know or make one up. Then continue."
+    )
+
+
 @dataclass(frozen=True)
 class AgendaItem:
     identity: str
@@ -512,7 +536,7 @@ class Moderator:
 
             if not await self._speak(
                 responder_identity,
-                f'Someone just asked: "{question}" Answer them directly and briefly, then continue.',
+                _barge_in_answer_prompt(question),
             ):
                 return False
 
