@@ -455,12 +455,33 @@ class Moderator:
                 else:
                     await asyncio.wait_for(self._human_reply_ready.wait(), timeout=timeout)
             except TimeoutError:
-                if reply_timeout_seconds is not None and self._human_speaking:
-                    logger.info("human still speaking at inactivity deadline; keeping floor open")
-                    await self._human_speech_stopped.wait()
-                    continue
+                # Inactivity deadline hit. If the human is still mid-utterance,
+                # keep the floor open instead of abandoning them. A long or
+                # disfluent spoken question ("shall we, uh, list the, uh, open
+                # tasks?") can run well past this window while VAD holds one
+                # continuous speaking state — the filled "uh" pauses never drop
+                # below threshold — so STT only finalizes it a beat later. Giving
+                # up here means that finalized question lands with no one waiting
+                # to answer it: the agent stays silent and the human is left
+                # talking to a wall (PER-401 board report).
+                if self._human_speaking:
+                    logger.info("human still speaking at reply deadline; keeping floor open")
+                    if reply_timeout_seconds is not None:
+                        # Post-agenda open floor: no scripted agenda is waiting
+                        # behind this, so wait unbounded for the human to finish.
+                        await self._human_speech_stopped.wait()
+                        continue
+                    # Mid-agenda barge-in: extend the floor while they finish, but
+                    # stay bounded — a stuck VAD / noisy room must not freeze the
+                    # rest of the standup. Resume if still "speaking" with nothing
+                    # transcribed after one more window.
+                    try:
+                        await asyncio.wait_for(self._human_speech_stopped.wait(), timeout=timeout)
+                    except TimeoutError:
+                        pass
+                    else:
+                        continue
                 if reply_timeout_seconds is None:
-                    # Ordinary barge-in waits retain their existing bounded behavior.
                     self.on_human_speech_stopped()
                 self._cancel_reply_debounce()
                 logger.warning(

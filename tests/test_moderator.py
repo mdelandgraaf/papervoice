@@ -217,6 +217,39 @@ class ModeratorBargeInResponseTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed, ["ceo", "eng"])
         self.assertNotIn("ceo", moderator.dropped)
 
+    async def test_human_still_speaking_past_reply_deadline_is_still_answered(self):
+        """PER-401 board report: a long, disfluent question ("shall we, uh,
+        list the, uh, open tasks?") keeps VAD in one continuous speaking state
+        past the barge-in reply window, so STT only finalizes it after the
+        deadline. The mid-agenda barge-in used to give up at the deadline and
+        resume the script — leaving the human talking to a wall and the live
+        look_up_paperclip answer never happening. The floor must stay open while
+        the human is still speaking, mirroring the post-agenda open floor."""
+        log = []
+        agenda = [AgendaItem("ceo", "open"), AgendaItem("eng", "update")]
+        speakers = {"ceo": make_interruptible_speaker("ceo", log), "eng": make_speaker("eng", log)}
+        moderator = Moderator(agenda, speakers, barge_in_reply_timeout_seconds=0.2)
+
+        task = asyncio.ensure_future(moderator.run_agenda())
+        await asyncio.sleep(0)
+        await moderator.on_human_speech_started()  # barge-in: ceo cut off, human still talking
+        await asyncio.sleep(0.3)  # let the 0.2s reply window lapse while still speaking
+        self.assertFalse(task.done())  # must not have abandoned the human yet
+
+        # human finally finishes the disfluent question, well past the deadline
+        moderator.on_human_speech_stopped()
+        moderator.record_transcript("board-member", "shall we, uh, list the, uh, open tasks?")
+
+        completed = await asyncio.wait_for(task, timeout=1)
+
+        answer_prompt = (
+            'Someone just asked: "shall we, uh, list the, uh, open tasks?"'
+            " Answer them directly and briefly, then continue."
+        )
+        self.assertEqual(completed, ["ceo", "eng"])
+        self.assertIn(("ceo", answer_prompt), log)
+        self.assertLess(log.index(("ceo", answer_prompt)), log.index(("eng", "update")))
+
     async def test_agent_track_speech_never_counts_as_the_barge_in_question(self):
         """record_transcript() is also how an agent's own speech gets logged
         (via Moderator._speak, whenever a SpeakerHandle reports what it said) —
