@@ -36,6 +36,11 @@ var manifest = {
         title: "LiveKit API secret",
         description: "A Paperclip company secret reference for LIVEKIT_API_SECRET. Leave blank to use the instance-wide LIVEKIT_API_SECRET env var."
       },
+      boardroomApiKeyRef: {
+        type: "object",
+        title: "Boardroom API key secret",
+        description: "A Paperclip company secret reference for the boardroom worker's per-company pcp_* key. Provisioned via the Settings page; never displayed after save. Falls back to PAPERCLIP_BOARDROOM_API_KEY_<UUID> / PAPERCLIP_BOARDROOM_KEYS_JSON / PAPERCLIP_BOARDROOM_API_KEY env vars when unset."
+      },
       room: {
         type: "string",
         title: "Default room",

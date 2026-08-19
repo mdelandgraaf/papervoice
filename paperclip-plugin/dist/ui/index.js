@@ -99,6 +99,20 @@ function computeSetupStatus(input) {
   return [livekit, boardroom, agents];
 }
 
+// src/ui/boardroom-key.ts
+var BOARDROOM_KEY_PATTERN = /^pcp_[A-Za-z0-9._-]{20,}$/;
+var BOARDROOM_SECRET_KEY = "papervoice.boardroom_api_key";
+var BOARDROOM_SECRET_NAME = "Papervoice boardroom API key";
+function validateBoardroomKey(raw) {
+  const value = raw.trim();
+  if (!value) return { ok: false, error: "Paste the pcp_ value returned by the token command." };
+  if (!value.startsWith("pcp_")) return { ok: false, error: "Value must start with pcp_." };
+  if (!BOARDROOM_KEY_PATTERN.test(value)) {
+    return { ok: false, error: "That does not look like a Paperclip agent token (pcp_ + \u226520 chars)." };
+  }
+  return { ok: true };
+}
+
 // src/ui/index.tsx
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 var C = {
@@ -1262,18 +1276,6 @@ function SetupSection({
     }) })
   ] });
 }
-var BOARDROOM_KEY_PATTERN = /^pcp_[A-Za-z0-9._-]{20,}$/;
-var BOARDROOM_SECRET_KEY = "papervoice.boardroom_api_key";
-var BOARDROOM_SECRET_NAME = "Papervoice boardroom API key";
-function validateBoardroomKey(raw) {
-  const value = raw.trim();
-  if (!value) return { ok: false, error: "Paste the pcp_ value returned by the token command." };
-  if (!value.startsWith("pcp_")) return { ok: false, error: "Value must start with pcp_." };
-  if (!BOARDROOM_KEY_PATTERN.test(value)) {
-    return { ok: false, error: "That does not look like a Paperclip agent token (pcp_ + \u226520 chars)." };
-  }
-  return { ok: true };
-}
 function BoardroomProvisionModal({
   companyId,
   mode,
@@ -1805,10 +1807,6 @@ function PapervoicePage({ context }) {
   );
 }
 export {
-  BOARDROOM_KEY_PATTERN,
-  BOARDROOM_SECRET_KEY,
-  BOARDROOM_SECRET_NAME,
   PapervoiceLinksWidget,
-  PapervoicePage,
-  validateBoardroomKey
+  PapervoicePage
 };

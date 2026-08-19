@@ -1417,23 +1417,11 @@ function SetupSection({
 
 // ─── Boardroom identity provisioning ─────────────────────────────────────────
 
-// Boardroom keys are Paperclip agent tokens minted with `paperclipai token
-// agent create`. Format check: pcp_ prefix + at least 20 body chars. Kept
-// generous on purpose — we don't want a legitimate longer token rejected by a
-// too-tight regex, and the server does the authoritative check.
-export const BOARDROOM_KEY_PATTERN = /^pcp_[A-Za-z0-9._-]{20,}$/;
-export const BOARDROOM_SECRET_KEY = "papervoice.boardroom_api_key";
-export const BOARDROOM_SECRET_NAME = "Papervoice boardroom API key";
-
-export function validateBoardroomKey(raw: string): { ok: true } | { ok: false; error: string } {
-  const value = raw.trim();
-  if (!value) return { ok: false, error: "Paste the pcp_ value returned by the token command." };
-  if (!value.startsWith("pcp_")) return { ok: false, error: "Value must start with pcp_." };
-  if (!BOARDROOM_KEY_PATTERN.test(value)) {
-    return { ok: false, error: "That does not look like a Paperclip agent token (pcp_ + ≥20 chars)." };
-  }
-  return { ok: true };
-}
+import {
+  BOARDROOM_SECRET_KEY,
+  BOARDROOM_SECRET_NAME,
+  validateBoardroomKey,
+} from "./boardroom-key";
 
 function BoardroomProvisionModal({
   companyId,
