@@ -6,6 +6,100 @@ import {
   StatusBadge,
   Spinner
 } from "@paperclipai/plugin-sdk/ui";
+
+// src/ui/setup-status.ts
+function computeSetupStatus(input) {
+  const secretIds = new Set(input.companySecretIds);
+  const cfg = input.config ?? {};
+  const url = (cfg.liveKitUrl ?? "").trim();
+  const keyId = (cfg.liveKitApiKeyRef?.secretId ?? "").trim();
+  const secretId = (cfg.liveKitApiSecretRef?.secretId ?? "").trim();
+  const livekit = (() => {
+    if (!url || !keyId || !secretId) {
+      const missing = [];
+      if (!url) missing.push("URL");
+      if (!keyId) missing.push("API key");
+      if (!secretId) missing.push("API secret");
+      return {
+        key: "livekit",
+        title: "LiveKit credentials",
+        status: "missing",
+        detail: `Missing ${missing.join(", ")}.`
+      };
+    }
+    const unresolved = [];
+    if (!secretIds.has(keyId)) unresolved.push("API key");
+    if (!secretIds.has(secretId)) unresolved.push("API secret");
+    if (unresolved.length) {
+      return {
+        key: "livekit",
+        title: "LiveKit credentials",
+        status: "warn",
+        detail: `Secret ref for ${unresolved.join(" and ")} not found in company secrets.`
+      };
+    }
+    return {
+      key: "livekit",
+      title: "LiveKit credentials",
+      status: "ok",
+      detail: "URL and both secret refs resolve."
+    };
+  })();
+  const boardroomId = (cfg.boardroomApiKeyRef?.secretId ?? "").trim();
+  const boardroom = (() => {
+    if (!boardroomId) {
+      return {
+        key: "boardroom",
+        title: "Boardroom identity",
+        status: "missing",
+        detail: "No boardroom API key secret provisioned yet."
+      };
+    }
+    if (!secretIds.has(boardroomId)) {
+      return {
+        key: "boardroom",
+        title: "Boardroom identity",
+        status: "warn",
+        detail: "Secret ref set but not found in company secrets."
+      };
+    }
+    return {
+      key: "boardroom",
+      title: "Boardroom identity",
+      status: "ok",
+      detail: "Boardroom API key secret resolves."
+    };
+  })();
+  const enabled = input.agents.filter((a) => a.enabled);
+  const moderator = enabled.find((a) => a.moderator);
+  const agents = (() => {
+    if (enabled.length === 0) {
+      return {
+        key: "agents",
+        title: "Enabled agents",
+        status: "missing",
+        detail: "No agents are enabled for Papervoice."
+      };
+    }
+    if (!moderator) {
+      return {
+        key: "agents",
+        title: "Enabled agents",
+        status: "warn",
+        detail: `${enabled.length} enabled, but no moderator selected.`
+      };
+    }
+    return {
+      key: "agents",
+      title: "Enabled agents",
+      status: "ok",
+      detail: `${enabled.length} enabled, moderator selected.`
+    };
+  })();
+  return [livekit, boardroom, agents];
+}
+
+// src/ui/index.tsx
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 var C = {
   bg: "#fff",
@@ -21,9 +115,14 @@ var C = {
   blue: "#2563eb",
   blueHover: "#1d4ed8",
   red: "#dc2626",
+  redBg: "#fef2f2",
+  redBorder: "#fecaca",
   green: "#166534",
   greenBg: "#dcfce7",
+  greenBorder: "#bbf7d0",
   amber: "#b45309",
+  amberBg: "#fef3c7",
+  amberBorder: "#fcd34d",
   purple: "#7c3aed"
 };
 var inputStyle = {
@@ -1050,19 +1149,341 @@ function PromptsSection({ companyId }) {
     ] }) })
   ] });
 }
+var STATUS_STYLE = {
+  ok: { dot: "#16a34a", bg: C.greenBg, border: C.greenBorder, text: C.green, label: "Ready" },
+  warn: { dot: "#d97706", bg: C.amberBg, border: C.amberBorder, text: C.amber, label: "Attention" },
+  missing: { dot: "#dc2626", bg: C.redBg, border: C.redBorder, text: C.red, label: "Missing" }
+};
+function StatusDot({ status }) {
+  const s = STATUS_STYLE[status];
+  return /* @__PURE__ */ jsx(
+    "span",
+    {
+      "aria-label": s.label,
+      title: s.label,
+      style: {
+        display: "inline-block",
+        width: 10,
+        height: 10,
+        borderRadius: "50%",
+        background: s.dot,
+        flexShrink: 0
+      }
+    }
+  );
+}
+function SetupSection({
+  rows,
+  loading,
+  onFix
+}) {
+  const [dismissedComplete, setDismissedComplete] = useState(false);
+  const allOk = !loading && rows.every((r) => r.status === "ok");
+  if (loading) {
+    return /* @__PURE__ */ jsx(Card, { style: { marginBottom: 20 }, children: /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 10 }, children: [
+      /* @__PURE__ */ jsx(Spinner, { size: "sm" }),
+      /* @__PURE__ */ jsx("span", { style: { fontSize: 13, color: C.textMuted }, children: "Checking setup\u2026" })
+    ] }) });
+  }
+  if (allOk) {
+    if (dismissedComplete) return null;
+    return /* @__PURE__ */ jsx(
+      Card,
+      {
+        style: {
+          marginBottom: 20,
+          background: C.greenBg,
+          border: `1px solid ${C.greenBorder}`
+        },
+        children: /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }, children: [
+          /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 10 }, children: [
+            /* @__PURE__ */ jsx(StatusDot, { status: "ok" }),
+            /* @__PURE__ */ jsx("span", { style: { fontSize: 14, fontWeight: 600, color: C.green }, children: "Setup complete" }),
+            /* @__PURE__ */ jsx("span", { style: { fontSize: 13, color: C.textSecondary }, children: "LiveKit, boardroom identity, and enabled agents are all ready." })
+          ] }),
+          /* @__PURE__ */ jsx(
+            "button",
+            {
+              onClick: () => setDismissedComplete(true),
+              style: { ...btnGhost, borderColor: "transparent", color: C.textMuted },
+              "aria-label": "Dismiss setup complete banner",
+              children: "Hide"
+            }
+          )
+        ] })
+      }
+    );
+  }
+  return /* @__PURE__ */ jsxs(Card, { style: { marginBottom: 20 }, children: [
+    /* @__PURE__ */ jsx(
+      SectionHeader,
+      {
+        title: "Setup",
+        description: "Complete these three checks so this company can run a Papervoice standup."
+      }
+    ),
+    /* @__PURE__ */ jsx("div", { style: { display: "flex", flexDirection: "column", gap: 8 }, children: rows.map((row) => {
+      const s = STATUS_STYLE[row.status];
+      return /* @__PURE__ */ jsxs(
+        "div",
+        {
+          "data-testid": `setup-row-${row.key}`,
+          style: {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            background: s.bg,
+            border: `1px solid ${s.border}`,
+            borderRadius: 8,
+            padding: "10px 14px"
+          },
+          children: [
+            /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 10, minWidth: 0 }, children: [
+              /* @__PURE__ */ jsx(StatusDot, { status: row.status }),
+              /* @__PURE__ */ jsxs("div", { style: { minWidth: 0 }, children: [
+                /* @__PURE__ */ jsx("div", { style: { fontSize: 13, fontWeight: 600, color: C.textPrimary }, children: row.title }),
+                /* @__PURE__ */ jsx("div", { style: { fontSize: 12, color: s.text }, children: row.detail })
+              ] })
+            ] }),
+            row.status !== "ok" && /* @__PURE__ */ jsx(
+              "button",
+              {
+                onClick: () => onFix(row.key),
+                style: btnPrimary(false),
+                "aria-label": `Fix ${row.title}`,
+                children: row.key === "boardroom" ? "Provision" : "Configure"
+              }
+            )
+          ]
+        },
+        row.key
+      );
+    }) })
+  ] });
+}
+var BOARDROOM_KEY_PATTERN = /^pcp_[A-Za-z0-9._-]{20,}$/;
+var BOARDROOM_SECRET_KEY = "papervoice.boardroom_api_key";
+var BOARDROOM_SECRET_NAME = "Papervoice boardroom API key";
+function validateBoardroomKey(raw) {
+  const value = raw.trim();
+  if (!value) return { ok: false, error: "Paste the pcp_ value returned by the token command." };
+  if (!value.startsWith("pcp_")) return { ok: false, error: "Value must start with pcp_." };
+  if (!BOARDROOM_KEY_PATTERN.test(value)) {
+    return { ok: false, error: "That does not look like a Paperclip agent token (pcp_ + \u226520 chars)." };
+  }
+  return { ok: true };
+}
+function BoardroomProvisionModal({
+  companyId,
+  mode,
+  secretId,
+  onClose,
+  onSaved
+}) {
+  const [value, setValue] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const command = `paperclipai token agent create --company-id ${companyId} --agent papervoice-boardroom --name papervoice-boardroom`;
+  function copyCommand() {
+    navigator.clipboard.writeText(command).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2e3);
+    });
+  }
+  async function save() {
+    setError(null);
+    const check = validateBoardroomKey(value);
+    if (!check.ok) {
+      setError(check.error);
+      return;
+    }
+    setSaving(true);
+    try {
+      let resolvedSecretId = secretId;
+      if (mode === "rotate" && secretId) {
+        const resp = await fetch(`/api/secrets/${encodeURIComponent(secretId)}/rotate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value: value.trim() })
+        });
+        if (!resp.ok) {
+          const body = await resp.json().catch(() => ({}));
+          throw new Error(body.error ?? `Rotate failed (${resp.status})`);
+        }
+      } else {
+        const resp = await fetch(`/api/companies/${encodeURIComponent(companyId)}/secrets`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: BOARDROOM_SECRET_NAME,
+            key: BOARDROOM_SECRET_KEY,
+            value: value.trim(),
+            description: "Per-company boardroom worker identity (pcp_*). Provisioned from the Papervoice settings page."
+          })
+        });
+        if (!resp.ok) {
+          const body = await resp.json().catch(() => ({}));
+          throw new Error(body.error ?? `Create failed (${resp.status})`);
+        }
+        const created = await resp.json();
+        resolvedSecretId = created.id;
+        const currentResp = await fetch(
+          `/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`
+        );
+        const currentBody = currentResp.ok ? await currentResp.json().catch(() => ({})) : {};
+        const existing = currentBody.configJson ?? currentBody;
+        const configResp = await fetch("/api/plugins/papervoice/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            companyId,
+            configJson: {
+              ...existing,
+              boardroomApiKeyRef: { type: "secret_ref", secretId: created.id }
+            }
+          })
+        });
+        if (!configResp.ok) {
+          const body = await configResp.json().catch(() => ({}));
+          throw new Error(body.error ?? `Config save failed (${configResp.status})`);
+        }
+      }
+      setValue("");
+      if (resolvedSecretId) onSaved(resolvedSecretId);
+    } catch (err) {
+      setError(err?.message ?? "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+  return /* @__PURE__ */ jsx(
+    "div",
+    {
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-label": mode === "rotate" ? "Rotate boardroom identity" : "Provision boardroom identity",
+      style: {
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15, 23, 42, 0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1e3,
+        padding: 16
+      },
+      onClick: (e) => {
+        if (e.target === e.currentTarget && !saving) onClose();
+      },
+      children: /* @__PURE__ */ jsxs(
+        "div",
+        {
+          style: {
+            background: C.bg,
+            border: `1px solid ${C.border}`,
+            borderRadius: 10,
+            padding: 24,
+            maxWidth: 620,
+            width: "100%",
+            boxShadow: "0 20px 40px -20px rgba(15, 23, 42, 0.35)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 16
+          },
+          children: [
+            /* @__PURE__ */ jsxs("div", { children: [
+              /* @__PURE__ */ jsx("h2", { style: { fontSize: 18, fontWeight: 600, color: C.textPrimary, margin: 0 }, children: mode === "rotate" ? "Rotate boardroom identity" : "Provision boardroom identity" }),
+              /* @__PURE__ */ jsxs("p", { style: { fontSize: 13, color: C.textMuted, margin: "6px 0 0" }, children: [
+                "The boardroom worker uses a per-company Paperclip agent token to read this company's issues during a standup. Run the command below in a terminal, then paste the",
+                " ",
+                /* @__PURE__ */ jsx("code", { children: "pcp_" }),
+                " value it prints back. The plugin stores it as a company secret and never shows it again."
+              ] })
+            ] }),
+            /* @__PURE__ */ jsx(FormField, { label: "1. Run this on the Paperclip host", children: /* @__PURE__ */ jsxs(CodeBox, { children: [
+              /* @__PURE__ */ jsx("span", { style: { flex: 1 }, children: command }),
+              /* @__PURE__ */ jsx(
+                "button",
+                {
+                  onClick: copyCommand,
+                  style: {
+                    background: copied ? C.greenBg : C.border,
+                    border: "none",
+                    borderRadius: 4,
+                    padding: "4px 10px",
+                    fontSize: 12,
+                    cursor: "pointer",
+                    color: copied ? C.green : "#334155",
+                    fontWeight: 600,
+                    whiteSpace: "nowrap",
+                    flexShrink: 0
+                  },
+                  children: copied ? "Copied!" : "Copy"
+                }
+              )
+            ] }) }),
+            /* @__PURE__ */ jsx(
+              FormField,
+              {
+                label: "2. Paste the pcp_ token it printed",
+                hint: mode === "rotate" ? "Rotating replaces the current stored value; the previous key becomes invalid immediately after the next worker restart." : "The token is written to a company secret and referenced from plugin config. It is never shown here again.",
+                children: /* @__PURE__ */ jsx(
+                  "textarea",
+                  {
+                    value,
+                    onChange: (e) => setValue(e.target.value),
+                    placeholder: "pcp_...",
+                    rows: 4,
+                    spellCheck: false,
+                    autoComplete: "off",
+                    style: {
+                      border: `1px solid ${C.border}`,
+                      borderRadius: 6,
+                      padding: "8px 10px",
+                      fontSize: 12,
+                      fontFamily: "monospace",
+                      background: C.bgMuted,
+                      color: C.textPrimary,
+                      width: "100%",
+                      boxSizing: "border-box",
+                      outline: "none",
+                      resize: "vertical"
+                    }
+                  }
+                )
+              }
+            ),
+            error && /* @__PURE__ */ jsx(InlineMessage, { text: error, ok: false }),
+            /* @__PURE__ */ jsxs("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8 }, children: [
+              /* @__PURE__ */ jsx("button", { onClick: onClose, disabled: saving, style: btnGhost, children: "Cancel" }),
+              /* @__PURE__ */ jsx("button", { onClick: save, disabled: saving || !value.trim(), style: btnPrimary(saving || !value.trim()), children: saving ? "Saving\u2026" : mode === "rotate" ? "Rotate" : "Save" })
+            ] })
+          ]
+        }
+      )
+    }
+  );
+}
 function SettingsSection({
   companyId,
   workerRunning,
   workerLoading,
-  onRefreshWorker
+  onRefreshWorker,
+  onConfigChanged,
+  autoOpenBoardroomModal,
+  onBoardroomModalOpened
 }) {
   const [liveKitUrl, setLiveKitUrl] = useState("");
   const [apiKeySecretId, setApiKeySecretId] = useState("");
   const [apiSecretSecretId, setApiSecretSecretId] = useState("");
+  const [boardroomSecretId, setBoardroomSecretId] = useState("");
   const [companySecrets, setCompanySecrets] = useState([]);
   const [secretsLoading, setSecretsLoading] = useState(true);
   const [room, setRoom] = useState("papervoice-boardroom");
   const [message, setMessage] = useState(null);
+  const [boardroomModalOpen, setBoardroomModalOpen] = useState(false);
   useEffect(() => {
     fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`).then(async (response) => {
       if (!response.ok) throw new Error(`Could not load settings (${response.status})`);
@@ -1071,17 +1492,34 @@ function SettingsSection({
       setLiveKitUrl(values.liveKitUrl ?? "");
       setApiKeySecretId(values.liveKitApiKeyRef?.secretId ?? "");
       setApiSecretSecretId(values.liveKitApiSecretRef?.secretId ?? "");
+      setBoardroomSecretId(values.boardroomApiKeyRef?.secretId ?? "");
       setRoom(values.room ?? "papervoice-boardroom");
     }).catch((error) => setMessage(error.message));
   }, [companyId]);
-  useEffect(() => {
+  const loadCompanySecrets = useCallback(async () => {
     setSecretsLoading(true);
-    fetch(`/api/companies/${encodeURIComponent(companyId)}/secrets`).then(async (response) => {
+    try {
+      const response = await fetch(`/api/companies/${encodeURIComponent(companyId)}/secrets`);
       if (!response.ok) throw new Error(`Could not load company secrets (${response.status})`);
       const secrets = await response.json();
       setCompanySecrets(secrets.filter((s) => !s.status || s.status === "active"));
-    }).catch((error) => setMessage(error.message)).finally(() => setSecretsLoading(false));
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setSecretsLoading(false);
+    }
   }, [companyId]);
+  useEffect(() => {
+    loadCompanySecrets();
+  }, [loadCompanySecrets]);
+  useEffect(() => {
+    if (autoOpenBoardroomModal) {
+      setBoardroomModalOpen(true);
+      onBoardroomModalOpened();
+    }
+  }, [autoOpenBoardroomModal, onBoardroomModalOpened]);
+  const boardroomSecret = boardroomSecretId ? companySecrets.find((s) => s.id === boardroomSecretId) ?? null : null;
+  const boardroomMode = boardroomSecretId ? "rotate" : "provision";
   async function saveLiveKitConfig() {
     setMessage(null);
     const currentResp = await fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`);
@@ -1105,6 +1543,7 @@ function SettingsSection({
     setMessage(
       response.ok ? "LiveKit configuration saved." : body.error ?? `Save failed (${response.status})`
     );
+    if (response.ok) onConfigChanged();
   }
   const secretOptions = secretsLoading ? [/* @__PURE__ */ jsx("option", { value: "", children: "Loading secrets\u2026" }, "")] : [
     /* @__PURE__ */ jsx("option", { value: "", children: "Select a company secret" }, ""),
@@ -1166,6 +1605,38 @@ function SettingsSection({
       ) }),
       message && /* @__PURE__ */ jsx(InlineMessage, { text: message, ok: message.endsWith("saved.") })
     ] }) }),
+    /* @__PURE__ */ jsx(Card, { children: /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 12 }, children: [
+      /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }, children: [
+        /* @__PURE__ */ jsxs("div", { children: [
+          /* @__PURE__ */ jsx("div", { style: { fontWeight: 600, fontSize: 14, color: C.textPrimary }, children: "Boardroom identity" }),
+          /* @__PURE__ */ jsxs("p", { style: { fontSize: 12, color: C.textMuted, margin: "4px 0 0" }, children: [
+            "Per-company ",
+            /* @__PURE__ */ jsx("code", { children: "pcp_*" }),
+            " token the boardroom worker uses to read this company's Paperclip issues during a standup. Stored as a company secret; the plugin never shows the value again."
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }, children: [
+          boardroomSecretId ? /* @__PURE__ */ jsx(StatusBadge, { status: "ok", label: "Configured" }) : /* @__PURE__ */ jsx(StatusBadge, { status: "pending", label: "Not set" }),
+          /* @__PURE__ */ jsx(
+            "button",
+            {
+              onClick: () => setBoardroomModalOpen(true),
+              style: btnPrimary(false),
+              "data-testid": "boardroom-identity-button",
+              children: boardroomSecretId ? "Rotate" : "Provision"
+            }
+          )
+        ] })
+      ] }),
+      boardroomSecretId && /* @__PURE__ */ jsxs("div", { style: { fontSize: 12, color: C.textFaint }, children: [
+        "Secret:",
+        " ",
+        /* @__PURE__ */ jsxs("code", { children: [
+          boardroomSecret?.name ?? BOARDROOM_SECRET_NAME,
+          boardroomSecret?.key ? ` (${boardroomSecret.key})` : ""
+        ] })
+      ] })
+    ] }) }),
     /* @__PURE__ */ jsxs(Card, { children: [
       /* @__PURE__ */ jsx("div", { style: { fontWeight: 600, fontSize: 14, color: C.textPrimary, marginBottom: 12 }, children: "Boardroom worker" }),
       /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }, children: [
@@ -1179,7 +1650,23 @@ function SettingsSection({
         /* @__PURE__ */ jsx("code", { children: "scripts/boardroom-worker" }),
         "."
       ] })
-    ] })
+    ] }),
+    boardroomModalOpen && /* @__PURE__ */ jsx(
+      BoardroomProvisionModal,
+      {
+        companyId,
+        mode: boardroomMode,
+        secretId: boardroomSecretId || null,
+        onClose: () => setBoardroomModalOpen(false),
+        onSaved: async (newSecretId) => {
+          setBoardroomSecretId(newSecretId);
+          setBoardroomModalOpen(false);
+          setMessage("Boardroom identity saved.");
+          await loadCompanySecrets();
+          onConfigChanged();
+        }
+      }
+    )
   ] });
 }
 function PapervoicePage({ context }) {
@@ -1187,6 +1674,46 @@ function PapervoicePage({ context }) {
   const [activeTab, setActiveTab] = useState("agents");
   const { data: agents, loading: agentsLoading, error: agentsError, refresh: refreshAgents } = usePluginData("agents", { companyId });
   const { running: workerRunning, loading: workerLoading, refresh: refreshWorker } = useWorkerStatus(companyId);
+  const [setupConfig, setSetupConfig] = useState(null);
+  const [setupSecretIds, setSetupSecretIds] = useState([]);
+  const [setupLoading, setSetupLoading] = useState(true);
+  const [setupBump, setSetupBump] = useState(0);
+  useEffect(() => {
+    if (!companyId) return;
+    let cancelled = false;
+    setSetupLoading(true);
+    Promise.all([
+      fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`).then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+      fetch(`/api/companies/${encodeURIComponent(companyId)}/secrets`).then((r) => r.ok ? r.json() : []).catch(() => [])
+    ]).then(([configBodyRaw, secrets]) => {
+      if (cancelled) return;
+      const configBody = configBodyRaw ?? {};
+      const values = configBody.configJson ?? configBody;
+      setSetupConfig(values ?? {});
+      const list = Array.isArray(secrets) ? secrets : [];
+      setSetupSecretIds(list.filter((s) => !s.status || s.status === "active").map((s) => s.id));
+      setSetupLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, setupBump, activeTab]);
+  const setupRows = computeSetupStatus({
+    config: setupConfig,
+    companySecretIds: setupSecretIds,
+    agents: (agents ?? []).map((a) => ({ enabled: a.enabled, moderator: a.moderator }))
+  });
+  const [autoOpenBoardroom, setAutoOpenBoardroom] = useState(false);
+  const handleFix = useCallback((key) => {
+    if (key === "agents") {
+      setActiveTab("agents");
+    } else if (key === "boardroom") {
+      setActiveTab("settings");
+      setAutoOpenBoardroom(true);
+    } else {
+      setActiveTab("settings");
+    }
+  }, []);
   const tabs = [
     { id: "agents", label: "Agents" },
     { id: "rooms", label: "Rooms" },
@@ -1209,6 +1736,14 @@ function PapervoicePage({ context }) {
           /* @__PURE__ */ jsx("h1", { style: { fontSize: 22, fontWeight: 700, color: C.textPrimary, margin: "0 0 6px" }, children: "Papervoice" }),
           /* @__PURE__ */ jsx("p", { style: { fontSize: 14, color: C.textMuted, margin: 0 }, children: "Voice AI agents for live standups \u2014 manage personas, generate join links, and monitor the boardroom worker." })
         ] }),
+        /* @__PURE__ */ jsx(
+          SetupSection,
+          {
+            rows: setupRows,
+            loading: setupLoading || agentsLoading,
+            onFix: handleFix
+          }
+        ),
         /* @__PURE__ */ jsx(
           "div",
           {
@@ -1259,7 +1794,10 @@ function PapervoicePage({ context }) {
             companyId,
             workerRunning,
             workerLoading,
-            onRefreshWorker: refreshWorker
+            onRefreshWorker: refreshWorker,
+            onConfigChanged: () => setSetupBump((n) => n + 1),
+            autoOpenBoardroomModal: autoOpenBoardroom,
+            onBoardroomModalOpened: () => setAutoOpenBoardroom(false)
           }
         )
       ]
@@ -1267,6 +1805,10 @@ function PapervoicePage({ context }) {
   );
 }
 export {
+  BOARDROOM_KEY_PATTERN,
+  BOARDROOM_SECRET_KEY,
+  BOARDROOM_SECRET_NAME,
   PapervoiceLinksWidget,
-  PapervoicePage
+  PapervoicePage,
+  validateBoardroomKey
 };

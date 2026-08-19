@@ -7,6 +7,12 @@ import {
   Spinner,
 } from "@paperclipai/plugin-sdk/ui";
 import type { PluginCompanySettingsPageProps, PluginWidgetProps } from "@paperclipai/plugin-sdk/ui";
+import {
+  computeSetupStatus,
+  type SetupInput,
+  type SetupRow,
+  type SetupStatus,
+} from "./setup-status";
 
 interface VoiceAgent {
   id: string;
@@ -53,9 +59,14 @@ const C = {
   blue: "#2563eb",
   blueHover: "#1d4ed8",
   red: "#dc2626",
+  redBg: "#fef2f2",
+  redBorder: "#fecaca",
   green: "#166534",
   greenBg: "#dcfce7",
+  greenBorder: "#bbf7d0",
   amber: "#b45309",
+  amberBg: "#fef3c7",
+  amberBorder: "#fcd34d",
   purple: "#7c3aed",
 } as const;
 
@@ -1274,6 +1285,368 @@ function PromptsSection({ companyId }: { companyId: string }) {
   );
 }
 
+// ─── Setup diagnostic panel ──────────────────────────────────────────────────
+
+const STATUS_STYLE: Record<
+  SetupStatus,
+  { dot: string; bg: string; border: string; text: string; label: string }
+> = {
+  ok: { dot: "#16a34a", bg: C.greenBg, border: C.greenBorder, text: C.green, label: "Ready" },
+  warn: { dot: "#d97706", bg: C.amberBg, border: C.amberBorder, text: C.amber, label: "Attention" },
+  missing: { dot: "#dc2626", bg: C.redBg, border: C.redBorder, text: C.red, label: "Missing" },
+};
+
+function StatusDot({ status }: { status: SetupStatus }) {
+  const s = STATUS_STYLE[status];
+  return (
+    <span
+      aria-label={s.label}
+      title={s.label}
+      style={{
+        display: "inline-block",
+        width: 10,
+        height: 10,
+        borderRadius: "50%",
+        background: s.dot,
+        flexShrink: 0,
+      }}
+    />
+  );
+}
+
+function SetupSection({
+  rows,
+  loading,
+  onFix,
+}: {
+  rows: SetupRow[];
+  loading: boolean;
+  onFix: (key: SetupRow["key"]) => void;
+}) {
+  const [dismissedComplete, setDismissedComplete] = useState(false);
+  const allOk = !loading && rows.every((r) => r.status === "ok");
+
+  if (loading) {
+    return (
+      <Card style={{ marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <Spinner size="sm" />
+          <span style={{ fontSize: 13, color: C.textMuted }}>Checking setup…</span>
+        </div>
+      </Card>
+    );
+  }
+
+  if (allOk) {
+    if (dismissedComplete) return null;
+    return (
+      <Card
+        style={{
+          marginBottom: 20,
+          background: C.greenBg,
+          border: `1px solid ${C.greenBorder}`,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <StatusDot status="ok" />
+            <span style={{ fontSize: 14, fontWeight: 600, color: C.green }}>Setup complete</span>
+            <span style={{ fontSize: 13, color: C.textSecondary }}>
+              LiveKit, boardroom identity, and enabled agents are all ready.
+            </span>
+          </div>
+          <button
+            onClick={() => setDismissedComplete(true)}
+            style={{ ...btnGhost, borderColor: "transparent", color: C.textMuted }}
+            aria-label="Dismiss setup complete banner"
+          >
+            Hide
+          </button>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card style={{ marginBottom: 20 }}>
+      <SectionHeader
+        title="Setup"
+        description="Complete these three checks so this company can run a Papervoice standup."
+      />
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {rows.map((row) => {
+          const s = STATUS_STYLE[row.status];
+          return (
+            <div
+              key={row.key}
+              data-testid={`setup-row-${row.key}`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                background: s.bg,
+                border: `1px solid ${s.border}`,
+                borderRadius: 8,
+                padding: "10px 14px",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                <StatusDot status={row.status} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.textPrimary }}>{row.title}</div>
+                  <div style={{ fontSize: 12, color: s.text }}>{row.detail}</div>
+                </div>
+              </div>
+              {row.status !== "ok" && (
+                <button
+                  onClick={() => onFix(row.key)}
+                  style={btnPrimary(false)}
+                  aria-label={`Fix ${row.title}`}
+                >
+                  {row.key === "boardroom" ? "Provision" : "Configure"}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+// ─── Boardroom identity provisioning ─────────────────────────────────────────
+
+// Boardroom keys are Paperclip agent tokens minted with `paperclipai token
+// agent create`. Format check: pcp_ prefix + at least 20 body chars. Kept
+// generous on purpose — we don't want a legitimate longer token rejected by a
+// too-tight regex, and the server does the authoritative check.
+export const BOARDROOM_KEY_PATTERN = /^pcp_[A-Za-z0-9._-]{20,}$/;
+export const BOARDROOM_SECRET_KEY = "papervoice.boardroom_api_key";
+export const BOARDROOM_SECRET_NAME = "Papervoice boardroom API key";
+
+export function validateBoardroomKey(raw: string): { ok: true } | { ok: false; error: string } {
+  const value = raw.trim();
+  if (!value) return { ok: false, error: "Paste the pcp_ value returned by the token command." };
+  if (!value.startsWith("pcp_")) return { ok: false, error: "Value must start with pcp_." };
+  if (!BOARDROOM_KEY_PATTERN.test(value)) {
+    return { ok: false, error: "That does not look like a Paperclip agent token (pcp_ + ≥20 chars)." };
+  }
+  return { ok: true };
+}
+
+function BoardroomProvisionModal({
+  companyId,
+  mode,
+  secretId,
+  onClose,
+  onSaved,
+}: {
+  companyId: string;
+  mode: "provision" | "rotate";
+  secretId: string | null;
+  onClose: () => void;
+  onSaved: (newSecretId: string) => void;
+}) {
+  const [value, setValue] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const command = `paperclipai token agent create --company-id ${companyId} --agent papervoice-boardroom --name papervoice-boardroom`;
+
+  function copyCommand() {
+    navigator.clipboard.writeText(command).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  async function save() {
+    setError(null);
+    const check = validateBoardroomKey(value);
+    if (!check.ok) {
+      setError(check.error);
+      return;
+    }
+    setSaving(true);
+    try {
+      let resolvedSecretId = secretId;
+      if (mode === "rotate" && secretId) {
+        const resp = await fetch(`/api/secrets/${encodeURIComponent(secretId)}/rotate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value: value.trim() }),
+        });
+        if (!resp.ok) {
+          const body = await resp.json().catch(() => ({}));
+          throw new Error(body.error ?? `Rotate failed (${resp.status})`);
+        }
+      } else {
+        const resp = await fetch(`/api/companies/${encodeURIComponent(companyId)}/secrets`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: BOARDROOM_SECRET_NAME,
+            key: BOARDROOM_SECRET_KEY,
+            value: value.trim(),
+            description:
+              "Per-company boardroom worker identity (pcp_*). Provisioned from the Papervoice settings page.",
+          }),
+        });
+        if (!resp.ok) {
+          const body = await resp.json().catch(() => ({}));
+          throw new Error(body.error ?? `Create failed (${resp.status})`);
+        }
+        const created = (await resp.json()) as { id: string };
+        resolvedSecretId = created.id;
+
+        const currentResp = await fetch(
+          `/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`,
+        );
+        const currentBody = currentResp.ok ? await currentResp.json().catch(() => ({})) : {};
+        const existing = currentBody.configJson ?? currentBody;
+        const configResp = await fetch("/api/plugins/papervoice/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            companyId,
+            configJson: {
+              ...existing,
+              boardroomApiKeyRef: { type: "secret_ref", secretId: created.id },
+            },
+          }),
+        });
+        if (!configResp.ok) {
+          const body = await configResp.json().catch(() => ({}));
+          throw new Error(body.error ?? `Config save failed (${configResp.status})`);
+        }
+      }
+      // Wipe the value the instant we're done. The plugin never reads it back
+      // from the UI — the operator can only rotate to a new one.
+      setValue("");
+      if (resolvedSecretId) onSaved(resolvedSecretId);
+    } catch (err: any) {
+      setError(err?.message ?? "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={mode === "rotate" ? "Rotate boardroom identity" : "Provision boardroom identity"}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15, 23, 42, 0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1000,
+        padding: 16,
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !saving) onClose();
+      }}
+    >
+      <div
+        style={{
+          background: C.bg,
+          border: `1px solid ${C.border}`,
+          borderRadius: 10,
+          padding: 24,
+          maxWidth: 620,
+          width: "100%",
+          boxShadow: "0 20px 40px -20px rgba(15, 23, 42, 0.35)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 16,
+        }}
+      >
+        <div>
+          <h2 style={{ fontSize: 18, fontWeight: 600, color: C.textPrimary, margin: 0 }}>
+            {mode === "rotate" ? "Rotate boardroom identity" : "Provision boardroom identity"}
+          </h2>
+          <p style={{ fontSize: 13, color: C.textMuted, margin: "6px 0 0" }}>
+            The boardroom worker uses a per-company Paperclip agent token to read this company's
+            issues during a standup. Run the command below in a terminal, then paste the{" "}
+            <code>pcp_</code> value it prints back. The plugin stores it as a company secret and
+            never shows it again.
+          </p>
+        </div>
+
+        <FormField label="1. Run this on the Paperclip host">
+          <CodeBox>
+            <span style={{ flex: 1 }}>{command}</span>
+            <button
+              onClick={copyCommand}
+              style={{
+                background: copied ? C.greenBg : C.border,
+                border: "none",
+                borderRadius: 4,
+                padding: "4px 10px",
+                fontSize: 12,
+                cursor: "pointer",
+                color: copied ? C.green : "#334155",
+                fontWeight: 600,
+                whiteSpace: "nowrap",
+                flexShrink: 0,
+              }}
+            >
+              {copied ? "Copied!" : "Copy"}
+            </button>
+          </CodeBox>
+        </FormField>
+
+        <FormField
+          label="2. Paste the pcp_ token it printed"
+          hint={
+            mode === "rotate"
+              ? "Rotating replaces the current stored value; the previous key becomes invalid immediately after the next worker restart."
+              : "The token is written to a company secret and referenced from plugin config. It is never shown here again."
+          }
+        >
+          <textarea
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder="pcp_..."
+            rows={4}
+            spellCheck={false}
+            autoComplete="off"
+            style={{
+              border: `1px solid ${C.border}`,
+              borderRadius: 6,
+              padding: "8px 10px",
+              fontSize: 12,
+              fontFamily: "monospace",
+              background: C.bgMuted,
+              color: C.textPrimary,
+              width: "100%",
+              boxSizing: "border-box",
+              outline: "none",
+              resize: "vertical",
+            }}
+          />
+        </FormField>
+
+        {error && <InlineMessage text={error} ok={false} />}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button onClick={onClose} disabled={saving} style={btnGhost}>
+            Cancel
+          </button>
+          <button onClick={save} disabled={saving || !value.trim()} style={btnPrimary(saving || !value.trim())}>
+            {saving ? "Saving…" : mode === "rotate" ? "Rotate" : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Settings section ─────────────────────────────────────────────────────────
 
 function SettingsSection({
@@ -1281,19 +1654,27 @@ function SettingsSection({
   workerRunning,
   workerLoading,
   onRefreshWorker,
+  onConfigChanged,
+  autoOpenBoardroomModal,
+  onBoardroomModalOpened,
 }: {
   companyId: string;
   workerRunning: boolean | null;
   workerLoading: boolean;
   onRefreshWorker: () => void;
+  onConfigChanged: () => void;
+  autoOpenBoardroomModal: boolean;
+  onBoardroomModalOpened: () => void;
 }) {
   const [liveKitUrl, setLiveKitUrl] = useState("");
   const [apiKeySecretId, setApiKeySecretId] = useState("");
   const [apiSecretSecretId, setApiSecretSecretId] = useState("");
+  const [boardroomSecretId, setBoardroomSecretId] = useState("");
   const [companySecrets, setCompanySecrets] = useState<CompanySecretSummary[]>([]);
   const [secretsLoading, setSecretsLoading] = useState(true);
   const [room, setRoom] = useState("papervoice-boardroom");
   const [message, setMessage] = useState<string | null>(null);
+  const [boardroomModalOpen, setBoardroomModalOpen] = useState(false);
 
   useEffect(() => {
     fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`)
@@ -1304,22 +1685,41 @@ function SettingsSection({
         setLiveKitUrl(values.liveKitUrl ?? "");
         setApiKeySecretId(values.liveKitApiKeyRef?.secretId ?? "");
         setApiSecretSecretId(values.liveKitApiSecretRef?.secretId ?? "");
+        setBoardroomSecretId(values.boardroomApiKeyRef?.secretId ?? "");
         setRoom(values.room ?? "papervoice-boardroom");
       })
       .catch((error) => setMessage(error.message));
   }, [companyId]);
 
-  useEffect(() => {
+  const loadCompanySecrets = useCallback(async () => {
     setSecretsLoading(true);
-    fetch(`/api/companies/${encodeURIComponent(companyId)}/secrets`)
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`Could not load company secrets (${response.status})`);
-        const secrets = (await response.json()) as CompanySecretSummary[];
-        setCompanySecrets(secrets.filter((s) => !s.status || s.status === "active"));
-      })
-      .catch((error) => setMessage(error.message))
-      .finally(() => setSecretsLoading(false));
+    try {
+      const response = await fetch(`/api/companies/${encodeURIComponent(companyId)}/secrets`);
+      if (!response.ok) throw new Error(`Could not load company secrets (${response.status})`);
+      const secrets = (await response.json()) as CompanySecretSummary[];
+      setCompanySecrets(secrets.filter((s) => !s.status || s.status === "active"));
+    } catch (error: any) {
+      setMessage(error.message);
+    } finally {
+      setSecretsLoading(false);
+    }
   }, [companyId]);
+
+  useEffect(() => {
+    loadCompanySecrets();
+  }, [loadCompanySecrets]);
+
+  useEffect(() => {
+    if (autoOpenBoardroomModal) {
+      setBoardroomModalOpen(true);
+      onBoardroomModalOpened();
+    }
+  }, [autoOpenBoardroomModal, onBoardroomModalOpened]);
+
+  const boardroomSecret = boardroomSecretId
+    ? companySecrets.find((s) => s.id === boardroomSecretId) ?? null
+    : null;
+  const boardroomMode: "provision" | "rotate" = boardroomSecretId ? "rotate" : "provision";
 
   async function saveLiveKitConfig() {
     setMessage(null);
@@ -1344,6 +1744,7 @@ function SettingsSection({
     setMessage(
       response.ok ? "LiveKit configuration saved." : body.error ?? `Save failed (${response.status})`
     );
+    if (response.ok) onConfigChanged();
   }
 
   const secretOptions = secretsLoading
@@ -1421,6 +1822,45 @@ function SettingsSection({
         </div>
       </Card>
 
+      {/* Boardroom identity card */}
+      <Card>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 14, color: C.textPrimary }}>Boardroom identity</div>
+              <p style={{ fontSize: 12, color: C.textMuted, margin: "4px 0 0" }}>
+                Per-company <code>pcp_*</code> token the boardroom worker uses to read this
+                company's Paperclip issues during a standup. Stored as a company secret; the
+                plugin never shows the value again.
+              </p>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+              {boardroomSecretId ? (
+                <StatusBadge status="ok" label="Configured" />
+              ) : (
+                <StatusBadge status="pending" label="Not set" />
+              )}
+              <button
+                onClick={() => setBoardroomModalOpen(true)}
+                style={btnPrimary(false)}
+                data-testid="boardroom-identity-button"
+              >
+                {boardroomSecretId ? "Rotate" : "Provision"}
+              </button>
+            </div>
+          </div>
+          {boardroomSecretId && (
+            <div style={{ fontSize: 12, color: C.textFaint }}>
+              Secret:{" "}
+              <code>
+                {boardroomSecret?.name ?? BOARDROOM_SECRET_NAME}
+                {boardroomSecret?.key ? ` (${boardroomSecret.key})` : ""}
+              </code>
+            </div>
+          )}
+        </div>
+      </Card>
+
       {/* Boardroom worker card */}
       <Card>
         <div style={{ fontWeight: 600, fontSize: 14, color: C.textPrimary, marginBottom: 12 }}>Boardroom worker</div>
@@ -1443,6 +1883,22 @@ function SettingsSection({
           Start it with <code>scripts/boardroom-worker</code>.
         </p>
       </Card>
+
+      {boardroomModalOpen && (
+        <BoardroomProvisionModal
+          companyId={companyId}
+          mode={boardroomMode}
+          secretId={boardroomSecretId || null}
+          onClose={() => setBoardroomModalOpen(false)}
+          onSaved={async (newSecretId) => {
+            setBoardroomSecretId(newSecretId);
+            setBoardroomModalOpen(false);
+            setMessage("Boardroom identity saved.");
+            await loadCompanySecrets();
+            onConfigChanged();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1458,6 +1914,60 @@ export function PapervoicePage({ context }: PluginCompanySettingsPageProps) {
   >("agents", { companyId });
 
   const { running: workerRunning, loading: workerLoading, refresh: refreshWorker } = useWorkerStatus(companyId);
+
+  // Setup panel needs the raw plugin config + company secrets to compute the
+  // three checklist rows. Refetch whenever we switch tabs so edits made in
+  // Settings/Agents propagate back into the top-of-page diagnostic.
+  const [setupConfig, setSetupConfig] = useState<SetupInput["config"]>(null);
+  const [setupSecretIds, setSetupSecretIds] = useState<string[]>([]);
+  const [setupLoading, setSetupLoading] = useState(true);
+  const [setupBump, setSetupBump] = useState(0);
+
+  useEffect(() => {
+    if (!companyId) return;
+    let cancelled = false;
+    setSetupLoading(true);
+    Promise.all([
+      fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`)
+        .then((r) => (r.ok ? r.json() : {}))
+        .catch(() => ({})),
+      fetch(`/api/companies/${encodeURIComponent(companyId)}/secrets`)
+        .then((r) => (r.ok ? r.json() : []))
+        .catch(() => []),
+    ]).then(([configBodyRaw, secrets]) => {
+      if (cancelled) return;
+      const configBody = (configBodyRaw ?? {}) as Record<string, unknown>;
+      const values =
+        (configBody.configJson as SetupInput["config"]) ??
+        (configBody as SetupInput["config"]);
+      setSetupConfig(values ?? {});
+      const list = Array.isArray(secrets) ? (secrets as CompanySecretSummary[]) : [];
+      setSetupSecretIds(list.filter((s) => !s.status || s.status === "active").map((s) => s.id));
+      setSetupLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, setupBump, activeTab]);
+
+  const setupRows = computeSetupStatus({
+    config: setupConfig,
+    companySecretIds: setupSecretIds,
+    agents: (agents ?? []).map((a) => ({ enabled: a.enabled, moderator: a.moderator })),
+  });
+
+  const [autoOpenBoardroom, setAutoOpenBoardroom] = useState(false);
+
+  const handleFix = useCallback((key: SetupRow["key"]) => {
+    if (key === "agents") {
+      setActiveTab("agents");
+    } else if (key === "boardroom") {
+      setActiveTab("settings");
+      setAutoOpenBoardroom(true);
+    } else {
+      setActiveTab("settings");
+    }
+  }, []);
 
   const tabs: Array<{ id: typeof activeTab; label: string }> = [
     { id: "agents", label: "Agents" },
@@ -1484,6 +1994,12 @@ export function PapervoicePage({ context }: PluginCompanySettingsPageProps) {
           Voice AI agents for live standups — manage personas, generate join links, and monitor the boardroom worker.
         </p>
       </div>
+
+      <SetupSection
+        rows={setupRows}
+        loading={setupLoading || agentsLoading}
+        onFix={handleFix}
+      />
 
       {/* Tab navigation */}
       <div
@@ -1538,6 +2054,9 @@ export function PapervoicePage({ context }: PluginCompanySettingsPageProps) {
           workerRunning={workerRunning}
           workerLoading={workerLoading}
           onRefreshWorker={refreshWorker}
+          onConfigChanged={() => setSetupBump((n) => n + 1)}
+          autoOpenBoardroomModal={autoOpenBoardroom}
+          onBoardroomModalOpened={() => setAutoOpenBoardroom(false)}
         />
       )}
     </div>
