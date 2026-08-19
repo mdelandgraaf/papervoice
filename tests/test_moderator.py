@@ -18,13 +18,15 @@ from papervoice.moderator import AgendaItem, Moderator as _Moderator, SpeakerHan
 
 
 def Moderator(*args, **kwargs):
-    """Test default: a near-zero open floor window unless a test overrides it.
+    """Test defaults: near-zero open floor window and no speech-end grace period.
 
     Prevents every agenda-completion test from silently waiting out the real
-    ``DEFAULT_OPEN_FLOOR_SECONDS`` (20s) for a human question that never
-    comes — only ModeratorOpenFloorTest cares about that window's length.
+    ``DEFAULT_OPEN_FLOOR_SECONDS`` (20s) and ``DEFAULT_SPEECH_END_GRACE_SECONDS``
+    (1s) — only ModeratorOpenFloorTest and ModeratorSpeechEndGraceTest exercise
+    those explicitly.
     """
     kwargs.setdefault("open_floor_seconds", 0.05)
+    kwargs.setdefault("speech_end_grace_seconds", 0.0)
     return _Moderator(*args, **kwargs)
 
 
@@ -666,6 +668,94 @@ class ModeratorTranscriptTest(unittest.TestCase):
     def test_full_transcript_text_empty_when_nothing_recorded(self):
         moderator = Moderator([], {})
         self.assertEqual(moderator.full_transcript_text(), "")
+
+
+class ModeratorSpeechEndGraceTest(unittest.IsolatedAsyncioTestCase):
+    """PER-392: agents must not respond to a mid-sentence VAD pause.
+
+    Silero VAD fires quickly on a brief intra-sentence pause (~300–700 ms);
+    without a grace window the first STT final triggers an immediate reply
+    before the human has finished their thought. The grace period debounce
+    accumulates contiguous segments and fires only after sustained silence.
+    """
+
+    async def test_two_segments_assembled_into_one_reply(self):
+        """Human pauses mid-sentence: two STT finals produce one reply with the full text."""
+        log = []
+        moderator = _Moderator(
+            [AgendaItem("ceo", "close")],
+            {"ceo": make_speaker("ceo", log)},
+            open_floor_seconds=0.5,
+            speech_end_grace_seconds=0.08,
+        )
+
+        task = asyncio.create_task(moderator.run_agenda())
+        await asyncio.sleep(0)  # let ceo close and open floor arm
+
+        # Segment 1 arrives; grace period starts
+        moderator.record_transcript("board-member", "What about the")
+        # Human resumes speaking before grace expires — debounce must be cancelled
+        await moderator.on_human_speech_started()
+        # Segment 2 arrives; new grace period starts
+        moderator.record_transcript("board-member", "revenue numbers?")
+
+        completed = await asyncio.wait_for(task, timeout=2.0)
+
+        self.assertEqual(completed, ["ceo"])
+        answer_calls = [p for _, p in log if p.startswith("Someone just asked")]
+        # Exactly one reply despite two STT segments
+        self.assertEqual(len(answer_calls), 1)
+        # Full accumulated text is what the agent sees
+        self.assertIn("What about the revenue numbers?", answer_calls[0])
+
+    async def test_single_segment_answered_after_grace_period_expires(self):
+        """Human speaks one sentence cleanly; reply fires after grace period, not before."""
+        log = []
+        fired_times = []
+
+        async def speak(prompt):
+            fired_times.append(asyncio.get_event_loop().time())
+            log.append(("ceo", prompt))
+
+        moderator = _Moderator(
+            [AgendaItem("ceo", "close")],
+            {"ceo": SpeakerHandle("ceo", speak, lambda: None)},
+            open_floor_seconds=0.5,
+            speech_end_grace_seconds=0.08,
+        )
+
+        task = asyncio.create_task(moderator.run_agenda())
+        await asyncio.sleep(0)
+
+        t0 = asyncio.get_event_loop().time()
+        moderator.record_transcript("board-member", "any final thoughts?")
+
+        completed = await asyncio.wait_for(task, timeout=2.0)
+
+        self.assertEqual(completed, ["ceo"])
+        answer_calls = [p for _, p in log if p.startswith("Someone just asked")]
+        self.assertEqual(len(answer_calls), 1)
+        # The answer fires no earlier than the grace period after the transcript
+        self.assertGreater(fired_times[-1] - t0, 0.07)
+
+    async def test_grace_period_zero_fires_immediately(self):
+        """speech_end_grace_seconds=0 preserves the pre-PER-392 immediate-reply behaviour."""
+        log = []
+        moderator = _Moderator(
+            [AgendaItem("ceo", "close")],
+            {"ceo": make_speaker("ceo", log)},
+            open_floor_seconds=0.2,
+            speech_end_grace_seconds=0.0,
+        )
+
+        task = asyncio.create_task(moderator.run_agenda())
+        await asyncio.sleep(0)
+        moderator.record_transcript("board-member", "wrap up please")
+
+        completed = await asyncio.wait_for(task, timeout=1.0)
+
+        self.assertEqual(completed, ["ceo"])
+        self.assertTrue(any("wrap up please" in p for _, p in log))
 
 
 class ModeratorFiledIssuesTest(unittest.TestCase):

@@ -20,6 +20,12 @@ DEFAULT_BARGE_IN_REPLY_TIMEOUT_SECONDS = 8.0
 # the board, not silence, decides when the call is over (PER-162).
 DEFAULT_OPEN_FLOOR_SECONDS: float | None = None
 DEFAULT_ASK_AND_WAIT_TIMEOUT_SECONDS = 20.0
+# How long to wait after a final STT segment before signalling a reply is ready.
+# Silero VAD fires silence quickly on a natural intra-sentence pause (300–700 ms);
+# without a grace window the agent responds to a partial thought mid-sentence
+# (PER-392). Contiguous segments are accumulated so the agent sees the full
+# utterance once silence is sustained for this many seconds.
+DEFAULT_SPEECH_END_GRACE_SECONDS: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -107,6 +113,7 @@ class Moderator:
         open_floor_seconds: float | None = DEFAULT_OPEN_FLOOR_SECONDS,
         ask_and_wait_timeout_seconds: float = DEFAULT_ASK_AND_WAIT_TIMEOUT_SECONDS,
         addressee_resolver: Callable[[str], str | None] | None = None,
+        speech_end_grace_seconds: float = DEFAULT_SPEECH_END_GRACE_SECONDS,
     ) -> None:
         self._agenda = list(agenda)
         self._speakers = dict(speakers)
@@ -140,9 +147,21 @@ class Moderator:
         self._human_speech_stopped.set()
         self._human_speaking = False
         self._pending_reply_text: str | None = None
+        # Grace-period debounce (PER-392): after each STT final we wait
+        # speech_end_grace_seconds before signalling the agent; if the human
+        # resumes speaking within that window the task is cancelled so we
+        # accumulate the next segment instead of answering mid-sentence.
+        self._speech_end_grace_seconds = speech_end_grace_seconds
+        self._reply_debounce_task: asyncio.Task | None = None
 
     def add_speaker(self, identity: str, handle: SpeakerHandle) -> None:
         self._speakers[identity] = handle
+
+    def _cancel_reply_debounce(self) -> None:
+        """Cancel the pending grace-period debounce, if any."""
+        if self._reply_debounce_task is not None and not self._reply_debounce_task.done():
+            self._reply_debounce_task.cancel()
+        self._reply_debounce_task = None
 
     def _addressed_available_agent(self, text: str | None) -> str | None:
         """Identity of the specific agent a human utterance addresses by name,
@@ -170,6 +189,7 @@ class Moderator:
             self.current_speaker = None
             await speaker.interrupt()
         if self._awaiting_reply_to == identity:
+            self._cancel_reply_debounce()
             self._awaiting_reply_to = None
             self._human_reply_ready.set()
         await speaker.leave()
@@ -177,6 +197,7 @@ class Moderator:
 
     def end_call(self) -> None:
         """End the call because the last human participant left."""
+        self._cancel_reply_debounce()
         self._call_ended.set()
         self._human_reply_ready.set()
         self._human_speech_stopped.set()
@@ -192,10 +213,30 @@ class Moderator:
             # A final human transcript is also an authoritative utterance boundary.
             self.on_human_speech_stopped()
         if self._awaiting_reply_to is not None and speaker_identity not in self._speakers and speaker_identity != "moderator":
-            # This is the finished utterance from whoever just barged in —
-            # wake up _respond_to_barge_in() waiting on it.
-            self._pending_reply_text = text
-            self._human_reply_ready.set()
+            # This is a finished STT segment from the human who just barged in (or is
+            # speaking on the open floor). Accumulate contiguous segments so a
+            # mid-sentence VAD pause does not split "What about the" and "revenue
+            # numbers?" into two separate replies (PER-392).
+            if self._pending_reply_text:
+                self._pending_reply_text = self._pending_reply_text + " " + text
+            else:
+                self._pending_reply_text = text
+            # Debounce: schedule the ready signal for after the grace period so
+            # that if the human resumes speaking the debounce is cancelled and we
+            # wait for the next segment instead of firing mid-sentence.
+            if self._speech_end_grace_seconds > 0:
+                self._cancel_reply_debounce()
+
+                async def _fire_after_grace() -> None:
+                    try:
+                        await asyncio.sleep(self._speech_end_grace_seconds)
+                    except asyncio.CancelledError:
+                        return
+                    self._human_reply_ready.set()
+
+                self._reply_debounce_task = asyncio.create_task(_fire_after_grace())
+            else:
+                self._human_reply_ready.set()
 
     def recent_transcript_text(self, max_lines: int = 20) -> str:
         lines = self.transcript[-max_lines:]
@@ -213,11 +254,15 @@ class Moderator:
         # human who started talking just before it expired (PER-162).
         self._human_speaking = True
         self._human_speech_stopped.clear()
+        # Cancel any pending grace-period debounce: the human is still talking
+        # (or has continued after a brief pause) and we must not fire a reply yet.
+        self._cancel_reply_debounce()
         if self.current_speaker is None:
             return
         dropped_speaker = self.current_speaker
         self.current_speaker = None
         self._awaiting_reply_to = dropped_speaker
+        self._pending_reply_text = None  # fresh accumulation for this barge-in exchange
         self._human_reply_ready.clear()
         speaker = self._speakers.get(dropped_speaker)
         if speaker is not None:
@@ -254,6 +299,7 @@ class Moderator:
                     return
                 responder_identity = available[0]
             self._awaiting_reply_to = responder_identity
+            self._pending_reply_text = None  # fresh accumulation for this exchange
             self._human_reply_ready.clear()
             answered = await self._respond_to_barge_in(
                 responder_identity,
@@ -301,6 +347,7 @@ class Moderator:
         self.record_transcript(identity, question)
         wait_timeout = timeout if timeout is not None else self._ask_and_wait_timeout_seconds
         self._awaiting_reply_to = identity
+        self._pending_reply_text = None  # fresh accumulation for this exchange
         self._human_reply_ready.clear()
         try:
             await asyncio.wait_for(self._human_reply_ready.wait(), timeout=wait_timeout)
@@ -310,6 +357,7 @@ class Moderator:
         finally:
             if self._awaiting_reply_to == identity:
                 self._awaiting_reply_to = None
+            self._cancel_reply_debounce()
         return self._pending_reply_text
 
     async def _run_turn(self, item: AgendaItem) -> bool:
@@ -414,6 +462,7 @@ class Moderator:
                 if reply_timeout_seconds is None:
                     # Ordinary barge-in waits retain their existing bounded behavior.
                     self.on_human_speech_stopped()
+                self._cancel_reply_debounce()
                 logger.warning(
                     "no finished human utterance within %.0fs; giving up",
                     timeout,
@@ -422,6 +471,7 @@ class Moderator:
                 return False
 
             question = self._pending_reply_text
+            self._pending_reply_text = None  # reset; next exchange accumulates fresh
             self._awaiting_reply_to = None
             self._human_reply_ready.clear()
             if self._call_ended.is_set():
