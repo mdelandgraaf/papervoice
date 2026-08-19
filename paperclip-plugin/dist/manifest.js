@@ -24,17 +24,17 @@ var manifest = {
       liveKitUrl: {
         type: "string",
         title: "LiveKit URL",
-        description: "The wss:// URL for the LiveKit project."
+        description: "The wss:// URL for this company's LiveKit project. Leave blank to use the instance-wide LIVEKIT_URL env var."
       },
       liveKitApiKeyRef: {
         type: "object",
         title: "LiveKit API key secret",
-        description: "A Paperclip company secret reference for LIVEKIT_API_KEY."
+        description: "A Paperclip company secret reference for LIVEKIT_API_KEY. Leave blank to use the instance-wide LIVEKIT_API_KEY env var."
       },
       liveKitApiSecretRef: {
         type: "object",
         title: "LiveKit API secret",
-        description: "A Paperclip company secret reference for LIVEKIT_API_SECRET."
+        description: "A Paperclip company secret reference for LIVEKIT_API_SECRET. Leave blank to use the instance-wide LIVEKIT_API_SECRET env var."
       },
       room: {
         type: "string",
@@ -79,7 +79,6 @@ var manifest = {
         description: "System-level instructions for an agent on a 1:1 direct call. Use {agent_name} where the agent's display name should appear. Leave blank to use the built-in default."
       }
     },
-    required: ["liveKitUrl", "liveKitApiKeyRef", "liveKitApiSecretRef"],
     additionalProperties: false
   },
   apiRoutes: [

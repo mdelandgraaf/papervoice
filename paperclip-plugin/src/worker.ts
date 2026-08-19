@@ -160,16 +160,21 @@ const plugin = definePlugin({
 
     ctx.data.register("active-rooms", async (params: { companyId: string }) => {
       const config = await ctx.config.get(params.companyId);
-      const liveKitUrl = config.liveKitUrl;
+      // Company config takes precedence; fall back to instance-wide env vars so a
+      // single-company instance or a shared-LK-project deployment doesn't require
+      // each company admin to fill in credentials in the plugin settings UI.
+      const liveKitUrl = (typeof config.liveKitUrl === "string" ? config.liveKitUrl : null) ?? process.env.LIVEKIT_URL ?? null;
       const apiKeyRef = config.liveKitApiKeyRef;
       const apiSecretRef = config.liveKitApiSecretRef;
-      if (typeof liveKitUrl !== "string" || !isSecretRef(apiKeyRef) || !isSecretRef(apiSecretRef)) {
+      const liveKitApiKey = isSecretRef(apiKeyRef)
+        ? await ctx.secrets.resolve(apiKeyRef, { companyId: params.companyId, configPath: "liveKitApiKeyRef" })
+        : (process.env.LIVEKIT_API_KEY ?? null);
+      const liveKitApiSecret = isSecretRef(apiSecretRef)
+        ? await ctx.secrets.resolve(apiSecretRef, { companyId: params.companyId, configPath: "liveKitApiSecretRef" })
+        : (process.env.LIVEKIT_API_SECRET ?? null);
+      if (!liveKitUrl || !liveKitApiKey || !liveKitApiSecret) {
         return { configured: false, rooms: [] };
       }
-      const [liveKitApiKey, liveKitApiSecret] = await Promise.all([
-        ctx.secrets.resolve(apiKeyRef, { companyId: params.companyId, configPath: "liveKitApiKeyRef" }),
-        ctx.secrets.resolve(apiSecretRef, { companyId: params.companyId, configPath: "liveKitApiSecretRef" }),
-      ]);
       const httpUrl = liveKitUrl.replace(/^wss:\/\//, "https://").replace(/^ws:\/\//, "http://");
       const now = Math.floor(Date.now() / 1000);
       const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
@@ -231,18 +236,23 @@ const plugin = definePlugin({
         ttlHours: number;
       }) => {
         const config = await ctx.config.get(params.companyId);
-        const liveKitUrl = config.liveKitUrl;
+        // Company-specific secret refs take precedence; fall back to instance-wide
+        // env vars so deployments with a shared LiveKit project don't need per-company
+        // plugin settings. See docs/MULTI_COMPANY.md for isolation trade-offs.
+        const liveKitUrl = (typeof config.liveKitUrl === "string" ? config.liveKitUrl : null) ?? process.env.LIVEKIT_URL ?? null;
         const apiKeyRef = config.liveKitApiKeyRef;
         const apiSecretRef = config.liveKitApiSecretRef;
-        if (typeof liveKitUrl !== "string" || !isSecretRef(apiKeyRef) || !isSecretRef(apiSecretRef)) {
+        const liveKitApiKey = isSecretRef(apiKeyRef)
+          ? await ctx.secrets.resolve(apiKeyRef, { companyId: params.companyId, configPath: "liveKitApiKeyRef" })
+          : (process.env.LIVEKIT_API_KEY ?? null);
+        const liveKitApiSecret = isSecretRef(apiSecretRef)
+          ? await ctx.secrets.resolve(apiSecretRef, { companyId: params.companyId, configPath: "liveKitApiSecretRef" })
+          : (process.env.LIVEKIT_API_SECRET ?? null);
+        if (!liveKitUrl || !liveKitApiKey || !liveKitApiSecret) {
           throw new Error(
-            "Configure the Papervoice plugin with liveKitUrl, liveKitApiKeyRef, and liveKitApiSecretRef before generating a link.",
+            "No LiveKit credentials found. Either configure the Papervoice plugin with liveKitUrl, liveKitApiKeyRef, and liveKitApiSecretRef, or set LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET as instance-wide env vars.",
           );
         }
-        const [liveKitApiKey, liveKitApiSecret] = await Promise.all([
-          ctx.secrets.resolve(apiKeyRef, { companyId: params.companyId, configPath: "liveKitApiKeyRef" }),
-          ctx.secrets.resolve(apiSecretRef, { companyId: params.companyId, configPath: "liveKitApiSecretRef" }),
-        ]);
         const room =
           params.room ||
           (typeof config.room === "string" ? config.room : "papervoice-boardroom");
