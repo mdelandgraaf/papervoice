@@ -12993,7 +12993,7 @@ var plugin = definePlugin({
           enabled: a.metadata?.papervoice?.enabled ?? false,
           voiceId: a.metadata?.papervoice?.voiceId ?? "",
           displayName: a.metadata?.papervoice?.displayName ?? a.name ?? "",
-          identity: a.metadata?.papervoice?.identity ?? "",
+          identity: a.metadata?.papervoice?.livekitIdentity ?? a.metadata?.papervoice?.identity ?? "",
           order: a.metadata?.papervoice?.order ?? 99,
           moderator: a.metadata?.papervoice?.moderator ?? false
         }));

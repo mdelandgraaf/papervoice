@@ -420,7 +420,7 @@ function agentPapervoiceMetadata(a) {
     enabled: a.enabled,
     voiceId: a.voiceId,
     displayName: a.displayName,
-    identity: a.identity,
+    livekitIdentity: a.identity,
     order: a.order,
     moderator: a.moderator
   };
@@ -469,7 +469,7 @@ function AgentRow({
               enabled: agent.enabled,
               voiceId: fields.voiceId,
               displayName: fields.displayName,
-              identity: fields.identity,
+              livekitIdentity: fields.identity,
               order: parseInt(fields.order, 10) || 99,
               moderator: agent.moderator
             }
