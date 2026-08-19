@@ -302,13 +302,15 @@ name. The dynamic roster is built at call start from `personas.load_roster_from_
    livekit_identity: "agent-ceo", display_name: "CEO", roster_order: 0}` via
    `PATCH /api/agents/:id` (requires `agents:configure` on that agent). The agent with
    `roster_order: 0` becomes the opener/closer; all others give status updates.
-2. **Rich instructions built from the agent profile.** `personas.build_persona_from_agent()`
-   constructs each persona's LLM instructions from the Paperclip agent's live `name`,
-   `title`, and `capabilities` fields — no manual editing of `personas.py` is needed when an
-   agent's role description changes in Paperclip.
-3. **Static fallback.** `load_roster_from_paperclip()` falls back to the hardcoded
-   `BOARDROOM_ROSTER` when the Paperclip API is unreachable or no agents have the toggle
-   enabled. This preserves the M2/M3 call behaviour even when Paperclip is down at call start.
+2. **System instructions come only from plugin settings.**
+   `personas.build_persona_from_agent()` selects the moderator or participant prompt loaded
+   at call start. Paperclip profile `name`, `title`, and `capabilities` fields never get
+   appended to conversational instructions, including when no agent is explicitly marked
+   moderator. Runtime turn prompts still add call state such as agenda handoffs, live issue
+   briefings, transcript context, barge-in questions, and interruption recovery.
+3. **Static fallback.** `load_roster_from_paperclip()` falls back to the identities and voices
+   in `BOARDROOM_ROSTER` when the Paperclip API is unreachable or no agents have the toggle
+   enabled, but applies the same settings-loaded moderator/participant prompts to them.
 4. **Vendor call lives in one place.** `vendors/paperclip.py::get_voice_enabled_agents()`
    is the only place that reads agent metadata for roster-building — same one-module-touches-
    the-API rule as every other vendor surface.

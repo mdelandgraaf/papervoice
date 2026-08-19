@@ -23,7 +23,7 @@ PATCH /api/agents/:id (requires agents:configure on that agent).
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from papervoice.room_presets import PRESET_ROOM_PREFIX, project_preset, read_presets
 
 BOARDROOM_ROOM = "papervoice-boardroom"
@@ -146,29 +146,31 @@ def _build_instructions(
     is_opener: bool,
     prompt_cfg: "PromptConfig | None" = None,
 ) -> str:
-    """Construct persona instructions from a Paperclip agent's live profile fields.
+    """Select the configured system prompt for this persona's call role.
 
-    When `prompt_cfg` is provided, its moderator/participant instruction overrides take
-    precedence over the built-in defaults. Pass None to use defaults.
+    Agent profile text must not leak into conversational instructions: the plugin
+    settings are the single source of truth for moderator and participant prompts.
     """
     from papervoice.prompts import PromptConfig
 
     cfg = prompt_cfg or PromptConfig()
-    if is_opener and config.moderator:
+    if is_opener:
         return cfg.moderator_instructions
-    if not is_opener:
-        return cfg.participant_instructions
-    # Non-moderator opener: build from agent profile (unusual — falls back to _COMMON_STYLE)
-    intro = f"You are {config.name}"
-    if config.title:
-        intro += f", {config.title}"
-    intro += "."
-    body_parts: list[str] = []
-    if config.capabilities:
-        body_parts.append(config.capabilities)
-    body_parts.append("You open the standup, keep it on time, and close it.")
-    body = " ".join(body_parts)
-    return f"{intro} {body}" + _COMMON_STYLE
+    return cfg.participant_instructions
+
+
+def _configured_fallback_roster(prompt_cfg: "PromptConfig | None") -> tuple[Persona, ...]:
+    """Apply settings prompts even when the live Paperclip roster is unavailable."""
+    from papervoice.prompts import PromptConfig
+
+    cfg = prompt_cfg or PromptConfig()
+    return tuple(
+        replace(
+            persona,
+            instructions=(cfg.moderator_instructions if index == 0 else cfg.participant_instructions),
+        )
+        for index, persona in enumerate(BOARDROOM_ROSTER)
+    )
 
 
 def build_persona_from_agent(
@@ -210,10 +212,10 @@ def load_roster_from_paperclip(prompt_cfg: "PromptConfig | None" = None) -> tupl
         configs = pc_vendor.get_voice_enabled_agents()
     except Exception:
         _logger.warning("failed to load papervoice roster from Paperclip API; using static fallback")
-        return BOARDROOM_ROSTER
+        return _configured_fallback_roster(prompt_cfg)
     if not configs:
         _logger.warning("no papervoice-enabled agents found in Paperclip; using static fallback")
-        return BOARDROOM_ROSTER
+        return _configured_fallback_roster(prompt_cfg)
     # Put the agent designated as moderator first (opener/closer); fall back to
     # roster_order position when no moderator is explicitly selected.
     moderator_cfg = next((c for c in configs if c.moderator), None)
@@ -226,7 +228,7 @@ def load_roster_from_paperclip(prompt_cfg: "PromptConfig | None" = None) -> tupl
     if not static_ids.intersection(dynamic):
         return tuple(build_persona_from_agent(cfg, is_opener=(i == 0), prompt_cfg=prompt_cfg) for i, cfg in enumerate(ordered))
     merged: list[Persona] = []
-    for fallback in BOARDROOM_ROSTER:
+    for fallback in _configured_fallback_roster(prompt_cfg):
         cfg = dynamic.pop(fallback.paperclip_agent_id, None)
         merged.append(build_persona_from_agent(cfg, is_opener=(len(merged) == 0), prompt_cfg=prompt_cfg) if cfg else fallback)
     merged.extend(build_persona_from_agent(cfg, is_opener=False, prompt_cfg=prompt_cfg) for cfg in dynamic.values())

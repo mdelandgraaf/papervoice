@@ -623,9 +623,25 @@ class DynamicRosterTest(unittest.TestCase):
         self.assertEqual(persona.identity, "agent-test")
         self.assertEqual(persona.voice_id, "voice-abc")
         self.assertEqual(persona.paperclip_agent_id, "agent-1")
-        self.assertIn("TestAgent", persona.instructions)
-        self.assertIn("Test Engineer", persona.instructions)
         self.assertIn("open the standup", persona.instructions)
+
+    def test_settings_are_only_system_prompt_source(self):
+        config = self._make_config(
+            name="PROFILE NAME MUST NOT LEAK",
+            title="PROFILE TITLE MUST NOT LEAK",
+            capabilities="PROFILE CAPABILITIES MUST NOT LEAK",
+            moderator=False,
+        )
+        prompts = PromptConfig(
+            moderator_instructions="CUSTOM MODERATOR ONLY",
+            participant_instructions="CUSTOM PARTICIPANT ONLY",
+        )
+
+        opener = build_persona_from_agent(config, is_opener=True, prompt_cfg=prompts)
+        participant = build_persona_from_agent(config, is_opener=False, prompt_cfg=prompts)
+
+        self.assertEqual(opener.instructions, "CUSTOM MODERATOR ONLY")
+        self.assertEqual(participant.instructions, "CUSTOM PARTICIPANT ONLY")
 
     def test_build_persona_from_agent_non_opener_instructions(self):
         config = self._make_config(roster_order=1)
@@ -636,17 +652,34 @@ class DynamicRosterTest(unittest.TestCase):
     def test_build_persona_no_title_still_works(self):
         config = self._make_config(title=None, capabilities=None)
         persona = build_persona_from_agent(config, is_opener=True)
-        self.assertIn("TestAgent", persona.instructions)
+        self.assertEqual(persona.instructions, PromptConfig().moderator_instructions)
+
+    def test_fallback_roster_uses_settings_prompts(self):
+        prompts = PromptConfig(
+            moderator_instructions="CUSTOM MODERATOR ONLY",
+            participant_instructions="CUSTOM PARTICIPANT ONLY",
+        )
+        with mock.patch.object(pc_vendor, "get_voice_enabled_agents", return_value=[]):
+            roster = load_roster_from_paperclip(prompts)
+
+        self.assertEqual(roster[0].instructions, "CUSTOM MODERATOR ONLY")
+        self.assertTrue(all(p.instructions == "CUSTOM PARTICIPANT ONLY" for p in roster[1:]))
 
     def test_load_roster_falls_back_when_api_returns_empty(self):
         with mock.patch.object(pc_vendor, "get_voice_enabled_agents", return_value=[]):
             roster = load_roster_from_paperclip()
-        self.assertEqual(roster, BOARDROOM_ROSTER)
+        self.assertEqual(
+            [(p.identity, p.voice_id, p.paperclip_agent_id) for p in roster],
+            [(p.identity, p.voice_id, p.paperclip_agent_id) for p in BOARDROOM_ROSTER],
+        )
 
     def test_load_roster_falls_back_on_api_error(self):
         with mock.patch.object(pc_vendor, "get_voice_enabled_agents", side_effect=RuntimeError("network error")):
             roster = load_roster_from_paperclip()
-        self.assertEqual(roster, BOARDROOM_ROSTER)
+        self.assertEqual(
+            [(p.identity, p.voice_id, p.paperclip_agent_id) for p in roster],
+            [(p.identity, p.voice_id, p.paperclip_agent_id) for p in BOARDROOM_ROSTER],
+        )
 
     def test_load_roster_builds_personas_from_enabled_agents(self):
         configs = [
