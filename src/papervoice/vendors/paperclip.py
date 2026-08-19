@@ -377,6 +377,49 @@ class PaperclipClient:
             logger.exception("failed to post Paperclip comment to %s; queued for retry", issue_id)
             return None
 
+    def probe_setup(self) -> dict:
+        """Fetch the plugin's Setup diagnostic + a fresh HMAC config token (PER-415).
+
+        Hits the plugin's ``/probe-setup`` route (``auth: "agent"``) with this
+        client's ``pcp_*`` key. The route returns the same three-row Setup
+        panel the Settings page shows — computed server-side by the plugin's
+        own ``computeSetupStatus`` — plus a short-lived HMAC config token
+        minted exactly like ``mint-join-link`` stamps into LiveKit room
+        metadata. ``scripts/healthcheck`` uses this to check both drifts
+        without a live board call: Setup rows going red, and the
+        ``/boardroom-config`` route becoming unreachable.
+
+        Returns the parsed JSON body. Raises ``httpx.HTTPStatusError`` on any
+        non-2xx (the healthcheck maps the status/error to an operator-facing
+        message).
+        """
+        resp = httpx.get(
+            f"{_api_base()}/api/plugins/papervoice/api/probe-setup",
+            headers=self._headers(),
+            params={"companyId": self.company_id},
+            timeout=_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def fetch_boardroom_config(self, config_token: str) -> dict:
+        """Call the plugin's ``/boardroom-config`` route with an HMAC-signed token.
+
+        Same route the boardroom worker calls at job start (PER-411): pass the
+        HMAC bearer, get back ``{boardroomApiKey, liveKitUrl, ...}`` resolved
+        from company secrets. Used by ``scripts/healthcheck`` (PER-415) to
+        prove HMAC signing + secret resolution work end-to-end, without a live
+        board call.
+        """
+        resp = httpx.get(
+            f"{_api_base()}/api/plugins/papervoice/api/boardroom-config",
+            headers={"Authorization": f"Bearer {config_token}"},
+            params={"companyId": self.company_id},
+            timeout=_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     def get_plugin_config(self) -> dict:
         """Fetch the Papervoice plugin configuration from the Paperclip API.
 

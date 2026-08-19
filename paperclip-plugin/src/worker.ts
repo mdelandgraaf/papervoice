@@ -9,6 +9,7 @@ import {
   resolveBoardroomConfigTokenTtlSeconds,
   stampBoardroomConfigToken,
 } from "./config.js";
+import { handleProbeSetupRequest } from "./probe-setup.js";
 
 function mintLiveKitToken(
   apiKey: string,
@@ -352,6 +353,12 @@ const plugin = definePlugin({
       return handleBoardroomConfigRequest(requirePluginContext(), {
         query: input.query,
         headers: input.headers,
+      });
+    }
+    if (input.routeKey === "probe-setup") {
+      return handleProbeSetupRequest(requirePluginContext(), {
+        query: input.query,
+        actor: input.actor,
       });
     }
     return { status: 404, body: { error: "Not found" } };

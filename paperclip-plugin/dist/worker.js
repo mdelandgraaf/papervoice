@@ -13104,6 +13104,189 @@ async function handleBoardroomConfigRequest(ctx, input, options = {}) {
   }
 }
 
+// src/ui/setup-status.ts
+function computeSetupStatus(input) {
+  const secretIds = new Set(input.companySecretIds);
+  const cfg = input.config ?? {};
+  const url = (cfg.liveKitUrl ?? "").trim();
+  const keyId = (cfg.liveKitApiKeyRef?.secretId ?? "").trim();
+  const secretId = (cfg.liveKitApiSecretRef?.secretId ?? "").trim();
+  const livekit = (() => {
+    if (!url || !keyId || !secretId) {
+      const missing = [];
+      if (!url) missing.push("URL");
+      if (!keyId) missing.push("API key");
+      if (!secretId) missing.push("API secret");
+      return {
+        key: "livekit",
+        title: "LiveKit credentials",
+        status: "missing",
+        detail: `Missing ${missing.join(", ")}.`
+      };
+    }
+    const unresolved = [];
+    if (!secretIds.has(keyId)) unresolved.push("API key");
+    if (!secretIds.has(secretId)) unresolved.push("API secret");
+    if (unresolved.length) {
+      return {
+        key: "livekit",
+        title: "LiveKit credentials",
+        status: "warn",
+        detail: `Secret ref for ${unresolved.join(" and ")} not found in company secrets.`
+      };
+    }
+    return {
+      key: "livekit",
+      title: "LiveKit credentials",
+      status: "ok",
+      detail: "URL and both secret refs resolve."
+    };
+  })();
+  const boardroomId = (cfg.boardroomApiKeyRef?.secretId ?? "").trim();
+  const boardroom = (() => {
+    if (!boardroomId) {
+      return {
+        key: "boardroom",
+        title: "Boardroom identity",
+        status: "missing",
+        detail: "No boardroom API key secret provisioned yet."
+      };
+    }
+    if (!secretIds.has(boardroomId)) {
+      return {
+        key: "boardroom",
+        title: "Boardroom identity",
+        status: "warn",
+        detail: "Secret ref set but not found in company secrets."
+      };
+    }
+    return {
+      key: "boardroom",
+      title: "Boardroom identity",
+      status: "ok",
+      detail: "Boardroom API key secret resolves."
+    };
+  })();
+  const enabled = input.agents.filter((a) => a.enabled);
+  const moderator = enabled.find((a) => a.moderator);
+  const agents = (() => {
+    if (enabled.length === 0) {
+      return {
+        key: "agents",
+        title: "Enabled agents",
+        status: "missing",
+        detail: "No agents are enabled for Papervoice."
+      };
+    }
+    if (!moderator) {
+      return {
+        key: "agents",
+        title: "Enabled agents",
+        status: "warn",
+        detail: `${enabled.length} enabled, but no moderator selected.`
+      };
+    }
+    return {
+      key: "agents",
+      title: "Enabled agents",
+      status: "ok",
+      detail: `${enabled.length} enabled, moderator selected.`
+    };
+  })();
+  return [livekit, boardroom, agents];
+}
+
+// src/probe-setup.ts
+async function tryResolveSecret(ctx, ref, companyId, configPath) {
+  if (!isSecretRef(ref)) return false;
+  try {
+    const v = await ctx.secrets.resolve(ref, { companyId, configPath });
+    return typeof v === "string" && v.length > 0;
+  } catch {
+    return false;
+  }
+}
+function extractSecretId(ref) {
+  if (!isSecretRef(ref)) return null;
+  const id = ref.secretId;
+  return typeof id === "string" && id.length > 0 ? id : null;
+}
+async function handleProbeSetupRequest(ctx, input, options = {}) {
+  const nowFn = options.now ?? Date.now;
+  const queryCompanyIdRaw = input.query.companyId;
+  const queryCompanyId = Array.isArray(queryCompanyIdRaw) ? queryCompanyIdRaw[0] : queryCompanyIdRaw;
+  if (!queryCompanyId) {
+    return {
+      status: 400,
+      body: { error: "companyId query parameter is required" }
+    };
+  }
+  const actorType = input.actor?.actorType;
+  if (actorType && actorType !== "agent") {
+    return { status: 403, body: { error: "agent_token_required" } };
+  }
+  const config = await ctx.config.get(queryCompanyId);
+  const [lkKeyResolved, lkSecretResolved, boardroomResolved] = await Promise.all([
+    tryResolveSecret(ctx, config.liveKitApiKeyRef, queryCompanyId, "liveKitApiKeyRef"),
+    tryResolveSecret(ctx, config.liveKitApiSecretRef, queryCompanyId, "liveKitApiSecretRef"),
+    tryResolveSecret(ctx, config.boardroomApiKeyRef, queryCompanyId, "boardroomApiKeyRef")
+  ]);
+  const resolvedIds = [];
+  if (lkKeyResolved) {
+    const id = extractSecretId(config.liveKitApiKeyRef);
+    if (id) resolvedIds.push(id);
+  }
+  if (lkSecretResolved) {
+    const id = extractSecretId(config.liveKitApiSecretRef);
+    if (id) resolvedIds.push(id);
+  }
+  if (boardroomResolved) {
+    const id = extractSecretId(config.boardroomApiKeyRef);
+    if (id) resolvedIds.push(id);
+  }
+  const agents = await ctx.agents.list({ companyId: queryCompanyId });
+  const agentInputs = agents.map((a) => {
+    const pv = a?.metadata?.papervoice ?? {};
+    return { enabled: Boolean(pv.enabled), moderator: Boolean(pv.moderator) };
+  });
+  const setup = computeSetupStatus({
+    config: {
+      liveKitUrl: typeof config.liveKitUrl === "string" ? config.liveKitUrl : null,
+      liveKitApiKeyRef: isSecretRef(config.liveKitApiKeyRef) ? config.liveKitApiKeyRef : null,
+      liveKitApiSecretRef: isSecretRef(config.liveKitApiSecretRef) ? config.liveKitApiSecretRef : null,
+      boardroomApiKeyRef: isSecretRef(config.boardroomApiKeyRef) ? config.boardroomApiKeyRef : null
+    },
+    companySecretIds: resolvedIds,
+    agents: agentInputs
+  });
+  const allGreen = setup.every((row) => row.status === "ok");
+  const hmacSecret = typeof config[CONFIG_KEY_HMAC_SECRET] === "string" ? String(config[CONFIG_KEY_HMAC_SECRET]) : "";
+  let configToken = null;
+  let configTokenError;
+  if (!hmacSecret) {
+    configTokenError = "boardroom_config_hmac_secret_missing";
+  } else {
+    const configuredTtl = resolveBoardroomConfigTokenTtlSeconds(config, 60 * 60);
+    const probeTtl = Math.min(configuredTtl, 120);
+    const nowSec = Math.floor(nowFn() / 1e3);
+    const exp = nowSec + probeTtl;
+    const token = stampBoardroomConfigToken(hmacSecret, {
+      companyId: queryCompanyId,
+      roomName: "papervoice-healthcheck-probe",
+      exp
+    });
+    configToken = { token, expiresAt: new Date(exp * 1e3).toISOString() };
+  }
+  const body = {
+    companyId: queryCompanyId,
+    setup,
+    allGreen,
+    configToken,
+    ...configTokenError ? { configTokenError } : {}
+  };
+  return { status: 200, body };
+}
+
 // src/worker.ts
 function mintLiveKitToken(apiKey, apiSecret, identity, room, ttlHours) {
   const now = Math.floor(Date.now() / 1e3);
@@ -13355,6 +13538,12 @@ var plugin = definePlugin({
       return handleBoardroomConfigRequest(requirePluginContext(), {
         query: input.query,
         headers: input.headers
+      });
+    }
+    if (input.routeKey === "probe-setup") {
+      return handleProbeSetupRequest(requirePluginContext(), {
+        query: input.query,
+        actor: input.actor
       });
     }
     return { status: 404, body: { error: "Not found" } };

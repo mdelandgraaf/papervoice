@@ -557,6 +557,70 @@ class PaperclipAdapterTest(unittest.TestCase):
             with self.assertRaises(httpx.HTTPStatusError):
                 pc.update_agent_voice_config("agent-1", {"enabled": True, "voice_id": "v1"})
 
+    # --- probe_setup / fetch_boardroom_config (PER-415 healthcheck probes) ---
+
+    def test_probe_setup_hits_agent_route_with_pcp_bearer_and_company(self):
+        self._set_env()
+        client = pc.PaperclipClient(company_id="co-1", api_key="pcp_boardroom")
+        body = {
+            "companyId": "co-1",
+            "setup": [{"key": "livekit", "status": "ok", "title": "LiveKit credentials", "detail": "ok"}],
+            "allGreen": True,
+            "configToken": {"token": "abc.def", "expiresAt": "2026-08-19T00:00:00Z"},
+        }
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = mock.Mock()
+        fake_resp.json = mock.Mock(return_value=body)
+        with mock.patch("httpx.get", return_value=fake_resp) as get:
+            result = client.probe_setup()
+        self.assertEqual(result, body)
+        # Called the /api/plugins/papervoice/api/probe-setup route with the client's own pcp_ bearer.
+        url = get.call_args[0][0]
+        self.assertIn("/api/plugins/papervoice/api/probe-setup", url)
+        _, kwargs = get.call_args
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer pcp_boardroom")
+        self.assertEqual(kwargs["params"]["companyId"], "co-1")
+
+    def test_probe_setup_propagates_http_errors(self):
+        self._set_env()
+        client = pc.PaperclipClient(company_id="co-1", api_key="pcp_boardroom")
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = mock.Mock(side_effect=_status_error(403))
+        with mock.patch("httpx.get", return_value=fake_resp):
+            with self.assertRaises(httpx.HTTPStatusError):
+                client.probe_setup()
+
+    def test_fetch_boardroom_config_uses_hmac_bearer_not_pcp_key(self):
+        self._set_env()
+        client = pc.PaperclipClient(company_id="co-1", api_key="pcp_boardroom")
+        body = {
+            "boardroomApiKey": "pcp_returned",
+            "liveKitUrl": "wss://x.livekit.cloud",
+            "liveKitApiKey": "APIkey",
+            "liveKitApiSecret": "APIsecret",
+        }
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = mock.Mock()
+        fake_resp.json = mock.Mock(return_value=body)
+        with mock.patch("httpx.get", return_value=fake_resp) as get:
+            result = client.fetch_boardroom_config("hmac.token.value")
+        self.assertEqual(result, body)
+        url = get.call_args[0][0]
+        self.assertIn("/api/plugins/papervoice/api/boardroom-config", url)
+        _, kwargs = get.call_args
+        # HMAC token, NOT the client's own pcp_ key — matches the boardroom worker's path.
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer hmac.token.value")
+        self.assertEqual(kwargs["params"]["companyId"], "co-1")
+
+    def test_fetch_boardroom_config_propagates_http_errors(self):
+        self._set_env()
+        client = pc.PaperclipClient(company_id="co-1", api_key="pcp_boardroom")
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = mock.Mock(side_effect=_status_error(409))
+        with mock.patch("httpx.get", return_value=fake_resp):
+            with self.assertRaises(httpx.HTTPStatusError):
+                client.fetch_boardroom_config("expired.hmac.token")
+
 
 if __name__ == "__main__":
     unittest.main()

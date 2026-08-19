@@ -63,6 +63,31 @@ Room names (`papervoice-boardroom`, `papervoice-preset-<id>`, `papervoice-direct
 
 **Never** paste a `pcp_*` value into an issue comment, PR, Slack message, or any other channel — treat any such leak as compromise and revoke immediately with `paperclipai token agent revoke <keyId>`.
 
+### `scripts/healthcheck` plugin probes (PER-415)
+
+Two probes in `scripts/healthcheck` catch plugin-side drift before it turns into a failed board meeting. Both run without a live board call and iterate every company the worker knows about (the same `PAPERCLIP_BOARDROOM_API_KEY[S|_<UUID>|_JSON]` map the multi-tenant entrypoint uses).
+
+**`Plugin setup complete`** hits the plugin's `/probe-setup` route with each company's boardroom `pcp_*` key. The plugin computes the exact three Setup rows the Settings page shows — LiveKit credentials, Boardroom identity, ≥1 enabled agent + moderator — and returns a per-row `ok/warn/missing` verdict. The check fails and names the exact missing piece per company. Common fixes:
+
+- `Boardroom identity: No boardroom API key secret provisioned yet` → open `/company/settings/papervoice`, Setup panel → Boardroom identity → **Provision**.
+- `Boardroom identity: Secret ref set but not found in company secrets` → the referenced secret was deleted; **Rotate** on that row writes a fresh one.
+- `LiveKit credentials: Missing URL, API key, API secret` → Setup panel → LiveKit credentials → **Configure**.
+- `Enabled agents: no moderator selected` → open the Agents tab and toggle the moderator radio next to one enabled agent.
+
+**`Plugin config reachable from worker`** mints an HMAC-signed token exactly like `mint-join-link` does and calls `/boardroom-config?companyId=…`. If the response body's `boardroomApiKey` starts with `pcp_`, both HMAC signing and every secret referenced by the route resolved end-to-end. Failure paths and fixes:
+
+- `boardroomConfigHmacSecret not provisioned` → open `/company/settings/papervoice` once; the page auto-provisions the HMAC secret on first open.
+- `HTTP 409 (boardroom_api_key_ref_missing)` → same fix as the `Boardroom identity: missing` case above.
+- `HTTP 409 (boardroom_config_incomplete)` → a LiveKit secret ref is unresolvable; **Rotate** the affected LiveKit row in the Setup panel.
+- `HTTP 404` → the papervoice plugin isn't installed for this company (check `/company/settings/plugins`).
+- `HTTP 401/403` → the boardroom `pcp_*` key for this company was rotated or revoked; provision a fresh key via the Setup panel and update `PAPERCLIP_BOARDROOM_API_KEY[S|_<UUID>|_JSON]`.
+
+Run before every board meeting and after any dependency update:
+
+```bash
+env $(cat .env | xargs) python scripts/healthcheck
+```
+
 ## Appendix — Air-gapped deployments (env-only)
 
 Use this only when the plugin's `/boardroom-config` route is unreachable from the boardroom worker — for example, a network segment where the worker cannot call back to the plugin URL. The plugin path is preferred everywhere else because it avoids UUID lookup, per-company `.env` edits, and worker restarts.

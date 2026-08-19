@@ -123,6 +123,18 @@ const manifest: PaperclipPluginManifestV1 = {
       capability: "api.routes.register",
       companyResolution: { from: "query", key: "companyId" },
     },
+    {
+      // Called by scripts/healthcheck with the worker's own pcp_* boardroom
+      // key (PER-415). Returns the same Setup-panel diagnostic the Settings
+      // page shows, plus a freshly-minted HMAC config token the healthcheck
+      // uses to prove /boardroom-config is reachable end-to-end.
+      routeKey: "probe-setup",
+      method: "GET",
+      path: "/probe-setup",
+      auth: "agent",
+      capability: "api.routes.register",
+      companyResolution: { from: "query", key: "companyId" },
+    },
   ],
   ui: {
     slots: [
