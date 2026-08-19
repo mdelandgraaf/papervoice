@@ -100,7 +100,9 @@ Pass:
 ## 3d. PER-401 live Paperclip lookup exchange (~1 min, part of 3b/3)
 
 Only needed if you touched the live-lookup path (`look_up_paperclip`, `_lookup_tool`,
-`paperclip.search_issues`). Run in the same call as 3b (or a 1:1 direct call).
+`paperclip.search_issues`), the barge-in answer prompt (`_barge_in_answer_prompt`),
+or the addressee routing (`_addressed_target`). Run in the same call as 3b (or a 1:1
+direct call).
 
 Ask a persona a *specific factual* Paperclip question it could not know from its
 call-start briefing — e.g. "what's the current status of PER-350?" or "what is
@@ -110,10 +112,32 @@ Pass:
 - The persona answers with the issue's **real** current status/title/detail (it
   called `look_up_paperclip` under the hood), rather than saying "I don't know" or
   inventing a plausible-but-wrong answer. Cross-check against the issue in Paperclip.
+- **Direct "list my tasks" ask (the PER-401 board rejection).** Mid-call, address an
+  agent by name and ask it to list its open tasks — e.g. "VoiceEngineer, can you list
+  the tasks still open on you?". It must **answer with the actual list** (empty-query
+  `look_up_paperclip` returns its own open issues), NOT deflect with "I'll hand it
+  back to you" or pass the floor. A hand-off with no answer is a FAIL.
 - Ask about a closed/done issue ("did PER-398 ship?") — the persona still finds it
   (search spans all statuses), not just its own open issues.
 - If Paperclip access is down for the call, the persona says it can't reach Paperclip
   right now instead of guessing.
+
+### Worker reachability (the "worker seems offline" half of PER-401)
+
+Symptom the board hit: a human joined but **no agents joined at all**. Root cause was
+LiveKit's default `load_threshold=0.7` — on the shared single-box deploy, ambient CPU
+sits 0.7–0.85, so the dedicated boardroom worker kept flapping to "unavailable" and was
+skipped for dispatch. Now pinned to `1.0` (override: `LIVEKIT_LOAD_THRESHOLD`).
+
+Quick check (no call needed): after restarting the worker, confirm it is **not**
+flapping — there should be no `marking as unavailable` lines under ambient load:
+
+```
+grep -a "marking as unavailable" /var/tmp/papervoice-boardroom/worker.log | tail
+```
+
+An idle worker that periodically marks itself unavailable is the regression; a quiet
+log (only `registered worker`) is the pass.
 
 ## Rollback
 

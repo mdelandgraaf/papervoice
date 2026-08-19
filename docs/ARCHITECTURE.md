@@ -267,6 +267,31 @@ moderator floor control, human tracks preempt):
     call end regardless of whether a summary issue is configured, so a "naming didn't route" report is
     debuggable from the log after the fact.
 
+15. **Answering a live question is a tool-use turn, and the worker must be reachable to have one at all
+    (PER-401, board rejection).** The board tested the first PER-401 fix and it failed two ways at once.
+    (a) *Deflection instead of a lookup.* Asked mid-call to "list the current open tasks", VoiceEngineer
+    had the `look_up_paperclip` tool and was correctly granted the floor (note 14 routing worked), but
+    the barge-in answer prompt only said "Answer them directly and briefly, then continue" — with no
+    mention of the tool — so the `claude-haiku-4-5` persona LLM handed off ("I'll hand it back to you,
+    CEO") rather than looking anything up. The prompt is the lever that actually drives that turn, so it
+    now lives in `moderator._barge_in_answer_prompt` and explicitly: demands an answer *now*, forbids
+    handing off / ending the turn without answering, and tells the model to call `look_up_paperclip`
+    (empty query = its own open issues) for any task status/contents/list question. Also extended
+    `_addressed_target` with an interior-question vocative (`\bname\s*\?`) so a name that lands
+    mid-utterance right before the question — "..., voice engineer? are you able to list the open
+    tasks?" — routes to that agent instead of falling through to the default responder (leading/cued/
+    trailing all missed it). (b) *"The worker seems offline / no agents joined."* The `boardroom start`
+    worker ran with LiveKit's default `load_threshold=0.7`; on the shared single-box deploy ambient CPU
+    load already sits 0.7–0.85, so the dedicated boardroom worker flapped `available`/`unavailable`
+    every ~30s (visible in `worker.log`) and a human joining during an "unavailable" window got no
+    dispatch. Since this worker exists to host one boardroom/direct call at a time, ambient host CPU
+    must not make it refuse that call: `WorkerOptions(load_threshold=…)` is now pinned to `1.0`
+    (override `LIVEKIT_LOAD_THRESHOLD` for a future multi-worker deploy that needs real back-pressure).
+    Confirmed live: after the restart the worker logged zero `marking as unavailable` lines under the
+    same ambient load that flapped the old one. Open follow-up: `claude-haiku-4-5` is weak at tool-use
+    under conversational pressure; if deflection recurs despite the prompt, the next lever is the model
+    tier (`AGENT_LLM_MODEL`) — a cost-per-minute tradeoff to raise with the board before changing.
+
 ## M3b implementation notes (PER-89) — Paperclip agents as voice personas
 
 Each boardroom persona now represents a real Paperclip agent rather than a hardcoded
