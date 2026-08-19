@@ -47,7 +47,7 @@ from papervoice.personas import (
     load_roster_from_paperclip,
     parse_custom_room_identities,
 )
-from papervoice.prompts import PromptConfig
+from papervoice.prompts import DEFAULT_MODERATOR_INSTRUCTIONS, PromptConfig
 from papervoice.vendors import paperclip as pc_vendor
 
 
@@ -87,6 +87,13 @@ class CustomRoomRosterTest(unittest.TestCase):
     def test_filter_can_create_single_agent_room(self):
         selected = filter_roster(BOARDROOM_ROSTER, ("agent-eng",))
         self.assertEqual(tuple(p.identity for p in selected), ("agent-eng",))
+
+
+class ModeratorPromptTest(unittest.TestCase):
+    def test_moderator_does_not_answer_for_addressed_participants(self):
+        self.assertIn("do not answer for them", DEFAULT_MODERATOR_INSTRUCTIONS)
+        self.assertIn("let them speak for themselves", DEFAULT_MODERATOR_INSTRUCTIONS)
+        self.assertIn("facilitate and keep time", DEFAULT_MODERATOR_INSTRUCTIONS)
 
 
 class AddressedTargetTest(unittest.TestCase):
