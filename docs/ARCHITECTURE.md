@@ -378,31 +378,35 @@ name. The dynamic roster is built at call start from `personas.load_roster_from_
      `AskBoardToolTest`); the actual on-call behavior (does a reaction ever land as real spoken advice,
      does a steering question really block and then get answered) still needs a live test call — see
      the PER-83 thread.
-7. **Short-lived-token fallback while the durable key is pending (CEO-authorized, PER-76, 2026-08-13).**
-   The `PAPERCLIP_API_KEY` a long-lived board-minted key was meant to fill (see "Required accounts &
-   secrets" above) was still pending confirmation on PER-71 when M3 needed to ship, so `.env`'s
-   `PAPERCLIP_API_KEY` is, for now, a VoiceEngineer heartbeat's own **run-scoped JWT** (~1h TTL) instead
-   — refreshed by hand into `.env` on a wake shortly before a call, never committed. Consequences:
-   - A call started more than ~55 minutes after the last refresh can have its token expire mid-call.
-     `pc_vendor.is_auth_error()` + `boardroom.py` tell that failure mode (401/403) apart from any other
-     Paperclip failure specifically so it degrades *loudly*: `_load_context` logs `"board tools
-     offline"` and, if *every* persona's context fetch hits it, the opener says so out loud
-     (`_standup_agenda`'s `paperclip_offline`) instead of the call silently reporting generic updates;
-     `file_followup_issue` gives a distinct spoken apology ("Paperclip access has expired for this
-     call") instead of a generic API-failure one. Any other Paperclip failure (API down, single persona
-     misconfigured) still degrades the same way M3 always did — logged, that persona/action just
-     proceeds without it, call unaffected.
-   - This is a stopgap, not the design: once PER-71's durable 30–90 day key is minted and delivered,
-     swap it into `.env` and delete the "refresh on every wake" step. Tracked as the open item on
-     PER-71/PER-76 rather than a new issue, since it's the same key this section already documents.
-8. **Wake-time token refresh and summary durability (PER-86, 2026-08-13).** Until the durable key
-   exists, `scripts/wake-maintenance` is the mandatory first action on every VoiceEngineer wake:
-   it atomically copies the injected run JWT into the boardroom `.env`, probes the automatic-dispatch
-   worker, then drains `/var/tmp/papervoice-boardroom/pending-posts` (override with
-   `PAPERCLIP_PENDING_POSTS_DIR`). A failed post-call summary is written as an atomic JSON payload
-   by `vendors.paperclip.post_comment_or_queue`; it is removed only after a successful retry. This
-   bounds token gaps at the wake cadence and prevents a transient 401/404 from losing the transcript.
-   Load-tested for security sign-off (issue 061b21b4, `tests/load/test_token_handling_load.py`): the
-   atomic `.env` refresh is race-safe under 50 concurrent writers and crash-safe under SIGKILL. The
-   drainer claims each file with an atomic rename before posting, so overlapping wakes cannot double-
-   post a queued comment (the pre-fix race posted queued comments ~7x under 8 concurrent drainers).
+7. **Durable Paperclip key is the worker's credential; run-JWT is a dev fallback (PER-386/PER-388,
+   2026-08-19).** The long-lived board-minted key that "Required accounts & secrets" above always
+   wanted was minted on PER-388 and delivered as `PAPERCLIP_BOARDROOM_API_KEY` (a `pcp_*` agent API
+   key, no TTL, not run-scoped). `vendors/paperclip.py::_api_key()` **prefers** it and falls back to
+   the run-scoped `PAPERCLIP_API_KEY` (~1h JWT) only when the durable key is absent (e.g. a dev shell
+   that never had the secret injected). Because the durable key never expires, the worker authenticates
+   from `.env` for its whole lifetime — there is nothing to refresh. This retired the every-25-min
+   Paperclip refresh routine that used to re-mint and reinject a JWT (that routine created ~57 issues/day;
+   see item 8). The mid-call auth-expiry hardening still exists and is still correct if a fallback JWT is
+   ever in play: `pc_vendor.is_auth_error()` + `boardroom.py` tell a 401/403 apart from any other
+   Paperclip failure so it degrades *loudly* — `_load_context` logs `"board tools offline"`, the opener
+   says so out loud if every persona's fetch hits it (`_standup_agenda`'s `paperclip_offline`), and
+   `file_followup_issue` gives a distinct spoken apology — while any other Paperclip failure just
+   degrades per-persona/action, call unaffected. With the durable key this path is effectively dormant.
+8. **Worker liveness moved off Paperclip routines onto a host cron (PER-386, 2026-08-19).**
+   `scripts/wake-maintenance` was the mandatory first action on every VoiceEngineer wake — it copied the
+   injected JWT into `.env` and restarted the worker so it picked up the fresh token — and it ran as a
+   Paperclip routine (`*/25 * * * *`), which by design creates one execution issue per fire (the ~259
+   `Boardroom token refresh` issues, PER-95…PER-385). Now that the durable key removes the refresh
+   reason, that routine is **paused** and the same script runs from a plain **host cron** (`*/10`,
+   user crontab) that creates **zero** Paperclip issues. The script now: persists any credential present
+   in the environment to `.env` (durable key preferred; a host-cron run injects nothing and relies on the
+   already-persisted durable key), loads `.env` so its own probe/drain steps authenticate, restarts the
+   worker **only for crash recovery** (never to "pick up a token" — a healthy worker is left alone, which
+   is what removes the restart churn), then drains `/var/tmp/papervoice-boardroom/pending-posts` (override
+   with `PAPERCLIP_PENDING_POSTS_DIR`). A failed post-call summary is written as an atomic JSON payload by
+   `vendors.paperclip.post_comment_or_queue`; it is removed only after a successful retry. Load-tested for
+   security sign-off (issue 061b21b4, `tests/load/test_token_handling_load.py`): the atomic `.env` write
+   (now `persist_env_var`) is race-safe under 50 concurrent writers and crash-safe under SIGKILL, and the
+   drainer claims each file with an atomic rename so overlapping runs cannot double-post a queued comment.
+   Rollback: `PATCH /api/routines/7ac9b5e0-… {"status":"active"}` reactivates the routine and the host
+   cron line can be removed; the worker keeps working on the durable key either way.

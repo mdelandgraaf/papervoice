@@ -52,6 +52,15 @@ if [[ ! -f "$env_file" ]] || ! grep -qE '^(PAPERCLIP_BOARDROOM_API_KEY|PAPERCLIP
 fi
 echo "persisted available credentials to $env_file (durable key preferred)"
 
+# Load the persisted credentials into this shell so every downstream step works
+# even when nothing is injected (the host-cron case): the room-occupancy probe and
+# the pending-posts drain both authenticate from these values, not from an injected
+# run environment. Safe pattern already used by the restart branch below.
+set -a
+# shellcheck disable=SC1090
+source "$env_file"
+set +a
+
 # Track whether any notable state change occurred (PER-151 filtering).
 worker_restarted=false
 
@@ -119,12 +128,8 @@ if [[ "$need_restart" == "true" ]]; then
       echo "rolled oversized worker.log ($log_bytes bytes > ${WORKER_LOG_MAX_BYTES}B cap) to worker.log.1"
     fi
   fi
-  # Export vars from .env then launch; use env file directly via dotenv inside
-  # the worker rather than xargs-expanding secrets onto the command line
-  set -a
-  # shellcheck disable=SC1090
-  source "$env_file"
-  set +a
+  # Credentials were already sourced into this shell above; the worker also calls
+  # load_dotenv() itself at startup, so the child inherits them either way.
   nohup \
     env PYTHONPATH="$repo_dir/src" TMPDIR="$WORKER_DIR" \
     "$repo_dir/.venv/bin/python" -m papervoice.boardroom start \
@@ -155,7 +160,8 @@ if [[ "$need_restart" == "true" ]]; then
   fi
 fi
 
-# Drain only after refresh and probe, so queued posts use the current token.
+# Drain only after credentials are loaded and the worker is probed, so queued
+# posts authenticate with the durable key.
 drain_output=$(PYTHONPATH="$repo_dir/src" "$repo_dir/scripts/drain-pending-posts" 2>&1)
 echo "$drain_output"
 drained_count=$(printf '%s\n' "$drain_output" | grep -oE 'drained [0-9]+' | grep -oE '[0-9]+' || echo 0)
@@ -168,5 +174,5 @@ if [[ "${#state_parts[@]}" -gt 0 ]]; then
   summary=$(IFS=', '; echo "${state_parts[*]}")
   echo "ROUTINE: STATE_CHANGE ($summary)"
 else
-  echo "ROUTINE: NOMINAL (key refreshed, worker running, nothing drained)"
+  echo "ROUTINE: NOMINAL (durable key in place, worker running, nothing drained)"
 fi
