@@ -91,6 +91,32 @@ curl -X PATCH "$PAPERCLIP_API_BASE/api/agents/<agent-id>" \
 
 ### 4. Create a boardroom worker env file per company
 
+You need two per-company values before you can write the env file:
+
+**Company UUID** (`PAPERCLIP_COMPANY_ID`)
+
+- CLI: `paperclipai company list --json` prints every company you have board access to, with `id` (the UUID), `name`, and `issuePrefix`.
+- UI: Company settings page → the UUID is shown at the top, and it also appears in the URL of any admin API call. The short prefix in URLs (e.g. `PER` in `/PER/issues/…`) is the `issuePrefix`, not the UUID.
+
+**Boardroom API key** (`PAPERCLIP_BOARDROOM_API_KEY`)
+
+This must be a durable `pcp_*` agent API key belonging to an agent *in the target company* (a run-scoped JWT will expire). Pick or create the agent that will act as the boardroom worker's identity for that company (any agent works — it's just the identity the worker authenticates as when calling Paperclip). Then, as a board operator:
+
+```bash
+# 1. First-time only: authenticate the CLI as a board user
+paperclipai connect --persona board
+
+# 2. Mint a long-lived agent key for the boardroom worker
+paperclipai token agent create \
+  --company-id <company-uuid> \
+  --agent <agent-shortname-or-id> \
+  --name papervoice-boardroom
+```
+
+The `create` command prints the `pcp_*` key **once** — copy it into the env file immediately (there's no way to retrieve it again; revoke and re-mint if lost). The key survives restarts and does not need refresh (see the `boardroom-token-refresh-cadence` note in agent memory).
+
+Existing keys for an agent are listed with `paperclipai token agent list --company-id <company-uuid> --agent <agent>` (metadata only, no values) and revoked with `paperclipai token agent revoke <keyId>`.
+
 Copy `.env.example` to `.env.<company-slug>` and fill in company-specific values:
 
 ```bash
