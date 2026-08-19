@@ -8,7 +8,7 @@ The Papervoice system has two layers with different scoping rules:
 
 **Plugin JS worker** — installed once at the instance level. Every data query and action receives a `companyId` parameter; `ctx.config.get(companyId)`, `ctx.secrets.resolve(ref, { companyId })`, and `ctx.agents.list({ companyId })` are all company-scoped. The plugin layer is already multi-company ready — no code changes needed.
 
-**Python boardroom worker (`boardroom.py`)** — a long-running process that reads `PAPERCLIP_COMPANY_ID` from its environment. It is single-company per process. To serve multiple companies you run one boardroom worker process per company, each with its own `.env` file.
+**Python boardroom worker (`boardroom.py`)** — a long-running process that can serve one or many companies. It always has a primary company from `PAPERCLIP_COMPANY_ID` + `PAPERCLIP_BOARDROOM_API_KEY`. Additional companies are added by setting extra `PAPERCLIP_BOARDROOM_API_KEY_<UUID>` env vars (or a `PAPERCLIP_BOARDROOM_KEYS_JSON` file) in the same env — see step 5 below. The plugin stamps `companyId` into LiveKit room metadata when a join link is minted, and the worker resolves the right per-company key at job start. You do not need one worker process per company; you can still run one per company if you prefer stricter isolation.
 
 ## Global vs. per-company API key configuration (PER-391)
 
@@ -89,9 +89,9 @@ curl -X PATCH "$PAPERCLIP_API_BASE/api/agents/<agent-id>" \
   -d '{"metadata": {"papervoice": {"enabled": true, "voice_id": "EXAVITQu4vr4xnSDxMaL", ...}}}'
 ```
 
-### 4. Create a boardroom worker env file per company
+### 4. Gather company UUID + boardroom API key
 
-You need two per-company values before you can write the env file:
+Regardless of which topology you pick in step 5, each company needs two values:
 
 **Company UUID** (`PAPERCLIP_COMPANY_ID`)
 
@@ -117,56 +117,73 @@ The `create` command prints the `pcp_*` key **once** — copy it into the env fi
 
 Existing keys for an agent are listed with `paperclipai token agent list --company-id <company-uuid> --agent <agent>` (metadata only, no values) and revoked with `paperclipai token agent revoke <keyId>`.
 
-Copy `.env.example` to `.env.<company-slug>` and fill in company-specific values:
+Keep these two values handy — step 5 shows exactly where they go for each topology. All `pcp_*` keys must be durable API keys (not run-scoped JWTs) belonging to an agent in the target company. The board mints these; the VoiceEngineer never creates paid accounts or API keys on their own.
+
+**Never** paste a `pcp_*` value into an issue comment, PR, Slack message, or any other channel that isn't the env file itself — treat any such leak as compromise and revoke immediately with `paperclipai token agent revoke <keyId>`.
+
+### 5. Start the boardroom worker
+
+You have two topologies. Pick the one that matches your isolation needs.
+
+**Option A — one worker, many companies (default; PER-405).** All companies that share a LiveKit project can be served by a single boardroom worker. Use one merged env file with the primary company's `PAPERCLIP_COMPANY_ID` + `PAPERCLIP_BOARDROOM_API_KEY`, plus one extra `PAPERCLIP_BOARDROOM_API_KEY_<UUID>` line per additional company:
 
 ```bash
-# .env.acme  (example for a company named "Acme")
+# .env  (one file for all companies on this LiveKit project)
 
-ELEVENLABS_API_KEY=<shared-or-company-specific>
-
-LIVEKIT_URL=wss://acme.livekit.cloud
-LIVEKIT_API_KEY=<acme-livekit-key>
-LIVEKIT_API_SECRET=<acme-livekit-secret>
-
-ANTHROPIC_API_KEY=<shared-or-company-specific>
-
+ELEVENLABS_API_KEY=<shared>
+LIVEKIT_URL=wss://shared.livekit.cloud
+LIVEKIT_API_KEY=<shared-livekit-key>
+LIVEKIT_API_SECRET=<shared-livekit-secret>
+ANTHROPIC_API_KEY=<shared>
 PAPERCLIP_API_URL=<instance-url>
-PAPERCLIP_BOARDROOM_API_KEY=<long-lived pcp_* key for an Acme agent>
-PAPERCLIP_COMPANY_ID=<acme-company-uuid>
 
-# Optional: issue to post post-call summaries to
-PAPERCLIP_STANDUP_SUMMARY_ISSUE_ID=
+# Primary company (also the fallback when room metadata omits companyId)
+PAPERCLIP_COMPANY_ID=8126b511-8dd2-4fa0-8a4f-22d630b83108
+PAPERCLIP_BOARDROOM_API_KEY=pcp_<primary-company-key>
+
+# Extra companies — one env var per company. The UUID has dashes replaced
+# with underscores and is upper-cased. Case-insensitive at match time, but
+# the upper-snake form matches .env.example exactly.
+PAPERCLIP_BOARDROOM_API_KEY_F47AC10B_A62D_4AB3_9937_58A2460347AB=pcp_<second-company-key>
+PAPERCLIP_BOARDROOM_API_KEY_1234ABCD_5678_90EF_1234_ABCDEF567890=pcp_<third-company-key>
 ```
 
-`PAPERCLIP_BOARDROOM_API_KEY` must be a durable `pcp_*` API key belonging to an agent in the target company (not a run-scoped JWT). The board mints this key; the VoiceEngineer never creates paid accounts or API keys on their own.
-
-### 5. Start a boardroom worker per company
-
-From the repo root with the virtual environment active:
+Larger fleets can put the mapping in a JSON file instead of many env vars:
 
 ```bash
-# Company A
-env $(cat .env.acme | xargs) \
-  python -m papervoice.boardroom start
-
-# Company B  
-env $(cat .env.beta | xargs) \
-  python -m papervoice.boardroom start
+# /etc/papervoice/boardroom-keys.json
+# { "<companyId>": "pcp_...", ... }
+PAPERCLIP_BOARDROOM_KEYS_JSON=/etc/papervoice/boardroom-keys.json
 ```
 
-Each worker registers for LiveKit job dispatch on its own LiveKit project and its own Paperclip company. They are fully independent — a crash or restart of one does not affect the other.
+Start once:
 
-For production: run each worker under a supervisor (systemd unit or similar) with the appropriate env file, launched from `/var/tmp/papervoice-boardroom/<company-slug>/` as the working directory (durable TMPDIR — see `HEARTBEAT.md` boardroom note).
+```bash
+env $(cat .env | xargs) python -m papervoice.boardroom start
+```
+
+The worker registers for LiveKit dispatch on the shared project. When a room is minted, the plugin stamps `companyId` into the room metadata; the worker looks up the matching `pcp_*` key and runs the standup against that company.
+
+**Option B — one worker per company (stricter isolation).** Use this when companies need separate LiveKit projects, or when you want a crash in one company's worker to not affect the others. Give each company its own `.env.<slug>` file (as sketched in step 4) and start one worker per env file:
+
+```bash
+env $(cat .env.acme | xargs) python -m papervoice.boardroom start
+env $(cat .env.beta | xargs) python -m papervoice.boardroom start
+```
+
+Each worker registers on its own LiveKit project against its own Paperclip company. Independent processes, independent failure domains.
+
+For production (either option): run under a supervisor (systemd unit or similar) with the appropriate env file, launched from `/var/tmp/papervoice-boardroom/<slug>/` as the working directory (durable TMPDIR — see `HEARTBEAT.md` boardroom note).
 
 ### 6. Verify the setup
 
-For each company, run the healthcheck with the company's env loaded:
+Run the healthcheck with the worker's env loaded. For option A this covers all companies in the merged env; for option B run it once per company env file:
 
 ```bash
-env $(cat .env.acme | xargs) python scripts/healthcheck
+env $(cat .env | xargs) python scripts/healthcheck
 ```
 
-Then do a live probe-join: generate a join link from the company's Papervoice settings page and confirm an agent greets you.
+Then do a live probe-join per company: generate a join link from that company's Papervoice settings page and confirm an agent greets you.
 
 ## What is shared across companies
 
@@ -174,7 +191,7 @@ Then do a live probe-join: generate a join link from the company's Papervoice se
 - `ELEVENLABS_API_KEY` (Python boardroom env var; billing is per-character, not per-company)
 - `ANTHROPIC_API_KEY` (Python boardroom env var; can be shared)
 - `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` — **optionally** shared via instance-wide env vars on the plugin process; companies that need isolation override these with per-company plugin config
-- The Python boardroom code (same codebase, separate processes)
+- The Python boardroom code (same codebase; one worker can serve many companies, or one worker per company — your choice, see step 5)
 
 ## What must be per-company
 
@@ -184,7 +201,7 @@ Then do a live probe-join: generate a join link from the company's Papervoice se
 | `PAPERCLIP_COMPANY_ID` | The worker queries agents and files issues against this company only |
 | `PAPERCLIP_BOARDROOM_API_KEY` | Must belong to an agent in the target company |
 | Agent `metadata.papervoice` entries | Per-agent, per-company |
-| Boardroom worker process | One per company |
+| Boardroom worker process | Optional — one shared worker can serve many companies (option A in step 5); use one per company only when you want stricter isolation or separate LiveKit projects |
 
 Plugin config (LiveKit URL, secret refs, room presets) is stored per-company, but is now optional: if a company has no plugin config the plugin falls back to the instance-wide env vars.
 
@@ -197,3 +214,9 @@ Plugin config (LiveKit URL, secret refs, room presets) is stored per-company, bu
 **Plugin config shows "not configured"** — the company has no plugin settings AND no instance-wide `LIVEKIT_URL`/`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` env vars are set on the plugin process. Either set env vars globally or fill in the company's plugin settings.
 
 **403 on plugin config from the boardroom worker** — expected and harmless. The boardroom Python worker authenticates as an agent token which lacks board access; the plugin config endpoint requires a board session. The worker reads preset agent IDs from LiveKit room metadata (stamped by the plugin when the join link is minted) instead. Always generate fresh join links from the settings page after updating room presets.
+
+**Extra `PAPERCLIP_BOARDROOM_API_KEY_<UUID>` line seems to be ignored** — three common mistakes:
+
+1. **Dashes in the env var name.** POSIX shells don't accept dashes in identifiers; the encoding uses underscores. `PAPERCLIP_BOARDROOM_API_KEY_a62d-4ab3-…` is invalid — use `PAPERCLIP_BOARDROOM_API_KEY_A62D_4AB3_…`.
+2. **Truncated UUID.** A companyId has five hex groups (`8-4-4-4-12`, 32 hex chars total). Missing the first 8 chars is a common copy-paste error — grab the full UUID with `paperclipai company list --json` and use all five groups.
+3. **Missing `pcp_` prefix on the value.** The key must start with `pcp_` (durable agent key). Run-scoped JWTs won't survive a restart and will 401 mid-call.
