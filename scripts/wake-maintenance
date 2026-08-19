@@ -1,63 +1,72 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Mandatory first action for every VoiceEngineer wake. The injected run JWT is
-# copied into the local boardroom .env without ever printing it, then the
-# boardroom worker is restarted (if no human is in the call) so it picks up the
-# fresh token — load_dotenv() only fires at process startup, not on each call.
+# Worker liveness + credential persistence. Since PER-386/PER-388 delivered a
+# durable, non-run-scoped Paperclip key (PAPERCLIP_BOARDROOM_API_KEY, a pcp_*
+# agent key with no TTL), this no longer has to run on the every-25-min Paperclip
+# routine to refresh a ~1h JWT — the durable key never expires. It now runs from a
+# plain host cron (which creates NO Paperclip issues) purely to persist whatever
+# credentials are present and keep the worker alive. It stays safe to invoke from a
+# VoiceEngineer wake too: any injected secret present in the environment is written
+# through to .env (durable key preferred, run JWT kept only as a dev fallback).
 #
-# Exit codes and ROUTINE: summary line (PER-151 filtering):
-#   Exit 0 + "ROUTINE: NOMINAL"       — key refreshed, worker OK, nothing drained
-#   Exit 0 + "ROUTINE: STATE_CHANGE"  — worker restarted and/or pending posts drained
-#   Exit 1 + "ROUTINE: FAILED"        — worker could not start after restart attempt
+# Auth precedence (see vendors/paperclip.py::_api_key): the worker prefers the
+# durable PAPERCLIP_BOARDROOM_API_KEY and falls back to the run-scoped
+# PAPERCLIP_API_KEY only when the durable key is absent. A stale JWT left in .env is
+# therefore harmless — it is never used while the durable key is present.
 #
-# The agent reading this output should only file a follow-up Paperclip issue on
-# FAILED, comment briefly on STATE_CHANGE, and mark done silently on NOMINAL.
+# Exit codes and ROUTINE: summary line (PER-151 filtering, still honoured by any
+# agent-run invocation):
+#   Exit 0 + "ROUTINE: NOMINAL"       — credentials in place, worker OK, nothing drained
+#   Exit 0 + "ROUTINE: STATE_CHANGE"  — worker (re)started and/or pending posts drained
+#   Exit 1 + "ROUTINE: FAILED"        — worker could not start after a restart attempt
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 env_file="${PAPERCLIP_BOARDROOM_ENV_FILE:-$repo_dir/.env}"
-: "${PAPERCLIP_API_KEY:?PAPERCLIP_API_KEY must be injected for wake refresh}"
-: "${ELEVENLABS_API_KEY:?ELEVENLABS_API_KEY must be injected for wake refresh}"
 mkdir -p "$(dirname "$env_file")"
-tmp_file="$(mktemp "${env_file}.tmp.XXXXXX")"
-trap 'rm -f "$tmp_file"' EXIT
-if [[ -f "$env_file" ]]; then
-  awk '!/^PAPERCLIP_API_KEY=/ && !/^ELEVENLABS_API_KEY=/' "$env_file" >"$tmp_file"
+
+# Persist any credential present in the environment through to .env, without ever
+# printing it. Absent vars are left as-is in .env (host-cron runs inject nothing
+# and rely on the durable key already persisted there). We require .env to end up
+# holding at least one Paperclip credential so the worker can authenticate.
+persist_env_var() {
+  local name="$1" value
+  value="$(printenv "$name" || true)"
+  [[ -z "$value" ]] && return 0
+  local tmp
+  tmp="$(mktemp "${env_file}.tmp.XXXXXX")"
+  if [[ -f "$env_file" ]]; then
+    awk -v k="^${name}=" '$0 !~ k' "$env_file" >"$tmp"
+  fi
+  printf '%s=%s\n' "$name" "$value" >>"$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$env_file"
+}
+persist_env_var PAPERCLIP_BOARDROOM_API_KEY
+persist_env_var PAPERCLIP_API_KEY
+persist_env_var ELEVENLABS_API_KEY
+
+if [[ ! -f "$env_file" ]] || ! grep -qE '^(PAPERCLIP_BOARDROOM_API_KEY|PAPERCLIP_API_KEY)=.+' "$env_file"; then
+  echo "no Paperclip credential in $env_file and none injected — cannot authenticate worker" >&2
+  echo "ROUTINE: FAILED (no Paperclip credential available)"
+  exit 1
 fi
-printf 'PAPERCLIP_API_KEY=%s\n' "$PAPERCLIP_API_KEY" >>"$tmp_file"
-printf 'ELEVENLABS_API_KEY=%s\n' "$ELEVENLABS_API_KEY" >>"$tmp_file"
-chmod 600 "$tmp_file"
-mv -f "$tmp_file" "$env_file"
-echo "refreshed Paperclip boardroom token and ElevenLabs API key in $env_file"
+echo "persisted available credentials to $env_file (durable key preferred)"
 
 # Track whether any notable state change occurred (PER-151 filtering).
 worker_restarted=false
 
-# Restart the worker so it picks up the new token. Skip if humans are in the
-# call — a mid-call restart drops every participant immediately (PER-84).
+# Restart ONLY for crash recovery. With the durable key there is no token to "pick
+# up", so a healthy running worker is left completely alone — that is what removes
+# the every-25-min restart churn (PER-386). A worker that is up keeps serving on the
+# durable key it loaded at startup; the one-time migration onto the durable key is a
+# deliberate manual restart, not something this liveness path forces.
 worker_pid=$(pgrep -f 'python(3)? -m papervoice\.boardroom start' 2>/dev/null || true)
 if [[ -z "$worker_pid" ]]; then
-  echo "boardroom worker probe: NOT RUNNING — restarting" >&2
+  echo "boardroom worker probe: NOT RUNNING — restarting for crash recovery" >&2
   need_restart=true
 else
-  echo "boardroom worker probe: running (pid $worker_pid)"
-  room_occupied=$(
-    PYTHONPATH="$repo_dir/src" \
-      "$repo_dir/.venv/bin/python" -c "
-import asyncio, sys
-from dotenv import load_dotenv
-load_dotenv('$env_file')
-from papervoice.vendors import livekit as lk
-result = asyncio.run(lk.any_active_call_in_progress())
-sys.stdout.write('true' if result else 'false')
-" 2>/dev/null
-  )
-  if [[ "$room_occupied" == "true" ]]; then
-    echo "boardroom worker: call in progress — skipping restart, new token loads on next call start"
-    need_restart=false
-  else
-    echo "boardroom worker: all rooms empty — restarting to pick up fresh token"
-    need_restart=true
-  fi
+  echo "boardroom worker probe: running (pid $worker_pid) — leaving it alone (durable key, no refresh needed)"
+  need_restart=false
 fi
 
 # The LiveKit agents worker binds a health/metrics HTTP server on this port; a

@@ -6,9 +6,9 @@ design under volume, and its atomic-write failure modes, so the security team ha
 empirical evidence before cryptographic sign-off.
 
 Surfaces under test:
-  A. Concurrent boardroom `.env` token refresh — the atomic block in
-     scripts/wake-maintenance:21-29 (mktemp -> awk-filter -> append keys ->
-     chmod 600 -> mv -f). Property: a concurrent reader (the worker's
+  A. Concurrent boardroom `.env` credential write — the atomic pattern in
+     scripts/wake-maintenance's persist_env_var helper (mktemp -> awk-filter ->
+     append key -> chmod 600 -> mv -f). Property: a concurrent reader (the worker's
      load_dotenv) must NEVER observe a partial/corrupt/zero-length file, must
      always see exactly one PAPERCLIP_API_KEY + one ELEVENLABS_API_KEY, a value
      from the valid injected set, and mode 600.

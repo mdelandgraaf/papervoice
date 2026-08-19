@@ -6,9 +6,11 @@ see boardroom.py's file_followup_issue tool), and after the call (post the
 standup summary as a comment). See docs/ARCHITECTURE.md Milestone 3.
 
 This module authenticates as a Paperclip agent identity, same as any other
-Paperclip agent run — it is not a new vendor account. The long-lived key it
-needs (PAPERCLIP_API_KEY below) is a Paperclip-internal credential, not an
-ElevenLabs/LiveKit/Twilio-style paid account.
+Paperclip agent run — it is not a new vendor account. The key it needs (see
+_api_key below) is a Paperclip-internal credential, not an
+ElevenLabs/LiveKit/Twilio-style paid account. It prefers the durable board-minted
+PAPERCLIP_BOARDROOM_API_KEY (PER-388) and falls back to the run-scoped
+PAPERCLIP_API_KEY only when that is absent.
 """
 
 import json
@@ -47,9 +49,24 @@ def _api_base() -> str:
 
 
 def _api_key() -> str:
-    key = os.environ.get("PAPERCLIP_API_KEY", "")
+    """Return the Paperclip credential this long-running worker authenticates with.
+
+    Prefer the durable, non-run-scoped board-minted key (``PAPERCLIP_BOARDROOM_API_KEY``,
+    a ``pcp_*`` agent API key delivered on PER-388) because this process outlives any
+    single heartbeat and must not depend on a ~1h run JWT. Fall back to the run-scoped
+    ``PAPERCLIP_API_KEY`` only when the durable key is absent (e.g. a dev shell that never
+    had PER-388's secret injected), preserving the old behaviour. This preference is what
+    lets PER-386 retire the every-25-min token-refresh routine: with the durable key in
+    ``.env`` there is nothing to refresh, so the worker never needs a wake to stay authed.
+    """
+    key = os.environ.get("PAPERCLIP_BOARDROOM_API_KEY", "") or os.environ.get(
+        "PAPERCLIP_API_KEY", ""
+    )
     if not key:
-        raise RuntimeError("PAPERCLIP_API_KEY is not set (copy .env.example to .env)")
+        raise RuntimeError(
+            "no Paperclip credential set: expected PAPERCLIP_BOARDROOM_API_KEY "
+            "(durable key) or PAPERCLIP_API_KEY (run JWT fallback) in .env"
+        )
     return key
 
 

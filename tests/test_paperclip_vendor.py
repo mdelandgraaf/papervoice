@@ -68,7 +68,12 @@ class PaperclipAdapterTest(unittest.TestCase):
     def setUp(self):
         self._env = mock.patch.dict(os.environ, {}, clear=False)
         self._env.start()
-        for key in ("PAPERCLIP_API_URL", "PAPERCLIP_API_KEY", "PAPERCLIP_COMPANY_ID"):
+        for key in (
+            "PAPERCLIP_API_URL",
+            "PAPERCLIP_API_KEY",
+            "PAPERCLIP_BOARDROOM_API_KEY",
+            "PAPERCLIP_COMPANY_ID",
+        ):
             os.environ.pop(key, None)
 
     def tearDown(self):
@@ -79,8 +84,26 @@ class PaperclipAdapterTest(unittest.TestCase):
             pc._api_base()
 
     def test_api_key_missing_raises(self):
-        with self.assertRaisesRegex(RuntimeError, "PAPERCLIP_API_KEY"):
+        with self.assertRaisesRegex(RuntimeError, "PAPERCLIP_BOARDROOM_API_KEY"):
             pc._api_key()
+
+    def test_api_key_prefers_durable_boardroom_key(self):
+        # The durable board-minted key (PER-388) wins over the run-scoped JWT so the
+        # long-running worker never depends on a ~1h token (PER-386 option A).
+        os.environ["PAPERCLIP_API_KEY"] = "run-scoped-jwt"
+        os.environ["PAPERCLIP_BOARDROOM_API_KEY"] = "pcp_durable_key"
+        self.assertEqual(pc._api_key(), "pcp_durable_key")
+
+    def test_api_key_falls_back_to_run_jwt(self):
+        # Dev shells without PER-388's secret still work via the run JWT fallback.
+        os.environ["PAPERCLIP_API_KEY"] = "run-scoped-jwt"
+        self.assertEqual(pc._api_key(), "run-scoped-jwt")
+
+    def test_api_key_ignores_empty_durable_key(self):
+        # An empty/blank durable var must not shadow a valid run JWT.
+        os.environ["PAPERCLIP_BOARDROOM_API_KEY"] = ""
+        os.environ["PAPERCLIP_API_KEY"] = "run-scoped-jwt"
+        self.assertEqual(pc._api_key(), "run-scoped-jwt")
 
     def test_company_id_missing_raises(self):
         with self.assertRaisesRegex(RuntimeError, "PAPERCLIP_COMPANY_ID"):
