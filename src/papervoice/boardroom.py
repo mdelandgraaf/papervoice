@@ -103,7 +103,7 @@ def _dismissal_target(text: str, roster: tuple[Persona, ...]) -> str | None:
     """Resolve only an explicit, named request for one agent to leave."""
     normalized = " ".join(text.lower().split())
     for persona in roster:
-        names = {persona.display_name.lower(), persona.identity.lower().removeprefix("agent-")}
+        names = _name_aliases(persona.display_name, persona.identity)
         for name in names:
             escaped = re.escape(name)
             direct = rf"\A(?:please )?{escaped}[, ]+(?:please )?(?:leave|exit|drop off|go now)(?:[.!?]|\Z)"
@@ -111,6 +111,18 @@ def _dismissal_target(text: str, roster: tuple[Persona, ...]) -> str | None:
             if re.search(direct, normalized) or re.search(indirect, normalized):
                 return persona.identity
     return None
+
+
+def _name_aliases(display_name: str, identity: str) -> set[str]:
+    """All lowercase name forms a human might use for one persona.
+
+    Includes the raw display name, the bare identity (``agent-eng`` → ``eng``),
+    and a camelCase-split form so compound names like ``VoiceEngineer`` also
+    match when the human says "voice engineer" (two words) instead of one.
+    """
+    bare = identity.lower().removeprefix("agent-")
+    split = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", display_name).lower()
+    return {display_name.lower(), bare, split}
 
 
 # Filler words a human might lead with before naming the agent they're
@@ -146,7 +158,7 @@ def _addressed_target(text: str, roster: tuple[Persona, ...]) -> str | None:
     """
     normalized = " ".join(text.lower().split())
     for persona in roster:
-        names = {persona.display_name.lower(), persona.identity.lower().removeprefix("agent-")}
+        names = _name_aliases(persona.display_name, persona.identity)
         for name in names:
             n = re.escape(name)
             leading = rf"\A{_ADDRESS_LEAD}{n}\b"
