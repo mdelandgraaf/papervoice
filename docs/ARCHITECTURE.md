@@ -34,7 +34,7 @@ Key decisions:
 2. **Humans join by browser (WebRTC) or phone (LiveKit SIP ingress / Twilio trunk)**. https://docs.livekit.io/telephony/agents-integration/
 3. **One shared STT feed** transcribes the room; the rolling transcript is broadcast to every agent's LLM context as text. Agents "hear" each other as text — cheaper and more reliable than N parallel audio decoders.
 4. **Moderator floor control, not VAD politeness.** A server-side moderator holds a speaker token and runs the standup agenda ("Eng, your update"). Agents generate speech only when granted the floor (`allow_interruptions=False`, reply triggered on command). A turn-detector subscribed to *human tracks only* revokes the floor when a human speaks and cancels agent TTS (barge-in). The anti-pattern to avoid: N autonomous agents on an open bridge each running their own VAD — they trigger on each other and double-talk.
-5. **Paperclip integration (Milestone 3):** at call start each agent fetches its live Paperclip state (inbox, issue status); during the call the moderator/agents can file actions (create/assign issues) through the Paperclip API; after the call a summary is posted back to Paperclip.
+5. **Paperclip integration (Milestone 3):** at call start each agent fetches its live Paperclip state (inbox, issue status); during the call the moderator/agents can look up live issue state on demand (`look_up_paperclip`, PER-401) and file actions (create/assign issues) through the Paperclip API; after the call a summary is posted back to Paperclip.
 
 Why this over the alternatives: it is the only mainstream option where N agents and humans are genuinely co-present with full programmatic turn control; ElevenLabs' own WebRTC mode runs on LiveKit infrastructure; and it depends only on the very stable ElevenLabs TTS API rather than the fast-moving Agents-platform SDK surface.
 
@@ -331,10 +331,19 @@ name. The dynamic roster is built at call start from `personas.load_roster_from_
    anywhere else, so the summary comment is the only place to read it back after the call ends. A
    very long meeting means a very long comment; there's no dedicated transcript document/store yet,
    so this trades comment length for not losing history — revisit if that becomes a real problem.
-6. **Not yet built:** the moderator/agents don't yet read the *current issue thread* mid-call (e.g.
-   "what's the status of PER-80 right now?") beyond the call-start briefing — `context_briefing()` is
-   a snapshot, not a live query tool. Left for a follow-up if a real standup surfaces the need; adding
-   it would be another `function_tool` alongside `file_followup_issue`, same pattern.
+6. **Live issue lookup is a real LLM tool call (PER-401).** The call-start briefing
+   (`context_briefing()`) is only a shallow snapshot — each persona's top few open issues by
+   title/status, no descriptions. So when a caller asked about a specific issue's contents, an issue
+   outside that top slice, or anyone else's work, the agent had nothing to go on and would say "I
+   don't know" or **hallucinate** a status/description. Each persona's `Agent` now also gets a
+   `look_up_paperclip` `function_tool` (`boardroom._lookup_tool`, bound in both `_connect_agent` and
+   `run_direct_call`): with a query it searches the company's issues by identifier/keyword across
+   **all** statuses (`paperclip.search_issues`, so "did PER-390 ever ship?" resolves a closed match)
+   and returns a bounded description excerpt; empty, it lists the persona's own open issues (or a
+   company snapshot for an unbound persona). The prompts (`prompts.py`, `personas._COMMON_STYLE`) tell
+   the LLM to call it whenever it's asked about a task and isn't certain, instead of guessing. Same
+   graceful-degradation posture as `file_followup_issue`: an auth/API failure returns a spoken message,
+   never raises into the turn.
 6a. **Closer sweeps undocumented decisions into tickets.** Board feedback on PER-76 ("have all
    outcomes of the call processed into new tasks") found that filing was purely opt-in per speaking
    agent's own turn — if nobody who made a decision happened to call `file_followup_issue`

@@ -164,6 +164,53 @@ class PaperclipAdapterTest(unittest.TestCase):
         _, kwargs = get.call_args
         self.assertNotIn("assigneeAgentId", kwargs["params"])
 
+    def test_search_issues_sends_query_and_returns_detail_with_description(self):
+        self._set_env()
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = mock.Mock()
+        fake_resp.json = mock.Mock(
+            return_value=[
+                {"identifier": "PER-5", "title": "Voice fix", "status": "done",
+                 "priority": "high", "description": "  Shipped the barge-in fix.  "},
+            ]
+        )
+        with mock.patch("httpx.get", return_value=fake_resp) as get:
+            issues = pc.search_issues("PER-5")
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0]["identifier"], "PER-5")
+        self.assertEqual(issues[0]["status"], "done")  # not status-filtered: closed matches returned
+        self.assertEqual(issues[0]["description"], "Shipped the barge-in fix.")
+        _, kwargs = get.call_args
+        self.assertEqual(kwargs["params"]["q"], "PER-5")
+        self.assertNotIn("status", kwargs["params"])  # search spans all statuses
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer pc-test-key")
+
+    def test_search_issues_truncates_long_description(self):
+        self._set_env()
+        long_desc = "x" * (pc._LOOKUP_DESC_CHARS + 200)
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = mock.Mock()
+        fake_resp.json = mock.Mock(
+            return_value=[{"identifier": "PER-6", "title": "T", "status": "todo",
+                           "priority": "low", "description": long_desc}]
+        )
+        with mock.patch("httpx.get", return_value=fake_resp):
+            issues = pc.search_issues("T")
+        self.assertLessEqual(len(issues[0]["description"]), pc._LOOKUP_DESC_CHARS + 1)  # +1 for the ellipsis
+        self.assertTrue(issues[0]["description"].endswith("…"))
+
+    def test_search_issues_respects_limit(self):
+        self._set_env()
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = mock.Mock()
+        fake_resp.json = mock.Mock(
+            return_value=[{"identifier": f"PER-{i}", "title": "x", "status": "todo",
+                           "priority": "low", "description": ""} for i in range(10)]
+        )
+        with mock.patch("httpx.get", return_value=fake_resp):
+            issues = pc.search_issues("x", limit=3)
+        self.assertEqual(len(issues), 3)
+
     def test_context_briefing_uses_agent_context_when_agent_id_given(self):
         self._set_env()
         with mock.patch.object(pc, "agent_context", return_value=[

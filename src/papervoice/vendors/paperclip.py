@@ -24,6 +24,10 @@ from pathlib import Path
 import httpx
 
 _OPEN_STATUSES = "todo,in_progress,in_review,blocked"
+# Longest description excerpt returned by search_issues (the in-call live-lookup
+# tool). Bounded so a big issue body can't blow the LLM turn's token budget or
+# latency; the agent gets enough to answer a question without reading a novel.
+_LOOKUP_DESC_CHARS = 500
 _TIMEOUT = 15.0
 _DEFAULT_PENDING_POSTS_DIR = "/var/tmp/papervoice-boardroom/pending-posts"
 # A drain claim (`*.draining-<pid>`) held longer than this by a still-running pid
@@ -116,6 +120,35 @@ def company_snapshot(limit: int = 8) -> list[dict]:
     )
     resp.raise_for_status()
     return [_compact(issue) for issue in resp.json()[:limit]]
+
+
+def _detail(issue: dict) -> dict:
+    """Like _compact but also carries a bounded description excerpt, so the in-call
+    live-lookup tool can answer "what is that issue actually about" questions."""
+    description = (issue.get("description") or "").strip()
+    if len(description) > _LOOKUP_DESC_CHARS:
+        description = description[:_LOOKUP_DESC_CHARS].rstrip() + "…"
+    return {**_compact(issue), "description": description}
+
+
+def search_issues(query: str, limit: int = 5) -> list[dict]:
+    """Live issue lookup by identifier, title, or keyword — backs the in-call
+    look_up_paperclip tool (PER-401) so an agent can read real issue state mid-call
+    instead of guessing or hallucinating when asked about a task.
+
+    Unlike agent_context/company_snapshot this does NOT filter by status: a caller
+    on the call may well ask "did PER-390 ever ship?", so a closed (done/cancelled)
+    match must still come back. Results carry a bounded description excerpt via
+    _detail. The server ranks matches (title > identifier > description > comments).
+    """
+    resp = httpx.get(
+        f"{_api_base()}/api/companies/{_company_id()}/issues",
+        headers=_headers(),
+        params={"q": query},
+        timeout=_TIMEOUT,
+    )
+    resp.raise_for_status()
+    return [_detail(issue) for issue in resp.json()[:limit]]
 
 
 def context_briefing(agent_id: str | None, limit: int = 5) -> str:

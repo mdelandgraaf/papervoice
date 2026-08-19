@@ -335,6 +335,74 @@ def _file_issue_tool(persona: Persona, moderator: Moderator):
     return file_followup_issue
 
 
+def _format_issues_for_speech(issues: list[dict]) -> str:
+    """Render lookup results as compact plain text for the LLM to summarize aloud.
+
+    Handles both the compact shape (agent_context/company_snapshot: no description)
+    and the detailed shape (search_issues: with a description excerpt).
+    """
+    lines = []
+    for issue in issues:
+        line = (
+            f"{issue.get('identifier')} — {issue.get('title')}"
+            f" (status: {issue.get('status')}, priority: {issue.get('priority')})"
+        )
+        description = issue.get("description")
+        if description:
+            line += f". Details: {description}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _lookup_tool(persona: Persona):
+    """A per-persona LiveKit function tool (PER-401): live Paperclip lookup during a call.
+
+    The static call-start briefing only carries each agent's top few open issues by
+    title/status — so when a human asks about a specific issue's contents, an issue
+    outside that top slice, or anyone else's work, the agent had nothing to go on and
+    would say "I don't know" or hallucinate. This tool lets the LLM read real issue
+    state mid-turn instead: search by identifier/keyword, or list its own open issues.
+    """
+
+    @function_tool
+    async def look_up_paperclip(query: str = "") -> str:
+        """Look up live Paperclip issue state during the call. Use this whenever you are
+        asked about the status, contents, or details of a task and you are not certain —
+        check here instead of guessing. Never invent an issue's status or description.
+
+        Args:
+            query: An issue identifier (e.g. "PER-401"), a keyword, or a topic/person to
+                search for across the whole company. Leave empty to list your own current
+                open issues.
+        """
+        try:
+            if query.strip():
+                issues = await asyncio.to_thread(pc_vendor.search_issues, query.strip())
+            elif persona.paperclip_agent_id:
+                issues = await asyncio.to_thread(pc_vendor.agent_context, persona.paperclip_agent_id, 12)
+            else:
+                issues = await asyncio.to_thread(pc_vendor.company_snapshot, 12)
+        except Exception as exc:
+            if pc_vendor.is_auth_error(exc):
+                logger.error(
+                    "Paperclip auth failed (401/403) on look_up_paperclip from %s — board tools"
+                    " offline for this call, is PAPERCLIP_API_KEY expired?",
+                    persona.identity,
+                )
+                return "I can't reach Paperclip right now — access has expired for this call."
+            logger.exception("look_up_paperclip failed for %s (query=%r)", persona.identity, query)
+            return "I couldn't look that up — the Paperclip API call failed."
+        if not issues:
+            return (
+                "No matching Paperclip issues found."
+                if query.strip()
+                else "You have no open Paperclip issues right now."
+            )
+        return _format_issues_for_speech(issues)
+
+    return look_up_paperclip
+
+
 @function_tool
 async def _pass_on_reacting() -> str:
     """Call this instead of speaking when you have nothing genuinely useful to add during a
@@ -386,9 +454,16 @@ async def _connect_agent(room_name: str, persona: Persona, moderator: Moderator)
                 # issue when the board decides something needs tracking. pass_on_reacting and
                 # ask_board (PER-83): let a reaction turn skip speaking, and let this persona
                 # proactively ask the board a question and wait for the answer mid-turn.
+                # look_up_paperclip (PER-401): lets this persona read real issue state mid-call
+                # so it answers from live data instead of guessing/hallucinating.
                 agent=Agent(
                     instructions=persona.instructions,
-                    tools=[_file_issue_tool(persona, moderator), _pass_on_reacting, _ask_board_tool(persona, moderator)],
+                    tools=[
+                        _file_issue_tool(persona, moderator),
+                        _pass_on_reacting,
+                        _ask_board_tool(persona, moderator),
+                        _lookup_tool(persona),
+                    ],
                 ),
                 room=room,
                 # No STT/VAD: this agent never listens for itself. The shared
@@ -663,7 +738,9 @@ async def run_direct_call(
         await session.start(
             agent=Agent(
                 instructions=instructions,
-                tools=[_direct_file_issue_tool(persona, filed_issues)],
+                # look_up_paperclip (PER-401): live issue lookup so a 1:1 call can answer
+                # detail questions from real state instead of the static call-start briefing.
+                tools=[_direct_file_issue_tool(persona, filed_issues), _lookup_tool(persona)],
             ),
             room=room,
             # close_on_disconnect=False: stay alive across human blips; done.set()

@@ -30,7 +30,9 @@ from papervoice.boardroom import (
     _file_issue_tool,
     _fire_and_forget,
     _dismissal_target,
+    _format_issues_for_speech,
     _load_context,
+    _lookup_tool,
     _pass_on_reacting,
     _resolve_direct_persona,
     _standup_agenda,
@@ -423,6 +425,79 @@ class FileIssueToolTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("expired", result)
         self.assertEqual(moderator.filed_issues, [])
+
+
+class LookupToolTest(unittest.IsolatedAsyncioTestCase):
+    """PER-401: the in-call live Paperclip lookup tool. It must read real issue state
+    (search or own-issues) so an agent answers from data instead of hallucinating, and
+    degrade to a clear spoken message on auth/API failure rather than raising."""
+
+    async def test_query_searches_and_formats_results(self):
+        persona = BOARDROOM_ROSTER[1]  # Eng, has a bound paperclip_agent_id
+        tool = _lookup_tool(persona)
+        hits = [{"identifier": "PER-42", "title": "Ship voice fix", "status": "in_progress",
+                 "priority": "high", "description": "Wire the lookup tool."}]
+        with mock.patch.object(pc_vendor, "search_issues", return_value=hits) as search:
+            with mock.patch.object(pc_vendor, "agent_context") as agent_ctx:
+                result = await tool(query="PER-42")
+        search.assert_called_once_with("PER-42")
+        agent_ctx.assert_not_called()
+        self.assertIn("PER-42", result)
+        self.assertIn("Ship voice fix", result)
+        self.assertIn("Wire the lookup tool.", result)
+
+    async def test_empty_query_lists_own_open_issues_for_bound_persona(self):
+        persona = BOARDROOM_ROSTER[1]  # Eng
+        tool = _lookup_tool(persona)
+        mine = [{"identifier": "PER-9", "title": "My task", "status": "todo", "priority": "low"}]
+        with mock.patch.object(pc_vendor, "agent_context", return_value=mine) as agent_ctx:
+            with mock.patch.object(pc_vendor, "search_issues") as search:
+                result = await tool(query="")
+        agent_ctx.assert_called_once_with(persona.paperclip_agent_id, 12)
+        search.assert_not_called()
+        self.assertIn("PER-9", result)
+
+    async def test_empty_query_unbound_persona_uses_company_snapshot(self):
+        persona = Persona(identity="agent-x", display_name="X", voice_id="v", instructions="",
+                          paperclip_agent_id=None)
+        tool = _lookup_tool(persona)
+        with mock.patch.object(pc_vendor, "company_snapshot", return_value=[]) as snapshot:
+            with mock.patch.object(pc_vendor, "agent_context") as agent_ctx:
+                result = await tool(query="")
+        snapshot.assert_called_once_with(12)
+        agent_ctx.assert_not_called()
+        self.assertIn("no open", result.lower())
+
+    async def test_no_matches_reports_clearly(self):
+        persona = BOARDROOM_ROSTER[1]
+        tool = _lookup_tool(persona)
+        with mock.patch.object(pc_vendor, "search_issues", return_value=[]):
+            result = await tool(query="nonexistent")
+        self.assertIn("No matching", result)
+
+    async def test_auth_failure_gives_specific_spoken_message(self):
+        persona = BOARDROOM_ROSTER[1]
+        tool = _lookup_tool(persona)
+        with mock.patch.object(pc_vendor, "search_issues", side_effect=_auth_error()):
+            result = await tool(query="PER-1")
+        self.assertIn("expired", result)
+
+    async def test_api_failure_reports_back_without_raising(self):
+        persona = BOARDROOM_ROSTER[1]
+        tool = _lookup_tool(persona)
+        with mock.patch.object(pc_vendor, "search_issues", side_effect=RuntimeError("API down")):
+            result = await tool(query="PER-1")
+        self.assertIn("couldn't look that up", result)
+
+    def test_format_includes_description_only_when_present(self):
+        with_desc = _format_issues_for_speech(
+            [{"identifier": "PER-1", "title": "A", "status": "todo", "priority": "low", "description": "hello"}]
+        )
+        self.assertIn("Details: hello", with_desc)
+        without = _format_issues_for_speech(
+            [{"identifier": "PER-2", "title": "B", "status": "done", "priority": "high"}]
+        )
+        self.assertNotIn("Details:", without)
 
 
 class PassOnReactingToolTest(unittest.IsolatedAsyncioTestCase):

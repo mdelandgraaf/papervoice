@@ -97,6 +97,24 @@ Pass:
 - If you don't answer within ~20s, the persona should move on gracefully (say so
   briefly or just continue) rather than hang the call.
 
+## 3d. PER-401 live Paperclip lookup exchange (~1 min, part of 3b/3)
+
+Only needed if you touched the live-lookup path (`look_up_paperclip`, `_lookup_tool`,
+`paperclip.search_issues`). Run in the same call as 3b (or a 1:1 direct call).
+
+Ask a persona a *specific factual* Paperclip question it could not know from its
+call-start briefing — e.g. "what's the current status of PER-350?" or "what is
+PER-401 actually about?" (name a real issue in your company).
+
+Pass:
+- The persona answers with the issue's **real** current status/title/detail (it
+  called `look_up_paperclip` under the hood), rather than saying "I don't know" or
+  inventing a plausible-but-wrong answer. Cross-check against the issue in Paperclip.
+- Ask about a closed/done issue ("did PER-398 ship?") — the persona still finds it
+  (search spans all statuses), not just its own open issues.
+- If Paperclip access is down for the call, the persona says it can't reach Paperclip
+  right now instead of guessing.
+
 ## Rollback
 
 If `scripts/healthcheck` or the live exchange fails after a dependency bump:

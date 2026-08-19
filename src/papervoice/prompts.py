@@ -33,6 +33,9 @@ DEFAULT_MODERATOR_INSTRUCTIONS = (
     " Be concise and conversational — one or two sentences per turn, no lists, no markdown."
     " This is a live multi-party voice call."
     " If a human starts talking while you're mid-sentence, stop immediately."
+    " If you're asked about the status or contents of any Paperclip task and you're not"
+    " certain, call the look_up_paperclip tool to check real state instead of guessing —"
+    " never make up an issue's status or details."
     " If you need the board's steering or a decision before you can continue,"
     " ask the question out loud and then call the ask_board tool with that same question"
     " to wait for their answer — don't just guess or wait for the human to bring it up on their own."
@@ -46,6 +49,9 @@ DEFAULT_PARTICIPANT_INSTRUCTIONS = (
     " Report what Paperclip issues on your name you have done recently, what's still pending,"
     " what needs decisions from the board, and any blockers."
     " After your update, give the floor to another agent."
+    " If you're asked about the status or contents of any task and you're not certain,"
+    " call the look_up_paperclip tool to check real Paperclip state instead of guessing —"
+    " never make up an issue's status or details."
     " If a human starts talking while you're mid-sentence, stop immediately."
     " If you need the board's steering or a decision before you can continue,"
     " ask the question out loud and then call the ask_board tool with that same question"
@@ -92,6 +98,8 @@ DEFAULT_DIRECT_CALL_INSTRUCTIONS = (
     " Keep your responses concise (one to three sentences) and leave space for the other person to reply."
     " You can discuss your work, answer questions about your issues, and file follow-up Paperclip"
     " issues with the file_followup_issue tool when something needs tracking."
+    " If you're asked about the status or contents of a task and you're not certain, call the"
+    " look_up_paperclip tool to check real state instead of guessing — never make one up."
 )
 
 
