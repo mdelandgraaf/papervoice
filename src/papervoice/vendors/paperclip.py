@@ -27,6 +27,7 @@ import os
 import tempfile
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import httpx
@@ -378,21 +379,80 @@ def _boardroom_key_env_var(company_id: str) -> str:
     return "PAPERCLIP_BOARDROOM_API_KEY_" + company_id.upper().replace("-", "_")
 
 
-def load_boardroom_key_map() -> dict[str, str]:
+@lru_cache(maxsize=64)
+def _discover_company_for_key(api_key: str) -> str | None:
+    """Ask Paperclip which company owns ``api_key`` by calling GET /api/agents/me.
+
+    Powers the "just paste your pcp_ keys, we figure out the companyIds" flow
+    (PAPERCLIP_BOARDROOM_API_KEYS). Returns the ``companyId`` string on success,
+    or ``None`` when the key is invalid, revoked, or the API is unreachable —
+    the caller skips that key so one bad entry doesn't sink the whole worker.
+
+    Result is memoized so a worker with multiple keys resolves each companyId
+    once, not on every LiveKit job dispatch. Key rotation requires a worker
+    restart (the durable pcp_* key lives in the .env file).
+    """
+    try:
+        resp = httpx.get(
+            f"{_api_base()}/api/agents/me",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=_TIMEOUT,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception:
+        logger.exception("failed to discover companyId for a PAPERCLIP_BOARDROOM_API_KEYS entry")
+        return None
+    company_id = payload.get("companyId") if isinstance(payload, dict) else None
+    if isinstance(company_id, str) and company_id:
+        return company_id
+    logger.warning("GET /api/agents/me returned no companyId; skipping key")
+    return None
+
+
+def _parse_keys_env(raw: str) -> list[str]:
+    """Split PAPERCLIP_BOARDROOM_API_KEYS into a de-duplicated ordered list.
+
+    Accepts commas and whitespace as separators so operators can paste keys on
+    one line or over several lines (env files rarely allow real newlines, but
+    a shell heredoc does). Blank entries are dropped; the first occurrence of
+    each key wins so log messages stay stable across restarts.
+    """
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for token in raw.replace(",", " ").split():
+        key = token.strip()
+        if key and key not in seen:
+            seen.add(key)
+            ordered.append(key)
+    return ordered
+
+
+def load_boardroom_key_map(
+    discover_company: "callable[[str], str | None] | None" = None,
+) -> dict[str, str]:
     """Build the ``companyId -> api_key`` map from env, for multi-tenant deployments (PER-405).
 
-    Merges three sources, later ones winning on duplicates:
+    Merges four sources, later ones winning on duplicates:
       1. The default single-company binding: ``PAPERCLIP_COMPANY_ID`` +
          ``PAPERCLIP_BOARDROOM_API_KEY`` (or fallback ``PAPERCLIP_API_KEY``).
          Preserved so an existing single-tenant deployment needs no config changes.
       2. Per-company env vars matching ``PAPERCLIP_BOARDROOM_API_KEY_<UUID>`` —
          convenient for adding one extra company to an existing .env.
-      3. A JSON file at ``PAPERCLIP_BOARDROOM_KEYS_JSON`` shaped
-         ``{"<companyId>": "<pcp_...>", ...}`` — convenient for larger fleets.
+      3. ``PAPERCLIP_BOARDROOM_API_KEYS`` — comma/whitespace-separated ``pcp_*``
+         keys. The worker asks Paperclip which company each key belongs to via
+         ``GET /api/agents/me`` at startup, so operators never have to look up
+         (or type) a UUID. This is the recommended setup for 2+ companies.
+      4. A JSON file at ``PAPERCLIP_BOARDROOM_KEYS_JSON`` shaped
+         ``{"<companyId>": "<pcp_...>", ...}`` — highest priority, so it can
+         rotate a specific company's key without touching the other sources.
 
     Returns an empty dict if no sources are configured; the caller decides whether
     that is an error (multi-tenant worker startup) or fine (dev shell that will use
     ``default_client()`` directly).
+
+    ``discover_company`` is injectable for tests; production leaves it as the
+    real HTTP call.
     """
     key_map: dict[str, str] = {}
 
@@ -417,6 +477,18 @@ def load_boardroom_key_map() -> dict[str, str]:
         # (they collide with the encoding).
         company_id = raw.lower().replace("_", "-")
         key_map[company_id] = value
+
+    keys_env = os.environ.get("PAPERCLIP_BOARDROOM_API_KEYS", "")
+    if keys_env:
+        discover = discover_company or _discover_company_for_key
+        for api_key in _parse_keys_env(keys_env):
+            company_id = discover(api_key)
+            if company_id:
+                key_map[company_id] = api_key
+                logger.info(
+                    "PAPERCLIP_BOARDROOM_API_KEYS: mapped key to companyId=%s",
+                    company_id,
+                )
 
     json_path = os.environ.get("PAPERCLIP_BOARDROOM_KEYS_JSON", "")
     if json_path:
@@ -465,7 +537,8 @@ def client_for_company(company_id: str | None) -> PaperclipClient:
         return default_client()
     raise KeyError(
         f"no boardroom API key configured for companyId={company_id!r}; "
-        f"expected env var {_boardroom_key_env_var(company_id)} or an entry in "
+        f"add its pcp_ key to PAPERCLIP_BOARDROOM_API_KEYS (recommended) or set "
+        f"env var {_boardroom_key_env_var(company_id)} or an entry in "
         "PAPERCLIP_BOARDROOM_KEYS_JSON"
     )
 

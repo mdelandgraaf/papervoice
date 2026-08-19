@@ -8,7 +8,7 @@ The Papervoice system has two layers with different scoping rules:
 
 **Plugin JS worker** — installed once at the instance level. Every data query and action receives a `companyId` parameter; `ctx.config.get(companyId)`, `ctx.secrets.resolve(ref, { companyId })`, and `ctx.agents.list({ companyId })` are all company-scoped. The plugin layer is already multi-company ready — no code changes needed.
 
-**Python boardroom worker (`boardroom.py`)** — a long-running process that can serve one or many companies. It always has a primary company from `PAPERCLIP_COMPANY_ID` + `PAPERCLIP_BOARDROOM_API_KEY`. Additional companies are added by setting extra `PAPERCLIP_BOARDROOM_API_KEY_<UUID>` env vars (or a `PAPERCLIP_BOARDROOM_KEYS_JSON` file) in the same env — see step 5 below. The plugin stamps `companyId` into LiveKit room metadata when a join link is minted, and the worker resolves the right per-company key at job start. You do not need one worker process per company; you can still run one per company if you prefer stricter isolation.
+**Python boardroom worker (`boardroom.py`)** — a long-running process that can serve one or many companies. The recommended setup for 2+ companies is `PAPERCLIP_BOARDROOM_API_KEYS`: a single env var holding a comma-separated list of `pcp_*` agent keys, one per company. At startup the worker calls `GET /api/agents/me` for each key to discover which company it belongs to — no UUIDs anywhere in the operator config. The plugin stamps `companyId` into LiveKit room metadata when a join link is minted, and the worker resolves the right per-company key at job start. You do not need one worker process per company; you can still run one per company if you prefer stricter isolation. See step 5 below for topology options and the legacy per-UUID env-var format.
 
 ## Global vs. per-company API key configuration (PER-391)
 
@@ -89,16 +89,11 @@ curl -X PATCH "$PAPERCLIP_API_BASE/api/agents/<agent-id>" \
   -d '{"metadata": {"papervoice": {"enabled": true, "voice_id": "EXAVITQu4vr4xnSDxMaL", ...}}}'
 ```
 
-### 4. Gather company UUID + boardroom API key
+### 4. Mint a boardroom API key per company
 
-Regardless of which topology you pick in step 5, each company needs two values:
+Each company needs one durable `pcp_*` agent API key. If you use `PAPERCLIP_BOARDROOM_API_KEYS` (recommended, step 5A) that key is the *only* thing you need per company — the worker discovers the companyId itself. If you prefer the legacy per-UUID env-var form (step 5C) you'll also need each company's UUID (`paperclipai company list --json`, or the top of Company settings in the UI).
 
-**Company UUID** (`PAPERCLIP_COMPANY_ID`)
-
-- CLI: `paperclipai company list --json` prints every company you have board access to, with `id` (the UUID), `name`, and `issuePrefix`.
-- UI: Company settings page → the UUID is shown at the top, and it also appears in the URL of any admin API call. The short prefix in URLs (e.g. `PER` in `/PER/issues/…`) is the `issuePrefix`, not the UUID.
-
-**Boardroom API key** (`PAPERCLIP_BOARDROOM_API_KEY`)
+**Boardroom API key** (`pcp_*`)
 
 This must be a durable `pcp_*` agent API key belonging to an agent *in the target company* (a run-scoped JWT will expire). Pick or create the agent that will act as the boardroom worker's identity for that company (any agent works — it's just the identity the worker authenticates as when calling Paperclip). Then, as a board operator:
 
@@ -117,15 +112,15 @@ The `create` command prints the `pcp_*` key **once** — copy it into the env fi
 
 Existing keys for an agent are listed with `paperclipai token agent list --company-id <company-uuid> --agent <agent>` (metadata only, no values) and revoked with `paperclipai token agent revoke <keyId>`.
 
-Keep these two values handy — step 5 shows exactly where they go for each topology. All `pcp_*` keys must be durable API keys (not run-scoped JWTs) belonging to an agent in the target company. The board mints these; the VoiceEngineer never creates paid accounts or API keys on their own.
+Keep each key handy — step 5 shows exactly where it goes for each topology. All `pcp_*` keys must be durable API keys (not run-scoped JWTs) belonging to an agent in the target company. The board mints these; the VoiceEngineer never creates paid accounts or API keys on their own.
 
 **Never** paste a `pcp_*` value into an issue comment, PR, Slack message, or any other channel that isn't the env file itself — treat any such leak as compromise and revoke immediately with `paperclipai token agent revoke <keyId>`.
 
 ### 5. Start the boardroom worker
 
-You have two topologies. Pick the one that matches your isolation needs.
+You have three configurations for step 5A/5B/5C. Pick the one that matches your setup.
 
-**Option A — one worker, many companies (default; PER-405).** All companies that share a LiveKit project can be served by a single boardroom worker. Use one merged env file with the primary company's `PAPERCLIP_COMPANY_ID` + `PAPERCLIP_BOARDROOM_API_KEY`, plus one extra `PAPERCLIP_BOARDROOM_API_KEY_<UUID>` line per additional company:
+**Option A — one worker, many companies (recommended; PER-405).** All companies that share a LiveKit project can be served by a single boardroom worker. Paste each company's `pcp_*` key into `PAPERCLIP_BOARDROOM_API_KEYS` — the worker calls `GET /api/agents/me` per key at startup to discover which company each one owns, so you never look up (or paste) a UUID:
 
 ```bash
 # .env  (one file for all companies on this LiveKit project)
@@ -137,23 +132,9 @@ LIVEKIT_API_SECRET=<shared-livekit-secret>
 ANTHROPIC_API_KEY=<shared>
 PAPERCLIP_API_URL=<instance-url>
 
-# Primary company (also the fallback when room metadata omits companyId)
-PAPERCLIP_COMPANY_ID=8126b511-8dd2-4fa0-8a4f-22d630b83108
-PAPERCLIP_BOARDROOM_API_KEY=pcp_<primary-company-key>
-
-# Extra companies — one env var per company. The UUID has dashes replaced
-# with underscores and is upper-cased. Case-insensitive at match time, but
-# the upper-snake form matches .env.example exactly.
-PAPERCLIP_BOARDROOM_API_KEY_F47AC10B_A62D_4AB3_9937_58A2460347AB=pcp_<second-company-key>
-PAPERCLIP_BOARDROOM_API_KEY_1234ABCD_5678_90EF_1234_ABCDEF567890=pcp_<third-company-key>
-```
-
-Larger fleets can put the mapping in a JSON file instead of many env vars:
-
-```bash
-# /etc/papervoice/boardroom-keys.json
-# { "<companyId>": "pcp_...", ... }
-PAPERCLIP_BOARDROOM_KEYS_JSON=/etc/papervoice/boardroom-keys.json
+# One line per Papervoice company on this instance — comma-separated. The
+# worker asks Paperclip which company each key belongs to on startup.
+PAPERCLIP_BOARDROOM_API_KEYS=pcp_<key-for-company-a>,pcp_<key-for-company-b>,pcp_<key-for-company-c>
 ```
 
 Start once:
@@ -162,9 +143,11 @@ Start once:
 env $(cat .env | xargs) python -m papervoice.boardroom start
 ```
 
-The worker registers for LiveKit dispatch on the shared project. When a room is minted, the plugin stamps `companyId` into the room metadata; the worker looks up the matching `pcp_*` key and runs the standup against that company.
+The worker registers for LiveKit dispatch on the shared project. When a room is minted, the plugin stamps `companyId` into the room metadata; the worker looks up the matching `pcp_*` key and runs the standup against that company. A key that fails discovery at startup (revoked, unreachable) is logged and skipped — the other companies still load.
 
-**Option B — one worker per company (stricter isolation).** Use this when companies need separate LiveKit projects, or when you want a crash in one company's worker to not affect the others. Give each company its own `.env.<slug>` file (as sketched in step 4) and start one worker per env file:
+If your deployment has an older `PAPERCLIP_COMPANY_ID` + `PAPERCLIP_BOARDROOM_API_KEY` pair in the env, it keeps working: the primary company still maps from that pair, and any keys in `PAPERCLIP_BOARDROOM_API_KEYS` are merged on top.
+
+**Option B — one worker per company (stricter isolation).** Use this when companies need separate LiveKit projects, or when you want a crash in one company's worker to not affect the others. Give each company its own `.env.<slug>` file with a single `PAPERCLIP_BOARDROOM_API_KEYS=pcp_<company-key>` line and start one worker per env file:
 
 ```bash
 env $(cat .env.acme | xargs) python -m papervoice.boardroom start
@@ -172,6 +155,16 @@ env $(cat .env.beta | xargs) python -m papervoice.boardroom start
 ```
 
 Each worker registers on its own LiveKit project against its own Paperclip company. Independent processes, independent failure domains.
+
+**Option C — legacy per-UUID env vars or a JSON key file.** Pre-PER-405 deployments used one `PAPERCLIP_BOARDROOM_API_KEY_<UUID>` env var per extra company, or a JSON file keyed by companyId. Both forms still work and take priority over `PAPERCLIP_BOARDROOM_API_KEYS` on the same companyId, so you can rotate a single company's key without touching the shared list. Use this only if you need the UUID→key mapping to live in a specific place (for example a config-managed JSON file):
+
+```bash
+# Per-company env vars — UUID with dashes replaced by underscores, upper-cased
+PAPERCLIP_BOARDROOM_API_KEY_F47AC10B_A62D_4AB3_9937_58A2460347AB=pcp_<second-company-key>
+
+# Or, for larger fleets, a JSON file: { "<companyId>": "pcp_...", ... }
+PAPERCLIP_BOARDROOM_KEYS_JSON=/etc/papervoice/boardroom-keys.json
+```
 
 For production (either option): run under a supervisor (systemd unit or similar) with the appropriate env file, launched from `/var/tmp/papervoice-boardroom/<slug>/` as the working directory (durable TMPDIR — see `HEARTBEAT.md` boardroom note).
 
@@ -198,8 +191,7 @@ Then do a live probe-join per company: generate a join link from that company's 
 | Resource | Why separate |
 |---|---|
 | LiveKit project (for separate-tenant isolation) | Room names have no company scope; shared project = possible room collisions between companies |
-| `PAPERCLIP_COMPANY_ID` | The worker queries agents and files issues against this company only |
-| `PAPERCLIP_BOARDROOM_API_KEY` | Must belong to an agent in the target company |
+| A `pcp_*` boardroom key per company (in `PAPERCLIP_BOARDROOM_API_KEYS`) | Must belong to an agent in the target company; the worker discovers the companyId at startup |
 | Agent `metadata.papervoice` entries | Per-agent, per-company |
 | Boardroom worker process | Optional — one shared worker can serve many companies (option A in step 5); use one per company only when you want stricter isolation or separate LiveKit projects |
 

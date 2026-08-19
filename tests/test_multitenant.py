@@ -103,6 +103,129 @@ class LoadBoardroomKeyMapTest(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_keys_env_var_auto_discovers_companies(self):
+        # The recommended zero-UUID setup: paste a comma-separated list of
+        # pcp_ keys and let the worker ask Paperclip which company each one
+        # belongs to. No UUIDs anywhere in the operator config.
+        os.environ["PAPERCLIP_BOARDROOM_API_KEYS"] = "pcp_a, pcp_b, pcp_c"
+        resolved = {"pcp_a": "co-alpha", "pcp_b": "co-beta", "pcp_c": "co-gamma"}
+        key_map = pc.load_boardroom_key_map(discover_company=resolved.get)
+        self.assertEqual(
+            key_map,
+            {"co-alpha": "pcp_a", "co-beta": "pcp_b", "co-gamma": "pcp_c"},
+        )
+
+    def test_keys_env_var_accepts_whitespace_and_dedupes(self):
+        os.environ["PAPERCLIP_BOARDROOM_API_KEYS"] = "  pcp_a \n pcp_b\tpcp_a  , pcp_b "
+        seen: list[str] = []
+
+        def fake_discover(key):
+            seen.append(key)
+            return {"pcp_a": "co-a", "pcp_b": "co-b"}[key]
+
+        key_map = pc.load_boardroom_key_map(discover_company=fake_discover)
+        # dedup: each unique key resolved exactly once, order preserved
+        self.assertEqual(seen, ["pcp_a", "pcp_b"])
+        self.assertEqual(key_map, {"co-a": "pcp_a", "co-b": "pcp_b"})
+
+    def test_keys_env_var_skips_keys_that_fail_discovery(self):
+        # One bad key (revoked, network down at startup for that call) must
+        # not sink the other companies — they still load.
+        os.environ["PAPERCLIP_BOARDROOM_API_KEYS"] = "pcp_good,pcp_bad,pcp_alsogood"
+
+        def fake_discover(key):
+            return {"pcp_good": "co-good", "pcp_alsogood": "co-also"}.get(key)
+
+        key_map = pc.load_boardroom_key_map(discover_company=fake_discover)
+        self.assertEqual(key_map, {"co-good": "pcp_good", "co-also": "pcp_alsogood"})
+
+    def test_keys_env_and_default_env_merge(self):
+        # PAPERCLIP_BOARDROOM_API_KEYS is layered on top of the primary env pair,
+        # so a deployment can keep an existing single-company .env and add one
+        # more company by appending a single line.
+        os.environ["PAPERCLIP_COMPANY_ID"] = "co-primary"
+        os.environ["PAPERCLIP_BOARDROOM_API_KEY"] = "pcp_primary"
+        os.environ["PAPERCLIP_BOARDROOM_API_KEYS"] = "pcp_extra"
+
+        key_map = pc.load_boardroom_key_map(
+            discover_company=lambda k: "co-extra" if k == "pcp_extra" else None
+        )
+        self.assertEqual(key_map, {"co-primary": "pcp_primary", "co-extra": "pcp_extra"})
+
+    def test_json_file_overrides_keys_env_source(self):
+        # JSON file is applied last so an operator can rotate a specific
+        # company's key without touching PAPERCLIP_BOARDROOM_API_KEYS.
+        os.environ["PAPERCLIP_BOARDROOM_API_KEYS"] = "pcp_stale"
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fp:
+            json.dump({"co-x": "pcp_fresh"}, fp)
+            path = fp.name
+        try:
+            os.environ["PAPERCLIP_BOARDROOM_KEYS_JSON"] = path
+            key_map = pc.load_boardroom_key_map(
+                discover_company=lambda k: "co-x" if k == "pcp_stale" else None
+            )
+            self.assertEqual(key_map, {"co-x": "pcp_fresh"})
+        finally:
+            os.unlink(path)
+
+
+class ParseKeysEnvTest(unittest.TestCase):
+    """PER-405: PAPERCLIP_BOARDROOM_API_KEYS is split leniently so operators
+    can paste values on one line, separated by commas or whitespace."""
+
+    def test_empty_returns_empty(self):
+        self.assertEqual(pc._parse_keys_env(""), [])
+        self.assertEqual(pc._parse_keys_env("   "), [])
+
+    def test_comma_and_space_separated(self):
+        self.assertEqual(pc._parse_keys_env("pcp_a,pcp_b,pcp_c"), ["pcp_a", "pcp_b", "pcp_c"])
+        self.assertEqual(pc._parse_keys_env("pcp_a pcp_b\tpcp_c"), ["pcp_a", "pcp_b", "pcp_c"])
+        self.assertEqual(
+            pc._parse_keys_env(" pcp_a , pcp_b ,\n pcp_c "),
+            ["pcp_a", "pcp_b", "pcp_c"],
+        )
+
+    def test_dedupes_preserving_first_occurrence(self):
+        self.assertEqual(pc._parse_keys_env("pcp_a,pcp_b,pcp_a"), ["pcp_a", "pcp_b"])
+
+
+class DiscoverCompanyForKeyTest(unittest.TestCase):
+    """PER-405: the real GET /api/agents/me discovery — protects against
+    regressions in the URL/header shape and the None-on-failure contract."""
+
+    def setUp(self):
+        # lru_cache is process-wide; clear between tests so a fake response in
+        # one test doesn't leak into the next.
+        pc._discover_company_for_key.cache_clear()
+        self._env = mock.patch.dict(os.environ, {}, clear=True)
+        self._env.start()
+        os.environ["PAPERCLIP_API_URL"] = "https://paperclip.example.com"
+
+    def tearDown(self):
+        self._env.stop()
+        pc._discover_company_for_key.cache_clear()
+
+    def test_returns_company_id_from_agents_me(self):
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = mock.Mock()
+        fake_resp.json = mock.Mock(return_value={"id": "agent-1", "companyId": "co-abc"})
+        with mock.patch("httpx.get", return_value=fake_resp) as get:
+            self.assertEqual(pc._discover_company_for_key("pcp_abc"), "co-abc")
+        args, kwargs = get.call_args
+        self.assertEqual(args[0], "https://paperclip.example.com/api/agents/me")
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer pcp_abc")
+
+    def test_returns_none_on_http_error(self):
+        with mock.patch("httpx.get", side_effect=RuntimeError("boom")):
+            self.assertIsNone(pc._discover_company_for_key("pcp_broken"))
+
+    def test_returns_none_when_response_has_no_company_id(self):
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = mock.Mock()
+        fake_resp.json = mock.Mock(return_value={"id": "agent-1"})
+        with mock.patch("httpx.get", return_value=fake_resp):
+            self.assertIsNone(pc._discover_company_for_key("pcp_orphan"))
+
 
 class ClientForCompanyTest(unittest.TestCase):
     """client_for_company resolves the right key or fails fast."""

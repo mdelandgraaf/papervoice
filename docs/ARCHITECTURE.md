@@ -94,12 +94,17 @@ Two moving parts:
    absent (keeps single-tenant deployments and old join links working).
 2. **Per-company boardroom credential.** Each participating company needs its
    own Papervoice-engineer identity (or an existing engineer) with a durable
-   `pcp_*` API key. Load the key map with either
-   `PAPERCLIP_BOARDROOM_API_KEY_<UUID>` env vars (one per company) or
-   `PAPERCLIP_BOARDROOM_KEYS_JSON` pointing at a JSON `{companyId: key}`
-   file. `PAPERCLIP_COMPANY_ID` + `PAPERCLIP_BOARDROOM_API_KEY` remain the
-   default-company fallback so a single-tenant deployment needs no config
-   changes.
+   `pcp_*` API key. The recommended setup is `PAPERCLIP_BOARDROOM_API_KEYS`:
+   one env var holding a comma-separated list of `pcp_*` keys. At startup
+   `_discover_company_for_key` calls `GET /api/agents/me` for each key so
+   `load_boardroom_key_map` can index by companyId without the operator ever
+   pasting a UUID; results are memoized so the discovery cost is one call
+   per key per worker lifetime. The legacy `PAPERCLIP_BOARDROOM_API_KEY_<UUID>`
+   env vars and `PAPERCLIP_BOARDROOM_KEYS_JSON` file still work (JSON wins
+   on collisions, so it can rotate a single company's key without touching
+   the shared list). `PAPERCLIP_COMPANY_ID` + `PAPERCLIP_BOARDROOM_API_KEY`
+   remain the default-company fallback so an existing single-tenant
+   deployment needs no config changes.
 
 `PaperclipClient.client_for_company(company_id)` picks the right key or fails
 fast at job start (`KeyError`) — the boardroom refuses to serve a call for a
