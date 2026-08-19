@@ -133,6 +133,45 @@ class AddressedTargetTest(unittest.TestCase):
         )
         self.assertEqual(_addressed_target("CEO? can you recap", BOARDROOM_ROSTER), "agent-ceo")
 
+    def test_interior_comma_vocative_resolves_the_named_agent(self):
+        # PER-402 board call: the human addressed the agent mid-utterance with
+        # the name set off by commas but no '?' right after it ("so wait, voice
+        # engineer, um, I ask you a question"). leading/cued/trailing/
+        # interior_question all missed it, so it fell through to the CEO default
+        # responder and VoiceEngineer never answered. (Static fallback roster
+        # names the same persona "Eng".)
+        self.assertEqual(
+            _addressed_target(
+                "so wait, eng, um, I ask you a question. can you tell me the status",
+                BOARDROOM_ROSTER,
+            ),
+            "agent-eng",
+        )
+
+    def test_request_auxiliary_naming_the_agent_resolves_them(self):
+        # PER-402 board call: "can voice engineer now, um, tell me the fifth
+        # word..." — a request *for* the named agent to act. The auxiliary
+        # ("can") sits right before the name.
+        self.assertEqual(
+            _addressed_target("can eng now, um, tell me the fifth word", BOARDROOM_ROSTER),
+            "agent-eng",
+        )
+        self.assertEqual(
+            _addressed_target("could CEO make this task for us", BOARDROOM_ROSTER),
+            "agent-ceo",
+        )
+
+    def test_asking_about_an_agent_is_not_a_request_to_them(self):
+        # The other side of PER-402: "why doesn't/didn't <name> respond" is
+        # *about* the agent, not a request to them, and must stay with the
+        # default responder (the CEO fielding the meta-question).
+        self.assertIsNone(
+            _addressed_target("so why doesn't eng now respond to me", BOARDROOM_ROSTER)
+        )
+        self.assertIsNone(
+            _addressed_target("can you tell me why eng didn't respond to my question", BOARDROOM_ROSTER)
+        )
+
     def test_no_name_returns_none(self):
         self.assertIsNone(_addressed_target("what's our runway?", BOARDROOM_ROSTER))
 

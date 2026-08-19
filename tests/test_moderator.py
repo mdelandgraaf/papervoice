@@ -480,6 +480,30 @@ class ModeratorAskAndWaitTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(answer)
         self.assertEqual(moderator.transcript, [])
 
+    async def test_suppressed_during_open_floor_without_touching_rendezvous(self):
+        # PER-402 regression: an agent calling ask_board *during* the post-agenda
+        # open floor must not nest inside the floor's single-slot reply
+        # rendezvous. It returns None immediately (no wait, no timeout) and
+        # leaves `_awaiting_reply_to`/`_pending_reply_text` exactly as the
+        # open-floor loop set them, so the human's next utterance still routes
+        # and the call does not go dead.
+        moderator = Moderator(
+            [], {"ceo": make_speaker("ceo", [])}, ask_and_wait_timeout_seconds=1000
+        )
+        moderator._holding_open_floor = True
+        moderator._awaiting_reply_to = "ceo"
+        moderator._pending_reply_text = "human mid-sentence"
+
+        answer = await asyncio.wait_for(
+            moderator._ask_and_wait("ceo", "voiceengineer, are you there?"), timeout=1
+        )
+
+        self.assertIsNone(answer)
+        # Open-floor rendezvous left untouched; the question is not injected.
+        self.assertEqual(moderator._awaiting_reply_to, "ceo")
+        self.assertEqual(moderator._pending_reply_text, "human mid-sentence")
+        self.assertNotIn(("ceo", "voiceengineer, are you there?"), moderator.transcript)
+
     async def test_agent_track_speech_does_not_resolve_the_wait(self):
         moderator = Moderator(
             [],

@@ -177,6 +177,16 @@ class Moderator:
         # accumulate the next segment instead of answering mid-sentence.
         self._speech_end_grace_seconds = speech_end_grace_seconds
         self._reply_debounce_task: asyncio.Task | None = None
+        # True only while `_hold_open_floor` owns the human-reply rendezvous
+        # after the agenda ends. An agent's own `_ask_and_wait` (the `ask_board`
+        # tool) must not nest inside that phase: the two would compete for the
+        # same single-slot rendezvous (`_awaiting_reply_to`/`_pending_reply_text`
+        # /`_human_reply_ready`), and the ask's timeout `finally` would null out
+        # the state the open-floor loop is mid-wait on — desyncing it so no
+        # further human utterance is ever routed and the call goes silently dead
+        # (PER-402 board call: CEO used ask_board to chase VoiceEngineer during
+        # the close, then "does not respond anymore").
+        self._holding_open_floor = False
 
     def add_speaker(self, identity: str, handle: SpeakerHandle) -> None:
         self._speakers[identity] = handle
@@ -316,6 +326,13 @@ class Moderator:
         A finite ``open_floor_seconds`` remains available only for focused tests;
         production uses no inactivity deadline (PER-162).
         """
+        self._holding_open_floor = True
+        try:
+            await self._run_open_floor_loop(responder_identity)
+        finally:
+            self._holding_open_floor = False
+
+    async def _run_open_floor_loop(self, responder_identity: str) -> None:
         while not self._call_ended.is_set():
             if responder_identity in self.dropped or responder_identity not in self._speakers:
                 available = [identity for identity in self._speakers if identity not in self.dropped]
@@ -367,6 +384,15 @@ class Moderator:
         treat None as "no answer" and move on; this never hangs the agenda.
         """
         if identity in self.dropped or identity not in self._speakers:
+            return None
+        if self._holding_open_floor:
+            # The post-agenda open floor already owns the human-reply
+            # rendezvous. Nesting an ask here would clobber that state and leave
+            # the call dead (see `_holding_open_floor`). The moderator is already
+            # routing every human utterance to whoever it addresses, so just let
+            # this turn finish without an inline answer; the next human line is
+            # handled by the open-floor loop normally (PER-402).
+            logger.info("ask_and_wait suppressed during open floor for %s; moderator already routing", identity)
             return None
         self.record_transcript(identity, question)
         wait_timeout = timeout if timeout is not None else self._ask_and_wait_timeout_seconds

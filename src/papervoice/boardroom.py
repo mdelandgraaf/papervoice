@@ -175,11 +175,31 @@ def _addressed_target(text: str, roster: tuple[Persona, ...]) -> str | None:
             # deflected). Keyed on a '?' immediately after the name so it never
             # fires on "what's Eng been working on" (talking *about* the agent).
             interior_question = rf"\b{n}\s*\?"
+            # Interior vocative set off by commas: the name opens a fresh clause
+            # (right after a comma, optional leading filler) and is itself
+            # followed by a comma — "so wait, voice engineer, um, I ask you a
+            # question" is a direct address that leading/cued/trailing/
+            # interior_question all miss (STT kept the commas but no '?' lands
+            # right after the name). Requiring the *leading* comma boundary keeps
+            # it from firing on "I talked to eng, and then..." (talking about
+            # them — already handled by the `to <name>` cue anyway) (PER-402
+            # board call: "voice engineer" addressed mid-utterance, deflected).
+            comma_vocative = rf",\s*{_ADDRESS_LEAD}{n}\s*,"
+            # Request auxiliary directly naming the agent: "can voice engineer
+            # now tell me the fifth word", "could eng take this one" — a request
+            # *for* the named agent to act, so they should answer. Anchored on
+            # the auxiliary immediately before the name so it never fires on
+            # "why doesn't voice engineer respond" / "why voice engineer didn't
+            # respond" (talking *about* them) (PER-402 board call: "can voice
+            # engineer now tell me..." fell through to the default responder).
+            requested = rf"\b(?:can|could|would|will|can't|couldn't|wouldn't)\s+{n}\b"
             if (
                 re.search(leading, normalized)
                 or re.search(cued, normalized)
                 or re.search(trailing, normalized)
                 or re.search(interior_question, normalized)
+                or re.search(comma_vocative, normalized)
+                or re.search(requested, normalized)
             ):
                 return persona.identity
     return None
