@@ -232,36 +232,32 @@ isolation — for a throwaway smoke company, reusing the shared instance-wide
 LiveKit project is fine; you can leave the LiveKit row empty and rely on the
 worker's `LIVEKIT_URL/…` env fallback.
 
-**Row B — Boardroom identity.** Click **Provision**. A modal opens with an
-**auto-filled** one-shot command:
+**Row B — Boardroom identity.** Click **Provision**. A modal opens in three
+steps:
 
-```
-paperclipai token agent create \
-  --company-id <new-company-uuid> \
-  --agent papervoice-boardroom \
-  --name papervoice-boardroom
-```
+1. **Ensure the `papervoice-boardroom` agent exists.** The modal auto-checks
+   whether that agent is present in this company ([PER-428](/PER/issues/PER-428)).
+   If missing, it shows an amber banner with a **Hire papervoice-boardroom**
+   button — one click hires the agent (any board admin's session can call
+   `POST /api/companies/{id}/agents` under the hood). Once the agent exists
+   the step flips green.
+2. **Run this on the Paperclip host.** The modal renders an auto-filled
+   one-shot command with the company UUID and the agent slug pre-populated:
 
-> **Known gap (tracked as [PER-428](/PER/issues/PER-428)):** the CLI above
-> requires an agent named `papervoice-boardroom` to already exist in the
-> target company. `paperclipai token agent create` does not create the agent;
-> it will fail with `API error 404: Agent not found` on any fresh company.
-> Until [PER-428](/PER/issues/PER-428) lands, do one of:
->
-> - **Preferred:** in the new company, hire an agent with url-key
->   `papervoice-boardroom` first (any minimal role — it's just an identity
->   for the worker to authenticate as), then run the Provision command.
-> - **Ad-hoc:** edit the copied command to point at any existing agent in the
->   target company, e.g. `--agent <existing-agent-key> --name papervoice-boardroom`.
->   Fine for smoke-test throwaways; not appropriate for a real customer
->   because the pcp_ key then acts as that other agent.
+   ```
+   paperclipai token agent create \
+     --company-id <new-company-uuid> \
+     --agent papervoice-boardroom \
+     --name papervoice-boardroom
+   ```
 
 - The company UUID is pre-populated from the current plugin context — you do
   not look it up manually. (Verifying this auto-fill is one of the acceptance
   bars for PER-408.)
 - Run the command in a terminal as a board user (`paperclipai connect --persona board`
   once first if the CLI isn't authenticated). The command prints the `pcp_*`
-  value **once**.
+  value **once**. If it still 404s here, the browser tab lost session between
+  step 1 and step 2 — reload the page and reopen Provision.
 - Paste the printed `pcp_*` value back into the modal and click **Save**. The
   plugin stores it as the company secret `papervoice.boardroom_api_key`
   referenced from plugin config. The raw value is **never** re-displayed.

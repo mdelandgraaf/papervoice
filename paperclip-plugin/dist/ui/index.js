@@ -1283,6 +1283,7 @@ function SetupSection({
     }) })
   ] });
 }
+var BOARDROOM_AGENT_SLUG = "papervoice-boardroom";
 function BoardroomProvisionModal({
   companyId,
   mode,
@@ -1294,7 +1295,65 @@ function BoardroomProvisionModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
-  const command = `paperclipai token agent create --company-id ${companyId} --agent papervoice-boardroom --name papervoice-boardroom`;
+  const [agentCheck, setAgentCheck] = useState({ kind: "loading" });
+  const [hiring, setHiring] = useState(false);
+  const [hireError, setHireError] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await fetch(`/api/companies/${encodeURIComponent(companyId)}/agents`);
+        if (!resp.ok) throw new Error(`Could not list agents (${resp.status})`);
+        const agents = await resp.json();
+        if (cancelled) return;
+        const existing = agents.find(
+          (a) => a.urlKey === BOARDROOM_AGENT_SLUG || a.name === BOARDROOM_AGENT_SLUG
+        );
+        if (existing) {
+          setAgentCheck({ kind: "present", agent: existing });
+          return;
+        }
+        const ceo = agents.find((a) => a.role === "ceo" && !a.reportsTo) ?? agents.find((a) => !a.reportsTo) ?? null;
+        setAgentCheck({ kind: "missing", ceoAgentId: ceo?.id ?? null });
+      } catch (err) {
+        if (cancelled) return;
+        setAgentCheck({ kind: "error", message: err?.message ?? "Agent lookup failed" });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId]);
+  async function hireBoardroomAgent() {
+    if (agentCheck.kind !== "missing") return;
+    setHireError(null);
+    setHiring(true);
+    try {
+      const body = {
+        name: BOARDROOM_AGENT_SLUG,
+        role: "general",
+        title: "Papervoice boardroom",
+        capabilities: "Identity used by the Papervoice boardroom worker to read this company's issues during standups. Not intended to run heartbeats."
+      };
+      if (agentCheck.ceoAgentId) body.reportsTo = agentCheck.ceoAgentId;
+      const resp = await fetch(`/api/companies/${encodeURIComponent(companyId)}/agents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      if (!resp.ok) {
+        const b = await resp.json().catch(() => ({}));
+        throw new Error(b.error ?? `Hire failed (${resp.status})`);
+      }
+      const created = await resp.json();
+      setAgentCheck({ kind: "present", agent: created });
+    } catch (err) {
+      setHireError(err?.message ?? "Hire failed");
+    } finally {
+      setHiring(false);
+    }
+  }
+  const command = `paperclipai token agent create --company-id ${companyId} --agent ${BOARDROOM_AGENT_SLUG} --name ${BOARDROOM_AGENT_SLUG}`;
   function copyCommand() {
     navigator.clipboard.writeText(command).then(() => {
       setCopied(true);
@@ -1411,7 +1470,64 @@ function BoardroomProvisionModal({
                 " value it prints back. The plugin stores it as a company secret and never shows it again."
               ] })
             ] }),
-            /* @__PURE__ */ jsx(FormField, { label: "1. Run this on the Paperclip host", children: /* @__PURE__ */ jsxs(CodeBox, { children: [
+            mode === "provision" && /* @__PURE__ */ jsxs(FormField, { label: `1. Ensure the ${BOARDROOM_AGENT_SLUG} agent exists`, children: [
+              agentCheck.kind === "loading" && /* @__PURE__ */ jsxs("div", { style: { fontSize: 12, color: C.textMuted }, children: [
+                "Checking whether ",
+                /* @__PURE__ */ jsx("code", { children: BOARDROOM_AGENT_SLUG }),
+                " exists in this company\u2026"
+              ] }),
+              agentCheck.kind === "present" && /* @__PURE__ */ jsxs("div", { style: { fontSize: 12, color: C.green }, children: [
+                "\u2713 Found ",
+                /* @__PURE__ */ jsx("code", { children: agentCheck.agent.urlKey ?? agentCheck.agent.name ?? BOARDROOM_AGENT_SLUG }),
+                " ",
+                "\u2014 the CLI command below can mint a token for it."
+              ] }),
+              agentCheck.kind === "missing" && /* @__PURE__ */ jsxs(
+                "div",
+                {
+                  style: {
+                    background: C.amberBg,
+                    border: `1px solid ${C.amberBorder}`,
+                    borderRadius: 6,
+                    padding: 10,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8
+                  },
+                  children: [
+                    /* @__PURE__ */ jsxs("div", { style: { fontSize: 12, color: C.amber }, children: [
+                      "No agent named ",
+                      /* @__PURE__ */ jsx("code", { children: BOARDROOM_AGENT_SLUG }),
+                      " exists in this company yet. The CLI command below will fail with ",
+                      /* @__PURE__ */ jsx("code", { children: "API error 404: Agent not found" }),
+                      " ",
+                      "until it does. Hire it here (any board admin can) and this step will flip green."
+                    ] }),
+                    /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "center", gap: 8 }, children: [
+                      /* @__PURE__ */ jsx(
+                        "button",
+                        {
+                          onClick: hireBoardroomAgent,
+                          disabled: hiring,
+                          style: btnPrimary(hiring),
+                          "aria-label": `Hire ${BOARDROOM_AGENT_SLUG} agent`,
+                          children: hiring ? "Hiring\u2026" : `Hire ${BOARDROOM_AGENT_SLUG}`
+                        }
+                      ),
+                      hireError && /* @__PURE__ */ jsx(InlineMessage, { text: hireError, ok: false })
+                    ] })
+                  ]
+                }
+              ),
+              agentCheck.kind === "error" && /* @__PURE__ */ jsx(
+                InlineMessage,
+                {
+                  text: `Could not check for the ${BOARDROOM_AGENT_SLUG} agent (${agentCheck.message}). If the command fails with 404, hire the agent manually and try again.`,
+                  ok: false
+                }
+              )
+            ] }),
+            /* @__PURE__ */ jsx(FormField, { label: mode === "provision" ? "2. Run this on the Paperclip host" : "1. Run this on the Paperclip host", children: /* @__PURE__ */ jsxs(CodeBox, { children: [
               /* @__PURE__ */ jsx("span", { style: { flex: 1 }, children: command }),
               /* @__PURE__ */ jsx(
                 "button",
@@ -1436,7 +1552,7 @@ function BoardroomProvisionModal({
             /* @__PURE__ */ jsx(
               FormField,
               {
-                label: "2. Paste the pcp_ token it printed",
+                label: mode === "provision" ? "3. Paste the pcp_ token it printed" : "2. Paste the pcp_ token it printed",
                 hint: mode === "rotate" ? "Rotating replaces the current stored value; the previous key becomes invalid immediately after the next worker restart." : "The token is written to a company secret and referenced from plugin config. It is never shown here again.",
                 children: /* @__PURE__ */ jsx(
                   "textarea",

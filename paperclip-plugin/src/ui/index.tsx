@@ -1434,6 +1434,18 @@ import {
   validateBoardroomKey,
 } from "./boardroom-key";
 
+// PER-428: name/url-key the CLI's `token agent create --agent <slug>` expects.
+// Kept in sync with the CLI command below and with docs/SMOKE_TEST.md.
+const BOARDROOM_AGENT_SLUG = "papervoice-boardroom";
+
+type CompanyAgentLite = {
+  id: string;
+  name?: string;
+  urlKey?: string;
+  role?: string;
+  reportsTo?: string | null;
+};
+
 function BoardroomProvisionModal({
   companyId,
   mode,
@@ -1451,8 +1463,82 @@ function BoardroomProvisionModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // PER-428: modal precondition — the CLI `token agent create --agent papervoice-boardroom`
+  // requires the agent to already exist. On mount we look it up; if missing we
+  // offer to hire it here before showing the CLI command.
+  const [agentCheck, setAgentCheck] = useState<
+    | { kind: "loading" }
+    | { kind: "present"; agent: CompanyAgentLite }
+    | { kind: "missing"; ceoAgentId: string | null }
+    | { kind: "error"; message: string }
+  >({ kind: "loading" });
+  const [hiring, setHiring] = useState(false);
+  const [hireError, setHireError] = useState<string | null>(null);
 
-  const command = `paperclipai token agent create --company-id ${companyId} --agent papervoice-boardroom --name papervoice-boardroom`;
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await fetch(`/api/companies/${encodeURIComponent(companyId)}/agents`);
+        if (!resp.ok) throw new Error(`Could not list agents (${resp.status})`);
+        const agents = (await resp.json()) as CompanyAgentLite[];
+        if (cancelled) return;
+        const existing = agents.find(
+          (a) => a.urlKey === BOARDROOM_AGENT_SLUG || a.name === BOARDROOM_AGENT_SLUG,
+        );
+        if (existing) {
+          setAgentCheck({ kind: "present", agent: existing });
+          return;
+        }
+        // Pick a plausible manager for reportsTo. Prefer the company CEO
+        // (role="ceo" with no reportsTo); fall back to any top-level agent.
+        const ceo =
+          agents.find((a) => a.role === "ceo" && !a.reportsTo) ??
+          agents.find((a) => !a.reportsTo) ??
+          null;
+        setAgentCheck({ kind: "missing", ceoAgentId: ceo?.id ?? null });
+      } catch (err: any) {
+        if (cancelled) return;
+        setAgentCheck({ kind: "error", message: err?.message ?? "Agent lookup failed" });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId]);
+
+  async function hireBoardroomAgent() {
+    if (agentCheck.kind !== "missing") return;
+    setHireError(null);
+    setHiring(true);
+    try {
+      const body: Record<string, unknown> = {
+        name: BOARDROOM_AGENT_SLUG,
+        role: "general",
+        title: "Papervoice boardroom",
+        capabilities:
+          "Identity used by the Papervoice boardroom worker to read this company's issues during standups. Not intended to run heartbeats.",
+      };
+      if (agentCheck.ceoAgentId) body.reportsTo = agentCheck.ceoAgentId;
+      const resp = await fetch(`/api/companies/${encodeURIComponent(companyId)}/agents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!resp.ok) {
+        const b = await resp.json().catch(() => ({}));
+        throw new Error(b.error ?? `Hire failed (${resp.status})`);
+      }
+      const created = (await resp.json()) as CompanyAgentLite;
+      setAgentCheck({ kind: "present", agent: created });
+    } catch (err: any) {
+      setHireError(err?.message ?? "Hire failed");
+    } finally {
+      setHiring(false);
+    }
+  }
+
+  const command = `paperclipai token agent create --company-id ${companyId} --agent ${BOARDROOM_AGENT_SLUG} --name ${BOARDROOM_AGENT_SLUG}`;
 
   function copyCommand() {
     navigator.clipboard.writeText(command).then(() => {
@@ -1577,7 +1663,59 @@ function BoardroomProvisionModal({
           </p>
         </div>
 
-        <FormField label="1. Run this on the Paperclip host">
+        {mode === "provision" && (
+          <FormField label={`1. Ensure the ${BOARDROOM_AGENT_SLUG} agent exists`}>
+            {agentCheck.kind === "loading" && (
+              <div style={{ fontSize: 12, color: C.textMuted }}>
+                Checking whether <code>{BOARDROOM_AGENT_SLUG}</code> exists in this company…
+              </div>
+            )}
+            {agentCheck.kind === "present" && (
+              <div style={{ fontSize: 12, color: C.green }}>
+                ✓ Found <code>{agentCheck.agent.urlKey ?? agentCheck.agent.name ?? BOARDROOM_AGENT_SLUG}</code>{" "}
+                — the CLI command below can mint a token for it.
+              </div>
+            )}
+            {agentCheck.kind === "missing" && (
+              <div
+                style={{
+                  background: C.amberBg,
+                  border: `1px solid ${C.amberBorder}`,
+                  borderRadius: 6,
+                  padding: 10,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                }}
+              >
+                <div style={{ fontSize: 12, color: C.amber }}>
+                  No agent named <code>{BOARDROOM_AGENT_SLUG}</code> exists in this company yet.
+                  The CLI command below will fail with <code>API error 404: Agent not found</code>
+                  {" "}until it does. Hire it here (any board admin can) and this step will flip green.
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <button
+                    onClick={hireBoardroomAgent}
+                    disabled={hiring}
+                    style={btnPrimary(hiring)}
+                    aria-label={`Hire ${BOARDROOM_AGENT_SLUG} agent`}
+                  >
+                    {hiring ? "Hiring…" : `Hire ${BOARDROOM_AGENT_SLUG}`}
+                  </button>
+                  {hireError && <InlineMessage text={hireError} ok={false} />}
+                </div>
+              </div>
+            )}
+            {agentCheck.kind === "error" && (
+              <InlineMessage
+                text={`Could not check for the ${BOARDROOM_AGENT_SLUG} agent (${agentCheck.message}). If the command fails with 404, hire the agent manually and try again.`}
+                ok={false}
+              />
+            )}
+          </FormField>
+        )}
+
+        <FormField label={mode === "provision" ? "2. Run this on the Paperclip host" : "1. Run this on the Paperclip host"}>
           <CodeBox>
             <span style={{ flex: 1 }}>{command}</span>
             <button
@@ -1601,7 +1739,11 @@ function BoardroomProvisionModal({
         </FormField>
 
         <FormField
-          label="2. Paste the pcp_ token it printed"
+          label={
+            mode === "provision"
+              ? "3. Paste the pcp_ token it printed"
+              : "2. Paste the pcp_ token it printed"
+          }
           hint={
             mode === "rotate"
               ? "Rotating replaces the current stored value; the previous key becomes invalid immediately after the next worker restart."
