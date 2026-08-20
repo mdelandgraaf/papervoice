@@ -14,7 +14,12 @@ from typing import Awaitable, Callable
 
 logger = logging.getLogger("papervoice.moderator")
 
-DEFAULT_TURN_TIMEOUT_SECONDS = 45.0
+DEFAULT_TURN_TIMEOUT_SECONDS = 20.0
+# Bounded fallback: the narrator itself must not become a new hang if the
+# room's TTS pipeline is what's stuck. If a canned line can't play in this
+# window, silently give up rather than adding another silent-air stretch on
+# top of the one we're already recovering from.
+DEFAULT_NARRATOR_TIMEOUT_SECONDS = 5.0
 DEFAULT_BARGE_IN_REPLY_TIMEOUT_SECONDS = 8.0
 # Kept as an optional test/compatibility escape hatch. Production passes None:
 # the board, not silence, decides when the call is over (PER-162).
@@ -138,6 +143,8 @@ class Moderator:
         ask_and_wait_timeout_seconds: float = DEFAULT_ASK_AND_WAIT_TIMEOUT_SECONDS,
         addressee_resolver: Callable[[str], str | None] | None = None,
         speech_end_grace_seconds: float = DEFAULT_SPEECH_END_GRACE_SECONDS,
+        narrator: Callable[[str], Awaitable[None]] | None = None,
+        narrator_timeout_seconds: float = DEFAULT_NARRATOR_TIMEOUT_SECONDS,
     ) -> None:
         self._agenda = list(agenda)
         self._speakers = dict(speakers)
@@ -177,6 +184,14 @@ class Moderator:
         # accumulate the next segment instead of answering mid-sentence.
         self._speech_end_grace_seconds = speech_end_grace_seconds
         self._reply_debounce_task: asyncio.Task | None = None
+        # PER-429: when an agent times out or dies mid-turn, the moderator drops
+        # them and moves on — but until this hook existed, the *human* just heard
+        # silence and read that as a dead call ("agents silent" -> hung up at 15s
+        # in the smoke test). The narrator is a text-only TTS handle (no LLM, no
+        # STT, no interrupt semantics) that lets the moderator itself say one
+        # canned line so the human hears an explanation instead of dead air.
+        self._narrator = narrator
+        self._narrator_timeout_seconds = narrator_timeout_seconds
         # True only while `_hold_open_floor` owns the human-reply rendezvous
         # after the agenda ends. An agent's own `_ask_and_wait` (the `ask_board`
         # tool) must not nest inside that phase: the two would compete for the
@@ -190,6 +205,13 @@ class Moderator:
 
     def add_speaker(self, identity: str, handle: SpeakerHandle) -> None:
         self._speakers[identity] = handle
+
+    def set_narrator(self, narrator: Callable[[str], Awaitable[None]] | None) -> None:
+        """Wire (or clear) the moderator's own text-only narration hook (PER-429).
+        Kept as a setter so callers can build the underlying TTS handle after
+        the Moderator itself has been constructed (e.g. once the room-joined
+        transcriber session is ready)."""
+        self._narrator = narrator
 
     def _cancel_reply_debounce(self) -> None:
         """Cancel the pending grace-period debounce, if any."""
@@ -457,11 +479,13 @@ class Moderator:
             logger.error("agent %s timed out mid-turn (>%.0fs), dropping", identity, self._turn_timeout_seconds)
             self.dropped.add(identity)
             self.record_transcript("moderator", f"{identity} timed out, moving on")
+            await self._narrate_drop(identity, "stalled")
             return False
         except Exception:
             logger.exception("agent %s dropped mid-turn", identity)
             self.dropped.add(identity)
             self.record_transcript("moderator", f"{identity} dropped, moving on")
+            await self._narrate_drop(identity, "dropped")
             return False
         finally:
             if self.current_speaker == identity:
@@ -469,6 +493,23 @@ class Moderator:
         if spoken:
             self.record_transcript(identity, spoken)
         return True
+
+    async def _narrate_drop(self, identity: str, reason: str) -> None:
+        """Have the moderator itself say one canned line when a turn was
+        abandoned mid-way, so the human hears an explanation instead of
+        silence-then-dead-call (PER-429). No-op if no narrator is wired, and
+        strictly bounded by ``narrator_timeout_seconds`` so a stuck TTS
+        pipeline can't turn one silent-air stretch into two.
+        """
+        if self._narrator is None:
+            return
+        line = f"Give me a moment — the {identity} agent {reason}. Moving on."
+        try:
+            await asyncio.wait_for(self._narrator(line), timeout=self._narrator_timeout_seconds)
+        except TimeoutError:
+            logger.warning("narrator timed out after %.0fs; skipping fallback line", self._narrator_timeout_seconds)
+        except Exception:
+            logger.exception("narrator failed while announcing dropped turn for %s", identity)
 
     async def _respond_to_barge_in(
         self, responder_identity: str, *, reply_timeout_seconds: float | None = None, wait_until_call_ends: bool = False

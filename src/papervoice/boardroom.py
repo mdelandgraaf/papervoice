@@ -33,6 +33,7 @@ import logging
 import os
 import re
 
+import httpx
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -77,6 +78,14 @@ TRANSCRIBER_IDENTITY = "papervoice-transcriber"
 # self-explanatory rather than showing a bare "agent-<job.id>" (PER-85).
 DISPATCH_IDENTITY = "papervoice-dispatch"
 AGENT_LLM_MODEL = "claude-haiku-4-5"
+# PER-429: cap each Anthropic call so the plugin-retry loop can fire ~3× inside
+# the moderator turn budget rather than eating it on one slow completion. The
+# default `httpx.Timeout` is 5 minutes — a single stall spends the whole 20 s
+# turn with no audio, the human leaves, the standup is dead. Baseline latency
+# is ~0.8 s per completion, so 12 s of read plus 5 s of connect is comfortably
+# above p99 while still leaving room for two retries before the moderator drops
+# the turn.
+AGENT_LLM_TIMEOUT = httpx.Timeout(12.0, connect=5.0)
 
 # asyncio.create_task() only holds a *weak* reference to the task it returns;
 # with nothing else referencing it, the task (and the barge-in it's carrying
@@ -510,7 +519,7 @@ async def _connect_agent(
     await asyncio.wait_for(room.connect(os.environ["LIVEKIT_URL"], token), timeout=15.0)
     try:
         session = AgentSession(
-            llm=anthropic.LLM(model=AGENT_LLM_MODEL),
+            llm=anthropic.LLM(model=AGENT_LLM_MODEL, timeout=AGENT_LLM_TIMEOUT),
             tts=el_vendor.plugin_tts(voice_id_override=persona.voice_id),
         )
         await asyncio.wait_for(
@@ -574,7 +583,13 @@ async def _connect_transcriber(
     await asyncio.wait_for(room.connect(os.environ["LIVEKIT_URL"], token), timeout=15.0)
     # ElevenLabs Scribe doesn't support streaming STT; VAD segments the human
     # audio into utterances so each one can be sent as a single batch call.
-    session = AgentSession(stt=el_vendor.plugin_stt(), vad=silero.VAD.load())
+    # PER-429: TTS is added not for a conversational reply path (this session has
+    # no LLM) but purely so the moderator can push canned narration lines via
+    # session.say() when an agent drops mid-turn — the human otherwise hears
+    # silence and hangs up. The transcriber's participant subscribes only to
+    # human tracks (participant_kinds below), so its own narration can't feed
+    # back into its STT.
+    session = AgentSession(stt=el_vendor.plugin_stt(), tts=el_vendor.plugin_tts(), vad=silero.VAD.load())
 
     def on_transcribed(ev: UserInputTranscribedEvent) -> None:
         if ev.is_final and ev.transcript.strip():
@@ -612,12 +627,23 @@ async def _connect_transcriber(
     room.on("participant_disconnected", on_participant_disconnected)
 
     await session.start(
-        agent=Agent(instructions="You silently transcribe the room; you never speak."),
+        agent=Agent(
+            instructions=(
+                "You silently transcribe the room. You never generate replies on your own; "
+                "you only publish audio when explicitly told to via session.say() as the "
+                "moderator's narrator (PER-429)."
+            )
+        ),
         room=room,
         room_options=room_io.RoomOptions(
             audio_input=True,
             text_input=False,
-            audio_output=False,
+            # PER-429: audio_output=True so the moderator can push a canned
+            # fallback line ("Give me a moment — the CEO agent stalled") through
+            # this participant when an agent drops mid-turn. There is no LLM
+            # wired to this session, so nothing generates unsolicited audio;
+            # the only publish path is Moderator._narrate_drop -> session.say().
+            audio_output=True,
             text_output=False,
             # Human tracks only (browser + phone dial-in) — never our own
             # agent participants. Subscribing to agent audio here would let
@@ -631,6 +657,13 @@ async def _connect_transcriber(
             close_on_disconnect=False,
         ),
     )
+
+    async def narrate(text: str) -> None:
+        handle = session.say(text, allow_interruptions=False, add_to_chat_ctx=False)
+        await handle.wait_for_playout()
+        moderator.record_transcript("moderator", text)
+
+    moderator.set_narrator(narrate)
     return session, room
 
 
@@ -810,7 +843,7 @@ async def run_direct_call(
     try:
         session = AgentSession(
             stt=el_vendor.plugin_stt(),
-            llm=anthropic.LLM(model=AGENT_LLM_MODEL),
+            llm=anthropic.LLM(model=AGENT_LLM_MODEL, timeout=AGENT_LLM_TIMEOUT),
             tts=el_vendor.plugin_tts(voice_id_override=persona.voice_id),
             vad=silero.VAD.load(),
         )

@@ -693,6 +693,88 @@ class ModeratorGracefulDegradationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed, ["eng"])
         self.assertIn("ceo", moderator.dropped)
 
+    async def test_default_turn_timeout_is_shorter_than_the_45s_hard_cap_that_dead_lined_calls(self):
+        # PER-429: the default was 45 s, so a single slow Anthropic completion
+        # tied up the whole turn with no audio while the human left after 15 s
+        # of silence. Trimming to 20 s (or less) lets the moderator drop the
+        # stalled agent early enough to narrate and move on.
+        from papervoice.moderator import DEFAULT_TURN_TIMEOUT_SECONDS
+
+        self.assertLessEqual(DEFAULT_TURN_TIMEOUT_SECONDS, 20.0)
+
+    async def test_turn_dropped_on_timeout_triggers_narrator_fallback_line(self):
+        # PER-429: when an agent stalls past the turn budget, the moderator
+        # itself must say a canned line so the human hears something instead of
+        # the silence-then-dead-call symptom that the smoke test hit.
+        agenda = [AgendaItem("ceo", "open")]
+
+        async def hangs_forever(prompt):
+            await asyncio.sleep(3600)
+
+        speakers = {"ceo": SpeakerHandle("ceo", hangs_forever, lambda: None)}
+        narrated: list[str] = []
+
+        async def narrate(text: str) -> None:
+            narrated.append(text)
+
+        moderator = Moderator(agenda, speakers, turn_timeout_seconds=0.05, narrator=narrate)
+
+        await asyncio.wait_for(moderator.run_agenda(), timeout=5)
+
+        self.assertIn("ceo", moderator.dropped)
+        self.assertEqual(len(narrated), 1)
+        self.assertIn("ceo", narrated[0])
+        self.assertIn("stalled", narrated[0])
+
+    async def test_turn_dropped_on_exception_triggers_narrator_fallback_line(self):
+        # PER-429: the drop path also fires when an agent's session raises
+        # (e.g. WebSocket dropped, upstream 5xx). The human still needs to hear
+        # something rather than dead air.
+        agenda = [AgendaItem("ceo", "open")]
+        speakers = {"ceo": make_speaker("ceo", [], raise_on_speak=True)}
+        narrated: list[str] = []
+
+        async def narrate(text: str) -> None:
+            narrated.append(text)
+
+        moderator = Moderator(agenda, speakers, narrator=narrate)
+
+        await asyncio.wait_for(moderator.run_agenda(), timeout=5)
+
+        self.assertIn("ceo", moderator.dropped)
+        self.assertEqual(len(narrated), 1)
+        self.assertIn("dropped", narrated[0])
+
+    async def test_narrator_own_hang_is_bounded_not_a_second_silent_air_stretch(self):
+        # PER-429: if the room's TTS pipeline is what's stuck, the narrator
+        # itself would otherwise become a new hang on top of the one we're
+        # already recovering from. The moderator must give up on the narration
+        # after its own timeout and let the agenda continue.
+        agenda = [AgendaItem("ceo", "open"), AgendaItem("eng", "update")]
+
+        async def hangs_forever(prompt):
+            await asyncio.sleep(3600)
+
+        speakers = {
+            "ceo": SpeakerHandle("ceo", hangs_forever, lambda: None),
+            "eng": make_speaker("eng", []),
+        }
+
+        async def stuck_narrator(text: str) -> None:
+            await asyncio.sleep(3600)
+
+        moderator = Moderator(
+            agenda,
+            speakers,
+            turn_timeout_seconds=0.05,
+            narrator=stuck_narrator,
+            narrator_timeout_seconds=0.05,
+        )
+
+        completed = await asyncio.wait_for(moderator.run_agenda(), timeout=5)
+
+        self.assertEqual(completed, ["eng"])
+
     async def test_previously_dropped_agent_is_skipped_on_later_agenda_items(self):
         log = []
         agenda = [AgendaItem("eng", "first"), AgendaItem("eng", "second")]
