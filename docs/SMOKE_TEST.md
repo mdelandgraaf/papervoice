@@ -336,6 +336,16 @@ re-verify green before step 6.
   the post-update §3b/§3c smoke test.)
 - Hang up by closing the tab.
 
+> **Known intermittent — silent agent (tracked in [PER-429](/PER/issues/PER-429)):**
+> If the first agent granted the floor goes fully silent for more than ~10s
+> after you join, the standup is unrecoverable — hang up and re-mint a fresh
+> join link. Root cause: a slow Anthropic completion currently ties up the
+> whole 45s turn budget with no audio. Confirm by tailing
+> `/var/tmp/papervoice-boardroom/worker.log` for `failed to generate LLM
+> completion: Request timed out` immediately followed by `agent … timed out
+> mid-turn (>45s), dropping`. Re-running usually works — the second attempt in
+> the smoke test succeeded within 5s.
+
 **Zero-restart proof:** the boardroom worker's PID is the **same** before
 step 3 and after the call ends. Confirm:
 
