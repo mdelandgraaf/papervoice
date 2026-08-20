@@ -65,7 +65,9 @@ Room names (`papervoice-boardroom`, `papervoice-preset-<id>`, `papervoice-direct
 
 ### `scripts/healthcheck` plugin probes (PER-415)
 
-Two probes in `scripts/healthcheck` catch plugin-side drift before it turns into a failed board meeting. Both run without a live board call and iterate every company the worker knows about (the same `PAPERCLIP_BOARDROOM_API_KEY[S|_<UUID>|_JSON]` map the multi-tenant entrypoint uses).
+Two probes in `scripts/healthcheck` catch plugin-side drift before it turns into a failed board meeting. Both run without a live board call and iterate every company the healthcheck can enumerate from `PAPERCLIP_BOARDROOM_API_KEY[S|_<UUID>|_JSON]` in the environment.
+
+**Even in the UI-first flow, the healthcheck needs at least one boardroom `pcp_*` key in env** — the worker itself does not (live calls fetch per-job config from the plugin), but the healthcheck runs outside a call context and has no other company-discovery path yet. Mint one key per company from the Setup panel's Provision modal, then either list them with `PAPERCLIP_BOARDROOM_API_KEYS=pcp_a,pcp_b,…` (worker resolves owners at startup — no UUIDs to paste) or use one of the other env-var shapes in the appendix below.
 
 **`Plugin setup complete`** hits the plugin's `/probe-setup` route with each company's boardroom `pcp_*` key. The plugin computes the exact three Setup rows the Settings page shows — LiveKit credentials, Boardroom identity, ≥1 enabled agent + moderator — and returns a per-row `ok/warn/missing` verdict. The check fails and names the exact missing piece per company. Common fixes:
 

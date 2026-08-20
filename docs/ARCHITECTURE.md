@@ -186,7 +186,7 @@ Two tiers of configuration since PER-406 collapsed the setup story:
 - Optional Twilio/SIP trunk credentials for phone dial-in
 
 **Per company, in the plugin's own secret store and config** (provisioned via **Company → Settings → Papervoice** — the Setup panel):
-- Boardroom `pcp_*` agent key — stored as company secret `papervoice.boardroom_api_key`, referenced from plugin config, served to the worker per job via `/boardroom-config`. Never touches `.env`.
+- Boardroom `pcp_*` agent key — stored as company secret `papervoice.boardroom_api_key`, referenced from plugin config, served to the worker per job via `/boardroom-config`. Live calls in the UI-first path do not need it in the worker's `.env`; the air-gapped fallback and `scripts/healthcheck` still do (see `docs/MULTI_COMPANY.md`).
 - LiveKit URL + API key/secret refs — same secret-ref pattern, overriding the instance-wide env vars.
 - Agent `metadata.papervoice` (enabled, moderator, voice_id, roster_order, …) — PATCHed by the plugin UI using the current board session.
 
