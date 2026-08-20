@@ -1,12 +1,24 @@
-# Post-update smoke test (5 minutes)
+# Papervoice smoke tests
 
-Run this after **any** of: bumping a pin in `requirements.txt`, an ElevenLabs
-platform change (they've renamed the product twice and shipped breaking SDK
-majors), a LiveKit SDK/Cloud change, or before a board meeting if it's been a
-while since the last run. See "Durability" in `docs/ARCHITECTURE.md`.
+Two independent checklists live in this file. Pick the one that matches what
+just changed:
 
-If any step fails, **do not run the meeting** — fix or roll back first (see
-Rollback below).
+- **[Post-update smoke test](#post-update-smoke-test)** — run after a
+  dependency bump, a vendor SDK change, or before a board meeting when the
+  last run is stale. Proves the live standup path still works end-to-end
+  against real vendors.
+- **[New-company setup smoke test](#new-company-setup-smoke-test)** — run
+  when the plugin's Setup panel, the boardroom-config route, the healthcheck
+  probes, or the setup docs change. Proves a board user can bring a fresh
+  company from zero to a running standup entirely from the browser (PER-416).
+
+Both end with a live call. If either fails, **do not run the meeting** — fix
+or roll back first (see the Rollback section at the end of the post-update
+checklist).
+
+---
+
+## Post-update smoke test
 
 ## 1. Install and unit test (~1 min)
 
@@ -149,3 +161,205 @@ If `scripts/healthcheck` or the live exchange fails after a dependency bump:
    (issue + link to the changelog/error) before trying to upgrade again.
 
 Never leave `requirements.txt` pointing at a version that failed this smoke test.
+
+---
+
+## New-company setup smoke test
+
+Run this after any change to: the plugin's Setup panel or its `probe-setup`
+route, the boardroom-config route or its HMAC token, the worker's
+`load_from_plugin` fallback chain, the healthcheck's plugin probes, or the
+UI-first setup docs (`docs/MULTI_COMPANY.md`, `.env.example`, this file).
+
+Goal: a board user (not VoiceEngineer) can bring a **fresh company** from
+nothing to a running standup **entirely from the browser**, without editing
+`.env`, without a worker restart, and without asking an engineer for the
+boardroom key. The parent design lives in [PER-406](/PER/issues/PER-406) plan
+[document](/PER/issues/PER-406#document-plan). This is the [PER-416](/PER/issues/PER-416) sign-off checklist.
+
+Time budget: ≤ 10 minutes end-to-end. Anything longer is a regression against
+the "≤ 5 minute setup" acceptance criterion in the plan.
+
+### Prep (one-time on the instance)
+
+Assumed already true and **not** part of the walk-through:
+
+- The boardroom worker is running under a supervisor, started with the shared
+  `.env` documented in `docs/MULTI_COMPANY.md` §Prerequisites (instance-wide
+  vendor keys only — no per-company boardroom key, no company UUID). Confirm
+  with `pgrep -af 'papervoice.boardroom start'`.
+- The Papervoice plugin is installed on the instance so it appears in the
+  new company's `/company/settings/plugins`. If it isn't, install once — see
+  `paperclip-plugin admin` in the boardroom key leak / plugin memories.
+- You have a board-user login on the instance.
+
+Skipping any of these is not a smoke test failure, it's an unmet prep step —
+handle first, then start the walk-through.
+
+### 1. Create a throwaway company (~30s)
+
+- Sign in as a board user.
+- Use the existing company-creation flow to make a company (name it
+  `papervoice-smoke-<yyyy-mm-dd>` so it's obvious what it's for and it
+  doesn't clash with real customers). Note the company slug in the URL — you
+  need it below.
+- Do **not** open a terminal. Do **not** paste anything into `.env`.
+
+**Pass:** the new company loads in the sidebar and its `/company/*` routes
+are reachable.
+
+### 2. Install Papervoice on the new company (~30s)
+
+- In the new company, open **Company → Settings → Plugins** and install
+  Papervoice.
+- Then open **Company → Settings → Papervoice** (`/<slug>/company/settings/papervoice`).
+
+**Pass:** the Papervoice settings page loads without errors. The Setup panel
+at the top should show three rows, most likely with red/yellow dots — that's
+expected before you configure anything.
+
+### 3. Walk the Setup panel to green (~3 min)
+
+The Setup panel shows exactly three rows. Fix them in any order; the panel
+recomputes after each Save. Once all three are green, the panel collapses to
+a single green **Setup complete** banner.
+
+**Row A — LiveKit credentials.** Click **Configure**. Paste `liveKitUrl`
+(wss://…), `liveKitApiKey`, `liveKitApiSecret`. On save the plugin writes the
+URL into its own config and the two secrets into the company's secret store.
+Choose the tenancy model from `docs/MULTI_COMPANY.md` §LiveKit project
+isolation — for a throwaway smoke company, reusing the shared instance-wide
+LiveKit project is fine; you can leave the LiveKit row empty and rely on the
+worker's `LIVEKIT_URL/…` env fallback.
+
+**Row B — Boardroom identity.** Click **Provision**. A modal opens with an
+**auto-filled** one-shot command:
+
+```
+paperclipai token agent create \
+  --company-id <new-company-uuid> \
+  --agent papervoice-boardroom \
+  --name papervoice-boardroom
+```
+
+- The company UUID is pre-populated from the current plugin context — you do
+  not look it up manually. (Verifying this auto-fill is one of the acceptance
+  bars for PER-408.)
+- Run the command in a terminal as a board user (`paperclipai connect --persona board`
+  once first if the CLI isn't authenticated). The command prints the `pcp_*`
+  value **once**.
+- Paste the printed `pcp_*` value back into the modal and click **Save**. The
+  plugin stores it as the company secret `papervoice.boardroom_api_key`
+  referenced from plugin config. The raw value is **never** re-displayed.
+- **Never** paste the `pcp_*` value anywhere else (issue comment, Slack, PR,
+  chat log). If it leaks, revoke immediately with `paperclipai token agent revoke <keyId>`.
+- The modal closes and the Boardroom row flips to green with detail text
+  `Boardroom API key secret resolves.`.
+
+**Row C — Enabled agents.** Click **Configure** (or scroll to the Agents
+section on the same page). Toggle at least one agent to Enabled and click
+the moderator radio next to one enabled agent. Use only agents whose
+`voice_id` is a premade ElevenLabs voice (professional/cloned voices silently
+fail to stream on lower tiers — PER-311).
+
+**Pass this step:** the Setup panel shrinks to a single green **Setup
+complete** banner. The three rows underneath are gone or collapsed. No red or
+yellow dots remain.
+
+If any row won't go green, run the healthcheck plugin probe below — it names
+the exact secret ref / permission / missing piece per company.
+
+### 4. Configure a preset room (~1 min)
+
+Still on the Papervoice settings page, in the Room presets section:
+
+- Add a new preset (or edit the default one).
+- Confirm the preset lists the agents you enabled in Row C and the moderator
+  radio matches Row C.
+- Save.
+
+**Pass:** the preset appears in the list with the right agents and the "Mint
+join link" action is enabled next to it.
+
+### 5. Programmatic verification before the live call (~1 min, < $0.01)
+
+From the workspace, run the vendor + plugin healthcheck **with the new
+company's boardroom key** in env — this catches every regression a live call
+would hit, before you spend anyone's time on a call.
+
+```bash
+# One-off: use the new company's key alongside any existing ones.
+# Comma-separated form — the worker resolves companyId per key automatically.
+PAPERCLIP_BOARDROOM_API_KEYS=<pcp_you_pasted_in_step_3>,<any-other-keys> \
+  env $(grep -v '^PAPERCLIP_BOARDROOM' .env | xargs) \
+  python scripts/healthcheck
+```
+
+Expect: `healthcheck: ALL GREEN`. The two probes that specifically verify
+this feature (PER-415):
+
+| Probe | What it proves for the new company |
+|---|---|
+| `Plugin setup complete` | The plugin's `/probe-setup` route agrees the Setup panel is complete for this company. If it disagrees with what the UI showed, the UI is stale — reload the settings page. |
+| `Plugin config reachable from worker` | The plugin mints an HMAC token exactly like `mint-join-link` does, calls `/boardroom-config?companyId=…` with it, and gets a `pcp_*` back. That means the boardroom worker will succeed at fetching per-company config on the next call. |
+
+If either fails, the failure message names the exact fix (see
+`docs/MULTI_COMPANY.md` §`scripts/healthcheck` plugin probes). Fix, re-run,
+re-verify green before step 6.
+
+### 6. Live call (~2 min)
+
+- On the same Papervoice settings page, mint a join link for the preset you
+  configured. Copy the printed link.
+- Open the link in a browser (allow microphone).
+- A board human (not VoiceEngineer) joins the same link on their own device.
+
+**Pass:**
+
+- Every agent enabled in Row C joins the room (check the LiveKit participant
+  list in the browser — you should see each agent's identity + your name +
+  the board human's name).
+- The moderator opens the standup and the agents take turns without talking
+  over each other.
+- You can interrupt an agent by speaking; agent audio stops within roughly a
+  second. (Barge-in — the M2 turn discipline is the same one exercised by
+  the post-update §3b/§3c smoke test.)
+- Hang up by closing the tab.
+
+**Zero-restart proof:** the boardroom worker's PID is the **same** before
+step 3 and after the call ends. Confirm:
+
+```bash
+pgrep -af 'papervoice.boardroom start'
+```
+
+The PID must not have changed. If it did, either the worker crashed (check
+`/var/tmp/papervoice-boardroom/worker.log`) or someone restarted it out of
+band — either invalidates the acceptance criterion "adding a company that
+way needs no restart".
+
+### 7. Notes and sign-off
+
+- In the [PER-416](/PER/issues/PER-416) issue thread, leave a short comment
+  with anything that surprised you during the walk-through (a confusing
+  label, a step that took longer than it should, an error message that
+  wasn't clear). No surprises is a valid comment — say so.
+- Request board sign-off comment on the issue via the `request_confirmation`
+  interaction VoiceEngineer creates at the end of this checklist.
+
+### Cleanup
+
+The throwaway company can be left in place (harmless, no cost until someone
+runs a call there) or removed via the standard company-delete flow. The
+boardroom `pcp_*` key you provisioned in step 3 belongs to that company; if
+you delete the company, revoke the key first with
+`paperclipai token agent revoke <keyId>` to close the loop.
+
+### Rollback
+
+If step 3 or step 6 fails and the plugin/worker changes cannot be fixed
+quickly, revert the offending PR on the setup path (probably one of
+[PER-409]/[PER-408]/[PER-410]/[PER-411]/[PER-412]/[PER-415]) and re-run this
+checklist against the reverted build. The old env-var appendix in
+`docs/MULTI_COMPANY.md` remains a supported air-gapped fallback and is not
+touched by rollback.
