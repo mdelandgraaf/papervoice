@@ -242,6 +242,20 @@ paperclipai token agent create \
   --name papervoice-boardroom
 ```
 
+> **Known gap (tracked as [PER-428](/PER/issues/PER-428)):** the CLI above
+> requires an agent named `papervoice-boardroom` to already exist in the
+> target company. `paperclipai token agent create` does not create the agent;
+> it will fail with `API error 404: Agent not found` on any fresh company.
+> Until [PER-428](/PER/issues/PER-428) lands, do one of:
+>
+> - **Preferred:** in the new company, hire an agent with url-key
+>   `papervoice-boardroom` first (any minimal role — it's just an identity
+>   for the worker to authenticate as), then run the Provision command.
+> - **Ad-hoc:** edit the copied command to point at any existing agent in the
+>   target company, e.g. `--agent <existing-agent-key> --name papervoice-boardroom`.
+>   Fine for smoke-test throwaways; not appropriate for a real customer
+>   because the pcp_ key then acts as that other agent.
+
 - The company UUID is pre-populated from the current plugin context — you do
   not look it up manually. (Verifying this auto-fill is one of the acceptance
   bars for PER-408.)
