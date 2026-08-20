@@ -1270,6 +1270,7 @@ function SetupSection({
             row.status !== "ok" && /* @__PURE__ */ jsx(
               "button",
               {
+                type: "button",
                 onClick: () => onFix(row.key),
                 style: btnPrimary(false),
                 "aria-label": `Fix ${row.title}`,
@@ -1507,6 +1508,7 @@ function BoardroomProvisionModal({
                       /* @__PURE__ */ jsx(
                         "button",
                         {
+                          type: "button",
                           onClick: hireBoardroomAgent,
                           disabled: hiring,
                           style: btnPrimary(hiring),
@@ -1532,6 +1534,7 @@ function BoardroomProvisionModal({
               /* @__PURE__ */ jsx(
                 "button",
                 {
+                  type: "button",
                   onClick: copyCommand,
                   style: {
                     background: copied ? C.greenBg : C.border,
@@ -1582,8 +1585,8 @@ function BoardroomProvisionModal({
             ),
             error && /* @__PURE__ */ jsx(InlineMessage, { text: error, ok: false }),
             /* @__PURE__ */ jsxs("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8 }, children: [
-              /* @__PURE__ */ jsx("button", { onClick: onClose, disabled: saving, style: btnGhost, children: "Cancel" }),
-              /* @__PURE__ */ jsx("button", { onClick: save, disabled: saving || !value.trim(), style: btnPrimary(saving || !value.trim()), children: saving ? "Saving\u2026" : mode === "rotate" ? "Rotate" : "Save" })
+              /* @__PURE__ */ jsx("button", { type: "button", onClick: onClose, disabled: saving, style: btnGhost, children: "Cancel" }),
+              /* @__PURE__ */ jsx("button", { type: "button", onClick: save, disabled: saving || !value.trim(), style: btnPrimary(saving || !value.trim()), children: saving ? "Saving\u2026" : mode === "rotate" ? "Rotate" : "Save" })
             ] })
           ]
         }
@@ -1747,6 +1750,7 @@ function SettingsSection({
       /* @__PURE__ */ jsx("div", { children: /* @__PURE__ */ jsx(
         "button",
         {
+          type: "button",
           onClick: saveLiveKitConfig,
           disabled: !liveKitUrl || !apiKeySecretId || !apiSecretSecretId,
           style: btnPrimary(!liveKitUrl || !apiKeySecretId || !apiSecretSecretId),
@@ -1770,6 +1774,7 @@ function SettingsSection({
           /* @__PURE__ */ jsx(
             "button",
             {
+              type: "button",
               onClick: () => setBoardroomModalOpen(true),
               style: btnPrimary(false),
               "data-testid": "boardroom-identity-button",

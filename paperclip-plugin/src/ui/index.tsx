@@ -1411,6 +1411,7 @@ function SetupSection({
               </div>
               {row.status !== "ok" && (
                 <button
+                  type="button"
                   onClick={() => onFix(row.key)}
                   style={btnPrimary(false)}
                   aria-label={`Fix ${row.title}`}
@@ -1695,6 +1696,7 @@ function BoardroomProvisionModal({
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <button
+                    type="button"
                     onClick={hireBoardroomAgent}
                     disabled={hiring}
                     style={btnPrimary(hiring)}
@@ -1719,6 +1721,7 @@ function BoardroomProvisionModal({
           <CodeBox>
             <span style={{ flex: 1 }}>{command}</span>
             <button
+              type="button"
               onClick={copyCommand}
               style={{
                 background: copied ? C.greenBg : C.border,
@@ -1776,10 +1779,10 @@ function BoardroomProvisionModal({
         {error && <InlineMessage text={error} ok={false} />}
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <button onClick={onClose} disabled={saving} style={btnGhost}>
+          <button type="button" onClick={onClose} disabled={saving} style={btnGhost}>
             Cancel
           </button>
-          <button onClick={save} disabled={saving || !value.trim()} style={btnPrimary(saving || !value.trim())}>
+          <button type="button" onClick={save} disabled={saving || !value.trim()} style={btnPrimary(saving || !value.trim())}>
             {saving ? "Saving…" : mode === "rotate" ? "Rotate" : "Save"}
           </button>
         </div>
@@ -1981,6 +1984,7 @@ function SettingsSection({
 
           <div>
             <button
+              type="button"
               onClick={saveLiveKitConfig}
               disabled={!liveKitUrl || !apiKeySecretId || !apiSecretSecretId}
               style={btnPrimary(!liveKitUrl || !apiKeySecretId || !apiSecretSecretId)}
@@ -2012,6 +2016,7 @@ function SettingsSection({
                 <StatusBadge status="pending" label="Not set" />
               )}
               <button
+                type="button"
                 onClick={() => setBoardroomModalOpen(true)}
                 style={btnPrimary(false)}
                 data-testid="boardroom-identity-button"
