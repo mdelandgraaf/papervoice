@@ -7,6 +7,7 @@ import {
   Spinner,
 } from "@paperclipai/plugin-sdk/ui";
 import type { PluginCompanySettingsPageProps, PluginWidgetProps } from "@paperclipai/plugin-sdk/ui";
+import { normalizePluginConfig } from "./config-response";
 import {
   computeSetupStatus,
   type SetupInput,
@@ -541,8 +542,8 @@ function CustomRoomSection({ companyId, agents }: { companyId: string; agents: V
 
 async function currentConfig(companyId: string, changes: Record<string, unknown>) {
   const response = await fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`);
-  const body = response.ok ? await response.json().catch(() => ({})) : {};
-  return { ...(body.configJson ?? body), ...changes };
+  const body: unknown = response.ok ? await response.json().catch(() => ({})) : {};
+  return { ...normalizePluginConfig(body), ...changes };
 }
 
 // ─── Worker status hook ───────────────────────────────────────────────────────
@@ -1114,8 +1115,7 @@ function PromptsSection({ companyId }: { companyId: string }) {
     fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`)
       .then(async (r) => {
         if (!r.ok) return;
-        const body = await r.json();
-        const values = body.configJson ?? body;
+        const values = normalizePluginConfig(await r.json());
         setPromptModerator(values.promptModerator ?? DEFAULT_MODERATOR);
         setPromptParticipant(values.promptParticipant ?? DEFAULT_PARTICIPANT);
         setPromptAgendaOpening(values.promptAgendaOpening ?? DEFAULT_AGENDA_OPENING);
@@ -1131,8 +1131,8 @@ function PromptsSection({ companyId }: { companyId: string }) {
   async function savePrompts() {
     setMessage(null);
     const currentResp = await fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`);
-    const currentBody = currentResp.ok ? await currentResp.json().catch(() => ({})) : {};
-    const existing = currentBody.configJson ?? currentBody;
+    const currentBody: unknown = currentResp.ok ? await currentResp.json().catch(() => ({})) : {};
+    const existing = normalizePluginConfig(currentBody);
     const response = await fetch("/api/plugins/papervoice/config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1503,8 +1503,8 @@ function BoardroomProvisionModal({
         const currentResp = await fetch(
           `/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`,
         );
-        const currentBody = currentResp.ok ? await currentResp.json().catch(() => ({})) : {};
-        const existing = currentBody.configJson ?? currentBody;
+        const currentBody: unknown = currentResp.ok ? await currentResp.json().catch(() => ({})) : {};
+        const existing = normalizePluginConfig(currentBody);
         const configResp = await fetch("/api/plugins/papervoice/config", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1682,8 +1682,7 @@ function SettingsSection({
           `/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`,
         );
         if (!response.ok) throw new Error(`Could not load settings (${response.status})`);
-        const body = await response.json();
-        const values = body.configJson ?? body;
+        const values = normalizePluginConfig(await response.json());
         setLiveKitUrl(values.liveKitUrl ?? "");
         setApiKeySecretId(values.liveKitApiKeyRef?.secretId ?? "");
         setApiSecretSecretId(values.liveKitApiSecretRef?.secretId ?? "");
@@ -1752,28 +1751,32 @@ function SettingsSection({
 
   async function saveLiveKitConfig() {
     setMessage(null);
-    const currentResp = await fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`);
-    const currentBody = currentResp.ok ? await currentResp.json().catch(() => ({})) : {};
-    const existing = currentBody.configJson ?? currentBody;
-    const response = await fetch("/api/plugins/papervoice/config", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        companyId,
-        configJson: {
-          ...existing,
-          liveKitUrl: liveKitUrl.trim(),
-          liveKitApiKeyRef: { type: "secret_ref", secretId: apiKeySecretId.trim() },
-          liveKitApiSecretRef: { type: "secret_ref", secretId: apiSecretSecretId.trim() },
-          room: room.trim() || "papervoice-boardroom",
-        },
-      }),
-    });
-    const body = await response.json().catch(() => ({}));
-    setMessage(
-      response.ok ? "LiveKit configuration saved." : body.error ?? `Save failed (${response.status})`
-    );
-    if (response.ok) onConfigChanged();
+    try {
+      const currentResp = await fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`);
+      const currentBody: unknown = currentResp.ok ? await currentResp.json().catch(() => ({})) : {};
+      const existing = normalizePluginConfig(currentBody);
+      const response = await fetch("/api/plugins/papervoice/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          companyId,
+          configJson: {
+            ...existing,
+            liveKitUrl: liveKitUrl.trim(),
+            liveKitApiKeyRef: { type: "secret_ref", secretId: apiKeySecretId.trim() },
+            liveKitApiSecretRef: { type: "secret_ref", secretId: apiSecretSecretId.trim() },
+            room: room.trim() || "papervoice-boardroom",
+          },
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      setMessage(
+        response.ok ? "LiveKit configuration saved." : body.error ?? `Save failed (${response.status})`
+      );
+      if (response.ok) onConfigChanged();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not save LiveKit configuration.");
+    }
   }
 
   const secretOptions = secretsLoading

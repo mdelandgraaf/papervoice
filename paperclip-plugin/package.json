@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node build.mjs",
     "dev": "paperclip-plugin-dev-server --root . --ui-dir dist/ui --port 4177",
-    "test": "node --test src/ui/setup-status.test.mjs src/manifest.test.mjs src/config.test.mjs src/config-route.test.mjs src/probe-setup.test.mjs"
+    "test": "node --test src/ui/config-response.test.mjs src/ui/setup-status.test.mjs src/manifest.test.mjs src/config.test.mjs src/config-route.test.mjs src/probe-setup.test.mjs"
   },
   "dependencies": {
     "@paperclipai/plugin-sdk": "^2026.722.0"
