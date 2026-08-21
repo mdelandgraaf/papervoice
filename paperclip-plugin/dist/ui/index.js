@@ -17,6 +17,19 @@ function normalizePluginConfig(body) {
   }
   return envelope;
 }
+async function persistLiveKitConfig(companyId, changes, fetchImpl = fetch) {
+  const configUrl = `/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`;
+  const currentResponse = await fetchImpl(configUrl);
+  const currentBody = currentResponse.ok ? await currentResponse.json().catch(() => ({})) : {};
+  return fetchImpl("/api/plugins/papervoice/config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      companyId,
+      configJson: { ...normalizePluginConfig(currentBody), ...changes }
+    })
+  });
+}
 
 // src/ui/setup-status.ts
 function computeSetupStatus(input) {
@@ -1685,22 +1698,11 @@ function SettingsSection({
   async function saveLiveKitConfig() {
     setMessage(null);
     try {
-      const currentResp = await fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`);
-      const currentBody = currentResp.ok ? await currentResp.json().catch(() => ({})) : {};
-      const existing = normalizePluginConfig(currentBody);
-      const response = await fetch("/api/plugins/papervoice/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          companyId,
-          configJson: {
-            ...existing,
-            liveKitUrl: liveKitUrl.trim(),
-            liveKitApiKeyRef: { type: "secret_ref", secretId: apiKeySecretId.trim() },
-            liveKitApiSecretRef: { type: "secret_ref", secretId: apiSecretSecretId.trim() },
-            room: room.trim() || "papervoice-boardroom"
-          }
-        })
+      const response = await persistLiveKitConfig(companyId, {
+        liveKitUrl: liveKitUrl.trim(),
+        liveKitApiKeyRef: { type: "secret_ref", secretId: apiKeySecretId.trim() },
+        liveKitApiSecretRef: { type: "secret_ref", secretId: apiSecretSecretId.trim() },
+        room: room.trim() || "papervoice-boardroom"
       });
       const body = await response.json().catch(() => ({}));
       setMessage(
