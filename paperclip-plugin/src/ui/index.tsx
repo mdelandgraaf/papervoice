@@ -7,7 +7,7 @@ import {
   Spinner,
 } from "@paperclipai/plugin-sdk/ui";
 import type { PluginCompanySettingsPageProps, PluginWidgetProps } from "@paperclipai/plugin-sdk/ui";
-import { normalizePluginConfig } from "./config-response";
+import { normalizePluginConfig, persistLiveKitConfig } from "./config-response";
 import {
   computeSetupStatus,
   type SetupInput,
@@ -1752,22 +1752,11 @@ function SettingsSection({
   async function saveLiveKitConfig() {
     setMessage(null);
     try {
-      const currentResp = await fetch(`/api/plugins/papervoice/config?companyId=${encodeURIComponent(companyId)}`);
-      const currentBody: unknown = currentResp.ok ? await currentResp.json().catch(() => ({})) : {};
-      const existing = normalizePluginConfig(currentBody);
-      const response = await fetch("/api/plugins/papervoice/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          companyId,
-          configJson: {
-            ...existing,
-            liveKitUrl: liveKitUrl.trim(),
-            liveKitApiKeyRef: { type: "secret_ref", secretId: apiKeySecretId.trim() },
-            liveKitApiSecretRef: { type: "secret_ref", secretId: apiSecretSecretId.trim() },
-            room: room.trim() || "papervoice-boardroom",
-          },
-        }),
+      const response = await persistLiveKitConfig(companyId, {
+        liveKitUrl: liveKitUrl.trim(),
+        liveKitApiKeyRef: { type: "secret_ref", secretId: apiKeySecretId.trim() },
+        liveKitApiSecretRef: { type: "secret_ref", secretId: apiSecretSecretId.trim() },
+        room: room.trim() || "papervoice-boardroom",
       });
       const body = await response.json().catch(() => ({}));
       setMessage(
