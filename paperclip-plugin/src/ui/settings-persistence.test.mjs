@@ -31,7 +31,7 @@ test("PCP provision still links the created secret through plugin config", () =>
 test("LiveKit save still persists all credential references through plugin config", () => {
   const start = source.indexOf("async function saveLiveKitConfig()");
   const handler = source.slice(start, source.indexOf("const secretOptions", start));
-  assert.match(handler, /fetch\("\/api\/plugins\/papervoice\/config"/);
+  assert.match(handler, /persistLiveKitConfig\(companyId,/);
   assert.match(handler, /liveKitUrl:\s*liveKitUrl\.trim\(\)/);
   assert.match(handler, /liveKitApiKeyRef:\s*\{\s*type:\s*"secret_ref"/);
   assert.match(handler, /liveKitApiSecretRef:\s*\{\s*type:\s*"secret_ref"/);
