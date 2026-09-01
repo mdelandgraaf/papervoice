@@ -1,0 +1,367 @@
+From 38a5ced285fac96653c291968ed7389ca51ac467 Mon Sep 17 00:00:00 2001
+From: mdelandgraaf <mdelandgraaf@gmail.com>
+Date: Tue, 1 Sep 2026 09:27:37 +0000
+Subject: [PATCH] feat(plugins): verify webhook API requests
+
+---
+ packages/plugins/sdk/src/define-plugin.ts     | 16 ++++
+ packages/plugins/sdk/src/index.ts             |  2 +
+ packages/plugins/sdk/src/protocol.ts          |  4 +
+ packages/plugins/sdk/src/worker-rpc-host.ts   | 12 +++
+ .../plugin-scoped-api-routes.test.ts          | 94 ++++++++++++++++++-
+ server/src/routes/plugins.ts                  | 65 +++++++++++--
+ 6 files changed, 183 insertions(+), 10 deletions(-)
+
+diff --git a/packages/plugins/sdk/src/define-plugin.ts b/packages/plugins/sdk/src/define-plugin.ts
+index 495c00783..d4f69a799 100644
+--- a/packages/plugins/sdk/src/define-plugin.ts
++++ b/packages/plugins/sdk/src/define-plugin.ts
+@@ -174,6 +174,20 @@ export interface PluginApiRequestInput {
+   headers: Record<string, string>;
+ }
+ 
++export interface PluginApiVerificationInput {
++  routeKey: string;
++  method: string;
++  path: string;
++  query: Record<string, string | string[]>;
++  headers: Record<string, string | string[]>;
++  rawBodyBase64: string;
++  companyId: string;
++}
++
++export type PluginApiVerificationResult =
++  | { verified: true }
++  | { verified: false; status?: 401 | 403; code?: string };
++
+ export interface PluginApiResponse {
+   status?: number;
+   headers?: Record<string, string>;
+@@ -326,6 +340,8 @@ export interface PluginDefinition {
+    */
+   onApiRequest?(input: PluginApiRequestInput): Promise<PluginApiResponse>;
+ 
++  onVerifyApiRequest?(input: PluginApiVerificationInput): Promise<PluginApiVerificationResult>;
++
+   /**
+    * Called when Paperclip scans issue/comment/document content and asks this
+    * plugin whether any sanitized URL candidates belong to its external object
+diff --git a/packages/plugins/sdk/src/index.ts b/packages/plugins/sdk/src/index.ts
+index 52e0886c8..9a5b7ea30 100644
+--- a/packages/plugins/sdk/src/index.ts
++++ b/packages/plugins/sdk/src/index.ts
+@@ -105,6 +105,8 @@ export type {
+   PluginWebhookInput,
+   PluginApiRequestInput,
+   PluginApiResponse,
++  PluginApiVerificationInput,
++  PluginApiVerificationResult,
+ } from "./define-plugin.js";
+ export type {
+   TestHarness,
+diff --git a/packages/plugins/sdk/src/protocol.ts b/packages/plugins/sdk/src/protocol.ts
+index 81ba4e616..1f677c613 100644
+--- a/packages/plugins/sdk/src/protocol.ts
++++ b/packages/plugins/sdk/src/protocol.ts
+@@ -79,6 +79,8 @@ import type {
+   PluginHealthDiagnostics,
+   PluginApiRequestInput,
+   PluginApiResponse,
++  PluginApiVerificationInput,
++  PluginApiVerificationResult,
+   PluginConfigValidationResult,
+   PluginWebhookInput,
+ } from "./define-plugin.js";
+@@ -1315,6 +1317,7 @@ export interface HostToWorkerMethods {
+   handleWebhook: [params: PluginWebhookInput, result: void];
+   /** Scoped plugin API route dispatch. */
+   handleApiRequest: [params: PluginApiRequestInput, result: PluginApiResponse];
++  verifyApiRequest: [params: PluginApiVerificationInput, result: PluginApiVerificationResult];
+   /** @see PLUGIN_SPEC.md §13.8 */
+   getData: [params: GetDataParams, result: unknown];
+   /** @see PLUGIN_SPEC.md §13.9 */
+@@ -1445,6 +1448,7 @@ export const HOST_TO_WORKER_OPTIONAL_METHODS: readonly HostToWorkerMethodName[]
+   "runJob",
+   "handleWebhook",
+   "handleApiRequest",
++  "verifyApiRequest",
+   "getData",
+   "performAction",
+   "executeTool",
+diff --git a/packages/plugins/sdk/src/worker-rpc-host.ts b/packages/plugins/sdk/src/worker-rpc-host.ts
+index 73fd52c44..d0c9abe6d 100644
+--- a/packages/plugins/sdk/src/worker-rpc-host.ts
++++ b/packages/plugins/sdk/src/worker-rpc-host.ts
+@@ -51,6 +51,7 @@ import type {
+ import type { PaperclipPlugin } from "./define-plugin.js";
+ import type {
+   PluginApiRequestInput,
++  PluginApiVerificationInput,
+   PluginHealthDiagnostics,
+   PluginConfigValidationResult,
+   PluginWebhookInput,
+@@ -1602,6 +1603,9 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
+       case "handleApiRequest":
+         return handleApiRequest(params as PluginApiRequestInput);
+ 
++      case "verifyApiRequest":
++        return handleVerifyApiRequest(params as PluginApiVerificationInput);
++
+       case "getData":
+         return handleGetData(params as GetDataParams);
+ 
+@@ -1724,6 +1728,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
+     if (plugin.definition.onHealth) supportedMethods.push("health");
+     if (plugin.definition.onShutdown) supportedMethods.push("shutdown");
+     if (plugin.definition.onApiRequest) supportedMethods.push("handleApiRequest");
++    if (plugin.definition.onVerifyApiRequest) supportedMethods.push("verifyApiRequest");
+     if (plugin.definition.onDetectExternalObjects) supportedMethods.push("detectExternalObjects");
+     if (plugin.definition.onResolveExternalObject) supportedMethods.push("resolveExternalObject");
+     if (plugin.definition.onRefreshExternalObjects) supportedMethods.push("refreshExternalObjects");
+@@ -1906,6 +1911,13 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
+     return plugin.definition.onApiRequest(params);
+   }
+ 
++  async function handleVerifyApiRequest(params: PluginApiVerificationInput): Promise<unknown> {
++    if (!plugin.definition.onVerifyApiRequest) {
++      throw Object.assign(new Error("verifyApiRequest is not implemented by this plugin"), { code: PLUGIN_RPC_ERROR_CODES.METHOD_NOT_IMPLEMENTED });
++    }
++    return plugin.definition.onVerifyApiRequest(params);
++  }
++
+   async function handleGetData(params: GetDataParams): Promise<unknown> {
+     const handler = dataHandlers.get(params.key);
+     if (!handler) {
+diff --git a/server/src/__tests__/plugin-scoped-api-routes.test.ts b/server/src/__tests__/plugin-scoped-api-routes.test.ts
+index 4e2ce297b..3cf4b37ca 100644
+--- a/server/src/__tests__/plugin-scoped-api-routes.test.ts
++++ b/server/src/__tests__/plugin-scoped-api-routes.test.ts
+@@ -58,6 +58,7 @@ async function createApp(input: {
+   plugin?: Record<string, unknown> | null;
+   workerRunning?: boolean;
+   workerResult?: unknown;
++  verificationResult?: unknown;
+ }) {
+   const [{ pluginRoutes }, { errorHandler }] = await Promise.all([
+     import("../routes/plugins.js"),
+@@ -66,7 +67,11 @@ async function createApp(input: {
+ 
+   const workerManager = {
+     isRunning: vi.fn().mockReturnValue(input.workerRunning ?? true),
+-    call: vi.fn().mockResolvedValue(input.workerResult ?? { status: 200, body: { ok: true } }),
++    call: vi.fn().mockImplementation((_pluginId, method) => Promise.resolve(
++      method === "verifyApiRequest"
++        ? (input.verificationResult ?? { verified: true })
++        : (input.workerResult ?? { status: 200, body: { ok: true } }),
++    )),
+   };
+ 
+   mockRegistry.getById.mockResolvedValue(input.plugin ?? null);
+@@ -204,6 +209,93 @@ describe.sequential("plugin scoped API routes", () => {
+     expect(res.headers.location).toBeUndefined();
+   });
+ 
++  it.each([
++    ["absent", undefined, { verified: false, code: "missing_token" }, 401],
++    ["invalid", "not-a-token", { verified: false, code: "invalid_token" }, 401],
++    ["expired", "expired-token", { verified: false, code: "expired_token" }, 401],
++    ["cross-company", "other-company-token", { verified: false, status: 403, code: "company_mismatch" }, 403],
++  ])("rejects %s webhook credentials before handler dispatch", async (_label, token, verificationResult, status) => {
++    const apiRoutes = manifest([{
++      routeKey: "boardroom-config",
++      method: "GET",
++      path: "/boardroom-config",
++      auth: "webhook",
++      capability: "api.routes.register",
++      companyResolution: { from: "query", key: "companyId" },
++    }]);
++    const { app, workerManager } = await createApp({
++      actor: { type: "anonymous", source: "none" },
++      plugin: { id: pluginId, pluginKey: apiRoutes.id, status: "ready", manifestJson: apiRoutes },
++      verificationResult,
++    });
++
++    let call = request(app).get(`/api/plugins/${pluginId}/api/boardroom-config?companyId=${companyId}&room=test-room`);
++    if (token) call = call.set("Authorization", `Bearer ${token}`);
++    const res = await call;
++
++    expect(res.status).toBe(status);
++    expect(workerManager.call).toHaveBeenCalledTimes(1);
++    expect(workerManager.call).toHaveBeenCalledWith(pluginId, "verifyApiRequest", expect.objectContaining({
++      routeKey: "boardroom-config",
++      companyId,
++      query: { companyId, room: "test-room" },
++      headers: expect.objectContaining(token ? { authorization: `Bearer ${token}` } : {}),
++    }));
++  });
++
++  it("dispatches a verified webhook request with original query and sanitized headers", async () => {
++    const apiRoutes = manifest([{
++      routeKey: "boardroom-config",
++      method: "GET",
++      path: "/boardroom-config",
++      auth: "webhook",
++      capability: "api.routes.register",
++      companyResolution: { from: "query", key: "companyId" },
++    }]);
++    const { app, workerManager } = await createApp({
++      actor: { type: "anonymous", source: "none" },
++      plugin: { id: pluginId, pluginKey: apiRoutes.id, status: "ready", manifestJson: apiRoutes },
++      verificationResult: { verified: true },
++      workerResult: { status: 200, body: { joined: true } },
++    });
++
++    const res = await request(app)
++      .get(`/api/plugins/${pluginId}/api/boardroom-config?companyId=${companyId}&room=test-room`)
++      .set("Authorization", "Bearer valid-token")
++      .set("X-Request-Id", "request-1");
++
++    expect(res.status).toBe(200);
++    expect(res.body).toEqual({ joined: true });
++    expect(workerManager.call).toHaveBeenCalledTimes(2);
++    expect(workerManager.call).toHaveBeenLastCalledWith(pluginId, "handleApiRequest", expect.objectContaining({
++      query: { companyId, room: "test-room" },
++      headers: expect.objectContaining({ "x-request-id": "request-1" }),
++    }));
++    expect(workerManager.call.mock.calls[1]?.[2].headers.authorization).toBeUndefined();
++  });
++
++  it("fails closed when a webhook verifier is missing or throws", async () => {
++    const apiRoutes = manifest([{
++      routeKey: "boardroom-config",
++      method: "GET",
++      path: "/boardroom-config",
++      auth: "webhook",
++      capability: "api.routes.register",
++      companyResolution: { from: "query", key: "companyId" },
++    }]);
++    const { app, workerManager } = await createApp({
++      actor: { type: "anonymous", source: "none" },
++      plugin: { id: pluginId, pluginKey: apiRoutes.id, status: "ready", manifestJson: apiRoutes },
++    });
++    workerManager.call.mockRejectedValueOnce(new Error("method not implemented"));
++
++    const res = await request(app)
++      .get(`/api/plugins/${pluginId}/api/boardroom-config?companyId=${companyId}`);
++
++    expect(res.status).toBe(401);
++    expect(workerManager.call).toHaveBeenCalledTimes(1);
++  });
++
+   it("enforces agent checkout ownership before dispatching issue-scoped POST routes", async () => {
+     const apiRoutes = manifest([
+       {
+diff --git a/server/src/routes/plugins.ts b/server/src/routes/plugins.ts
+index 971283dd0..2bf91de3d 100644
+--- a/server/src/routes/plugins.ts
++++ b/server/src/routes/plugins.ts
+@@ -471,6 +471,12 @@ interface PluginScopedApiResponse {
+   body?: unknown;
+ }
+ 
++interface PluginScopedApiVerificationResult {
++  verified: boolean;
++  status?: 401 | 403;
++  code?: string;
++}
++
+ /** Request body for POST /api/plugins/tools/execute */
+ interface PluginToolExecuteRequest {
+   /** Fully namespaced tool name (e.g., "acme.linear:search-issues"). */
+@@ -582,6 +588,15 @@ export function pluginRoutes(
+     return headers;
+   }
+ 
++  function pluginVerificationHeaders(req: Request): Record<string, string | string[]> {
++    const headers: Record<string, string | string[]> = {};
++    for (const [name, value] of Object.entries(req.headers)) {
++      if (Array.isArray(value)) headers[name.toLowerCase()] = value;
++      else if (typeof value === "string") headers[name.toLowerCase()] = value;
++    }
++    return headers;
++  }
++
+   function applyPluginScopedApiResponseHeaders(
+     res: Response,
+     headers: Record<string, string> | undefined,
+@@ -644,7 +659,7 @@ export function pluginRoutes(
+       return;
+     }
+     if (route.auth === "webhook") {
+-      throw unprocessable("Webhook-scoped plugin API routes require a signature verifier and are not enabled");
++      return;
+     }
+     assertAuthenticated(req);
+     if (req.actor.type !== "board" && req.actor.type !== "agent") {
+@@ -1875,7 +1890,8 @@ export function pluginRoutes(
+         res.status(400).json({ error: "Unable to resolve company for plugin API route" });
+         return;
+       }
+-      assertCompanyAccess(req, companyId);
++      const isWebhookRoute = match.route.auth === "webhook";
++      if (!isWebhookRoute) assertCompanyAccess(req, companyId);
+       await enforceScopedApiCheckout(req, match.route, match.params, companyId);
+       if (req.method !== "GET" && req.headers["content-type"] && !req.is("application/json")) {
+         res.status(415).json({ error: "Plugin API routes accept JSON requests only" });
+@@ -1888,20 +1904,51 @@ export function pluginRoutes(
+         return;
+       }
+ 
+-      const actor = getActorInfo(req);
++      const normalizedQuery = normalizeQuery(req.query);
++      if (isWebhookRoute) {
++        let verification: PluginScopedApiVerificationResult;
++        try {
++          verification = await bridgeDeps.workerManager.call(
++            plugin.id,
++            "verifyApiRequest",
++            {
++              routeKey: match.route.routeKey,
++              method: req.method,
++              path: requestPath,
++              query: normalizedQuery,
++              headers: pluginVerificationHeaders(req),
++              rawBodyBase64: ((req as unknown as { rawBody?: Buffer }).rawBody ?? Buffer.alloc(0)).toString("base64"),
++              companyId,
++            },
++          ) as PluginScopedApiVerificationResult;
++        } catch {
++          res.status(401).json({ error: "Plugin API request verification failed" });
++          return;
++        }
++        if (verification?.verified !== true) {
++          const status = verification?.status === 403 ? 403 : 401;
++          res.status(status).json({
++            error: "Plugin API request verification failed",
++            ...(typeof verification?.code === "string" ? { code: verification.code } : {}),
++          });
++          return;
++        }
++      }
++
++      const actor = isWebhookRoute ? null : getActorInfo(req);
+       const input: PluginScopedApiRequest = {
+         routeKey: match.route.routeKey,
+         method: req.method,
+         path: requestPath,
+         params: match.params,
+-        query: normalizeQuery(req.query),
++        query: normalizedQuery,
+         body: requestBody,
+         actor: {
+-          actorType: actor.actorType,
+-          actorId: actor.actorId,
+-          agentId: actor.agentId,
+-          userId: actor.actorType === "user" ? actor.actorId : null,
+-          runId: actor.runId,
++          actorType: actor?.actorType ?? "user",
++          actorId: actor?.actorId ?? "webhook",
++          agentId: actor?.agentId ?? null,
++          userId: actor?.actorType === "user" ? actor.actorId : null,
++          runId: actor?.runId ?? null,
+         },
+         companyId,
+         headers: sanitizePluginRequestHeaders(req),
+-- 
+2.43.0
+
